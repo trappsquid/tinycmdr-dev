@@ -293,7 +293,7 @@ try { Start-Transcript -Path $LogFile -Force | Out-Null } catch { }
 # before the log goes cold.
 function Stop-TranscriptRedacted {
     try { Microsoft.PowerShell.Core\Stop-Transcript | Out-Null } catch { }
-    foreach ($s in @($MattermostToken, $TelegramToken, $ModelKey)) {
+    foreach ($s in @($MattermostToken, $TelegramToken, $ModelKey, $WebToken)) {
         if ($s -and $s.Length -ge 8 -and (Test-Path $LogFile)) {
             try {
                 $t = Get-Content -Raw -LiteralPath $LogFile
@@ -470,7 +470,11 @@ function Stop-TinycmdrProcesses {
             $roots = @($procs | Where-Object {
                 if (-not $_.CommandLine) { return $false }
                 if ($_.Name -like 'python*' -or $_.Name -eq 'wscript.exe') {
-                    return $_.CommandLine.IndexOf($Dir,
+                    # A path BOUNDARY, not a substring: `C:\x\tinycmdr` must not match
+                    # `C:\x\tinycmdr-work\...` and kill a sibling install's bot
+                    # (A-2026-10-08-174 - the restart helper carries this fix already;
+                    # the two must stay in step).
+                    return $_.CommandLine.IndexOf(($Dir.TrimEnd('\') + '\'),
                         [System.StringComparison]::OrdinalIgnoreCase) -ge 0
                 }
                 return $false
@@ -889,13 +893,20 @@ if (-not $py) {
         # python.org publishes one installer per architecture, and the URL used to be
         # amd64 on every host - an ARM64 box downloaded something it could not run while
         # the winget path right above picked the right one.
-        $pyArch = switch ($env:PROCESSOR_ARCHITECTURE) {
-            "AMD64" { "amd64" }
-            "ARM64" { "arm64" }
-            "x86"   { "win32" }
-            default { "amd64" }
+        # PROCESSOR_ARCHITEW6432 first: under a 32-bit PowerShell on a 64-bit host the
+        # other variable reads "x86" and the host wants the amd64 build. python.org
+        # names the 32-bit full installer python-3.12.8.exe (the -win32 suffix exists
+        # only for the embeddable zip), so x86 is an EMPTY suffix - the old "win32"
+        # name 404'd and this fallback could never install anything (measured
+        # 2026-10-10).
+        $pyHost = $env:PROCESSOR_ARCHITECTURE
+        if ($env:PROCESSOR_ARCHITEW6432) { $pyHost = $env:PROCESSOR_ARCHITEW6432 }
+        $pySuffix = switch ($pyHost) {
+            "AMD64" { "-amd64" }
+            "ARM64" { "-arm64" }
+            default { "" }
         }
-        $installerName = "python-3.12.8-$pyArch.exe"
+        $installerName = "python-3.12.8$pySuffix.exe"
         $installerUrl = "https://www.python.org/ftp/python/3.12.8/$installerName"
         $installerPath = Join-Path $env:TEMP $installerName
         try {
@@ -943,7 +954,12 @@ if (Test-Path $StartupLink) {
         $lnk = $sh.CreateShortcut($StartupLink)
         $lnkText = ("$($lnk.TargetPath) $($lnk.Arguments) $($lnk.WorkingDirectory)").Trim()
     } catch { }
-    if ($lnkText -and ($lnkText -notlike "*$InstallDir*")) {
+    # IndexOf with OrdinalIgnoreCase, never -like: -like reads [ ] * ? in the PATH as
+    # WILDCARDS, so a bracketed install dir (C:\tools [2024]\tinycmdr) did not match
+    # its own record and a re-install refused its own autostart entry (measured
+    # 2026-10-10). The process sweep carries the same rule below.
+    if ($lnkText -and ($lnkText.IndexOf($InstallDir,
+            [System.StringComparison]::OrdinalIgnoreCase) -lt 0)) {
         $foreign = "$StartupLink -> $lnkText"
     }
 }
@@ -952,7 +968,8 @@ if (-not $foreign -and -not $SkipTask) {
     if ($t) {
         $act = @($t.Actions)[0]
         $actText = ("$($act.Execute) $($act.Arguments)").Trim()
-        if ($actText -and ($actText -notlike "*$InstallDir*")) {
+        if ($actText -and ($actText.IndexOf($InstallDir,
+                [System.StringComparison]::OrdinalIgnoreCase) -lt 0)) {
             $foreign = "scheduled task $AppName -> $actText"
         }
     }
@@ -1581,7 +1598,8 @@ if ($NoPath) {
     # ...and make it work in THIS window too: a user who just ran the install (or the
     # one-liner) wants to type `tinycmdr` right away, and the registry write plus the
     # broadcast only reach windows opened later. Process-local, nothing else touched.
-    if ($env:Path -notlike ("*" + $InstallDir + "*")) {
+    if (("$env:Path").IndexOf($InstallDir,
+            [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
         $env:Path = $env:Path.TrimEnd(';') + ';' + $InstallDir
     }
 }
@@ -2011,7 +2029,11 @@ sh.Run """" & py & """ """ & here & "\tinycmdr-supervise.py""", 0, True
 "@
 # ASCII on purpose: the text above is path-free by construction, so a non-ASCII profile
 # name cannot reach the encoder to be destroyed.
-Set-Content (Join-Path $InstallDir "tinycmdr-service.vbs") $vbs -Encoding ASCII
+# Explicit CRLF: the here-strings carry THIS file's endings (the shipped .ps1 is
+# LF-only), and a batch/screen-scraping host is best not left to inherit whatever the
+# package happens to have - the line endings become a decision here (measured
+# 2026-10-10).
+Set-Content (Join-Path $InstallDir "tinycmdr-service.vbs") (($vbs.TrimEnd("`r", "`n") -replace "`r?`n", "`r`n") + "`r`n") -NoNewline -Encoding ASCII
 
 $bat = @"
 @echo off
@@ -2048,7 +2070,7 @@ for /f "delims=" %%I in ('where %~1 2^>nul') do (
 )
 exit /b 0
 "@
-Set-Content (Join-Path $InstallDir "launch_tinycmdr.bat") $bat -Encoding ASCII
+Set-Content (Join-Path $InstallDir "launch_tinycmdr.bat") (($bat.TrimEnd("`r", "`n") -replace "`r?`n", "`r`n") + "`r`n") -NoNewline -Encoding ASCII
 Say "wrote   : tinycmdr-service.vbs, launch_tinycmdr.bat"
 
 # Secrets lockdown (security review 2026-09-23): .env holds the bot token, the
@@ -2255,23 +2277,18 @@ if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start 
 if ($RegisterTask -and -not $AnyLane -and -not $NoWeb) { Say "page    : http://127.0.0.1:$WebPort  (or a machine on your network when web.host is 0.0.0.0)"; Say "token   : in $envPath; 'python tinycmdr.py web' prints the link" }
 Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
-    if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }
-    if ($WantCli) {
-        Say "a session needs nothing running:  cd $InstallDir ; python tinycmdr.py --app (or --cli)"
-        if (Ask-Yes "Open a session now?" $false) {
-            Say "starting a session - type your task, Ctrl-C to leave"
-            try { & $py.Path (Join-Path $InstallDir "tinycmdr.py") "--app" } catch { }
-        }
-    }
-    if ($WantTg) {
+    if ($ChatLane) { Say "DM the bot account on $MattermostUrl and it will answer." }
+    if ($TgLane) {
         Say "DM your Telegram bot and it will answer."
-        if ($WantChat) { Say "  (both tokens are set: this one process serves Mattermost AND Telegram)" }
+        if ($ChatLane) { Say "  (both tokens are set: this one process serves Mattermost AND Telegram)" }
     }
-    # The page counts: a page-only install keeps the agent running to serve it, and the
-    # old condition told that install "nothing selected ... does not run in the
-    # background" while the launcher it had just registered did exactly that (measured
-    # 2026-10-08 on Windows).
-    if (-not ($WantChat -or $WantTg -or $WantWeb -or $WantCli)) {
+    # "does not run in the background" is true only when nothing was registered: the
+    # wizard flags above are $null on a keep-existing re-run (that block never ran),
+    # and the old test then told a re-run that had just registered and started the
+    # launcher that it "does not run in the background" (measured 2026-10-10). The
+    # dead $WantCli branch went with this: nothing ever assigned it, so the session
+    # offer never printed.
+    if (-not $RegisterTask) {
         Say "nothing selected - the harness is installed and does not run in the background."
     }
 }

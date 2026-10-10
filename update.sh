@@ -42,25 +42,38 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "update: $DIR is $CUR; fetching the latest release for this host ($ASSET)"
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$BASE/$ASSET" -o "$WORK/$ASSET"
-    curl -fsSL "$BASE/SHA256SUMS" -o "$WORK/SHA256SUMS"
-elif command -v wget >/dev/null 2>&1; then
-    wget -q "$BASE/$ASSET" -O "$WORK/$ASSET"
-    wget -q "$BASE/SHA256SUMS" -O "$WORK/SHA256SUMS"
-else
+fetch() {   # fetch <url> <dest>
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    else
+        wget -q "$1" -O "$2"
+    fi
+}
+if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
     echo "update: neither curl nor wget is available" >&2; exit 1
 fi
+fetch "$BASE/$ASSET" "$WORK/$ASSET" \
+    || { echo "update: could not download $BASE/$ASSET" >&2
+         echo "        check the network (or a proxy), or point TINYCMDR_UPDATE_URL at a" >&2
+         echo "        mirror. Nothing was changed." >&2
+         exit 1; }
+fetch "$BASE/SHA256SUMS" "$WORK/SHA256SUMS" \
+    || { echo "update: fetched the package but not $BASE/SHA256SUMS - without it nothing is" >&2
+         echo "        installed. Re-run, or fetch both files by hand." >&2
+         exit 1; }
 # The download is verified BEFORE anything is touched: a truncated transfer must cost
 # nothing, and this file cannot assume the installed code is there to check it.
 WANT="$(grep " $ASSET\$" "$WORK/SHA256SUMS" | awk '{print $1}')"
-[ -n "$WANT" ] || { echo "update: SHA256SUMS has no entry for $ASSET" >&2; exit 1; }
+[ -n "$WANT" ] || { echo "update: SHA256SUMS has no entry for $ASSET - the release is broken;" >&2
+                    echo "        nothing was changed. Try again later, or install by hand." >&2; exit 1; }
 if command -v sha256sum >/dev/null 2>&1; then
     GOT="$(sha256sum "$WORK/$ASSET" | awk '{print $1}')"
 else
     GOT="$(shasum -a 256 "$WORK/$ASSET" | awk '{print $1}')"
 fi
-[ "$WANT" = "$GOT" ] || { echo "update: checksum mismatch - nothing was changed" >&2; exit 1; }
+[ "$WANT" = "$GOT" ] || { echo "update: checksum mismatch - nothing was changed." >&2
+                          echo "        Re-run; if it repeats, the transfer is being truncated (or" >&2
+                          echo "        the release replaced)." >&2; exit 1; }
 
 case "$ASSET" in
     *.zip)   unzip -q "$WORK/$ASSET" -d "$WORK/pkg" ;;
@@ -69,6 +82,28 @@ esac
 SRC="$(find "$WORK/pkg" -maxdepth 3 -name tinycmdr.py -print -quit | xargs -r dirname)"
 [ -n "$SRC" ] || { echo "update: the package has no tinycmdr.py" >&2; exit 1; }
 NEW="$("$PY" -c 'import re,pathlib,sys;t=pathlib.Path(sys.argv[1]).read_text(encoding="utf-8",errors="replace");m=re.search("^VERSION = \"(.*?)\"",t,re.M);print(m.group(1) if m else "?")' "$SRC/tinycmdr.py")"
+
+# Never DOWNGRADE. A re-pointed `latest` (or a mirror at an older release) used to be
+# copied over the install silently; the in-app update verb refuses this by name, and
+# the standalone updaters are the doors an OLD install reaches - so they must refuse
+# it too (measured 2026-10-10; the same gap exists in update.ps1, fixed with this).
+_newer() {  # _newer <a> <b> -> 0 when a is a NEWER x.y.z than b
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        n = split(a, x, "."); m = split(b, y, ".")
+        for (i = 1; i <= n || i <= m; i++) {
+            xi = (i <= n) ? x[i] + 0 : 0
+            yi = (i <= m) ? y[i] + 0 : 0
+            if (xi > yi) exit 0
+            if (xi < yi) exit 1
+        }
+        exit 1
+    }'
+}
+if [ "$CUR" != "?" ] && [ "$NEW" != "?" ] && _newer "$CUR" "$NEW"; then
+    echo "update: the published build is $NEW, OLDER than the $CUR installed here - refusing" >&2
+    echo "        to replace a newer build with an older one. Nothing was changed." >&2
+    exit 1
+fi
 
 # Host-owned paths: never overwrite, and never delete anything not in the package.
 HOST_FILES="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
@@ -94,14 +129,30 @@ while IFS= read -r rel; do
     is_host "$rel" && continue
     dest="$DIR/$rel"
     mkdir -p "$(dirname "$dest")"
-    cp -p "$rel" "$dest"
+    # BESIDE the file and renamed: a kill, a crash or a full disk mid-copy used to
+    # leave a torn tinycmdr.py the next start cannot even read, with no rollback
+    # (measured 2026-10-10). Each file now lands whole or not at all - an update
+    # interrupted between files can still leave a mixed tree, and the installer is
+    # the way to reconcile that.
+    tmp="$dest.update-new"
+    if cp -p "$rel" "$tmp" 2>/dev/null; then
+        mv -f "$tmp" "$dest"
+    else
+        rm -f "$tmp"
+        echo "update: could not write $dest - stopping; nothing else was changed" >&2
+        exit 1
+    fi
     COUNT=$((COUNT + 1))
 done < "$WORK/filelist"
 chmod +x "$DIR/tinycmdr" "$DIR/install/install-tinycmdr.sh" 2>/dev/null || true
 
 if [ -f "$DIR/requirements.txt" ] && [ "$(cat "$DIR/requirements.txt")" != "$OLD_REQ" ]; then
     echo "update: dependencies changed in this release - reconcile the venv:"
-    echo "    $PY -m pip install -r $DIR/requirements.txt"
+    # The venv's OWN python, not $PY: $PY falls back to the system python3 when the
+    # venv is missing, and that printed a command which would install the agent's
+    # requirements into the system interpreter (measured 2026-10-10).
+    echo "    $DIR/venv/bin/python -m pip install -r $DIR/requirements.txt"
+    echo "    (a missing venv: re-run the installer in $DIR - this file needs no download)"
 fi
 
 echo "update: $CUR -> $NEW ($COUNT file(s); host-owned files left alone)"

@@ -62,6 +62,22 @@ try {
     if (-not $Src) { Write-Error "update: the package has no tinycmdr.py"; exit 1 }
     $New = Get-Version (Join-Path $Src "tinycmdr.py")
 
+    # Never DOWNGRADE (update.sh and the in-app verb carry the same rule): a re-pointed
+    # `latest` or a mirror at an older release must not replace a newer build silently
+    # (measured 2026-10-10).
+    function Test-Newer([string]$a, [string]$b) {
+        $pa = $a.Split("."); $pb = $b.Split(".")
+        for ($i = 0; $i -lt [Math]::Max($pa.Count, $pb.Count); $i++) {
+            $xa = if ($i -lt $pa.Count) { [int]($pa[$i] -replace '\D', '0') } else { 0 }
+            $xb = if ($i -lt $pb.Count) { [int]($pb[$i] -replace '\D', '0') } else { 0 }
+            if ($xa -ne $xb) { return ($xa -gt $xb) }
+        }
+        return $false
+    }
+    if ($Cur -ne "?" -and $New -ne "?" -and (Test-Newer $Cur $New)) {
+        Write-Error "update: the published build is $New, OLDER than the $Cur installed here - refusing to replace a newer build with an older one. Nothing was changed."; exit 1
+    }
+
     # Host-owned paths: never overwrite, never delete anything not in the package.
     $HostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.json",
                    "field-notes.md", "atlas.md", "experiments.jsonl", "web-sessions.json",
@@ -71,6 +87,12 @@ try {
     $HostDirs = @("tools", "skills", "sessions", "snapshots", "logs", "spill", "venv",
                   "dist", ".git", "tmp")
     $written = 0
+    # What this host's requirements.txt held before the copy, so a release that moved
+    # the dependency bounds can say so (the update.sh twin carries the same note).
+    $oldReq = ""
+    if (Test-Path (Join-Path $Dir "requirements.txt")) {
+        $oldReq = Get-Content (Join-Path $Dir "requirements.txt") -Raw
+    }
     Push-Location $Src
     try {
         Get-ChildItem -Recurse -File -Force | ForEach-Object {
@@ -79,10 +101,21 @@ try {
             if ($HostFiles -contains $rel -or $HostDirs -contains $top) { return }
             $dest = Join-Path $Dir $rel
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
-            Copy-Item $_.FullName $dest -Force
+            # BESIDE the file and moved over it: a kill or a full disk mid-copy left a
+            # torn tinycmdr.py the next start cannot even read, with no rollback
+            # (measured 2026-10-10). Each file lands whole or not at all.
+            $tmp = "$dest.update-new"
+            Copy-Item $_.FullName $tmp -Force
+            Move-Item -Force $tmp $dest
             $written++
         }
     } finally { Pop-Location }
+    if ((Test-Path (Join-Path $Dir "requirements.txt")) -and
+        ((Get-Content (Join-Path $Dir "requirements.txt") -Raw) -ne $oldReq)) {
+        Write-Host "update: dependencies changed in this release - reconcile the venv:"
+        Write-Host "    $Dir\venv\Scripts\python.exe -m pip install -r $Dir\requirements.txt"
+        Write-Host "    (a missing venv: re-run INSTALL-WINDOWS.cmd in $Dir - this file needs no download)"
+    }
     Write-Host "update: $Cur -> $New ($written file(s); host-owned files left alone)"
     if ($Cur -eq $New) { Write-Host "update: already current" }
     # Single quotes: PowerShell eats a backtick in a double-quoted string (measured: the

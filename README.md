@@ -89,7 +89,7 @@ irm https://github.com/trappsquid/tinycmdr/releases/latest/download/install.ps1 
 curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash
 ```
 
-Needs **Python 3.10–3.12** (`--install-python` installs one). Only a Linux *system* install and a
+Needs **Python 3.10–3.12** (on macOS, `--install-python` fetches one for you). Only a Linux *system* install and a
 macOS install with `sudo` ask for root.
 
 | OS | download | then |

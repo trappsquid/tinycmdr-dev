@@ -294,7 +294,10 @@ def case_linux_user_mode(sb, pkg, bindir, user, py):
     text = unit.read_text(encoding="utf-8") if unit.exists() else ""
     execs = [l for l in text.splitlines() if l.startswith("ExecStart")]
     check("the unit starts the chat lane with no extra arguments",
-          bool(execs) and execs[0].strip().endswith("tinycmdr.py"),
+          bool(execs) and execs[0].strip().endswith('tinycmdr.py"'),
+          f"ExecStart: {execs}")
+    check("...with interpreter and script quoted (a space in HOME must not split argv)",
+          bool(execs) and execs[0].startswith('ExecStart="'),
           f"ExecStart: {execs}")
     check("config.json is 0600",
           mode_of(inst / "config.json") == 0o600,
@@ -308,6 +311,19 @@ def case_linux_user_mode(sb, pkg, bindir, user, py):
     check("the pre-flight names the primary group from id -gn",
           f"service group: {real_group}" in got.stdout,
           f"expected 'service group: {real_group}' in the output")
+    # A re-run from the install's OWN copy - the door the footer names - used to die in
+    # the copy loop: every cp was a same-file copy, which cp refuses, and set -euo
+    # pipefail killed the run (measured 2026-10-10).
+    got2 = run(["bash", inst / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                "--no-deps", "--no-sudoers", "--no-start",
+                "--mattermost-url", "chat.invalid",
+                "--token", "0123456789abcdef0123456789abcdef",
+                "--install-dir", inst], env, inst)
+    check("a re-run from the install's own copy exits 0 (same-file cp)",
+          got2.returncode == 0,
+          f"rc={got2.returncode}; tail: {got2.stdout[-400:]}{got2.stderr[-300:]}")
+    check("...and says the files are already in place",
+          "already in place" in got2.stdout, got2.stdout[-300:])
     return inst
 
 
@@ -516,6 +532,81 @@ def case_macos_install(sb, pkg, bindir, user, py):
               f"{plist} is not there")
     else:
         print("SKIP the plist half: launchd is macOS-only")
+    check("...and the summary says the agent is not loaded (--no-start)",
+          "NOT loaded (--no-start)" in got.stdout, got.stdout[-300:])
+    # A --python that cannot run names the flag and the way through, instead of the old
+    # bare "$PY could not run" (measured 2026-10-10).
+    broken = sb / "not-a-python"
+    broken.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    broken.chmod(0o755)
+    got_broken = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
+                      "--no-launchd", "--python", str(broken)], env, pkg)
+    check("a --python that cannot run names the flag and the way through",
+          got_broken.returncode == 1
+          and "--install-python" in got_broken.stdout + got_broken.stderr,
+          f"rc={got_broken.returncode}; out={got_broken.stdout[-200:]}{got_broken.stderr[-200:]}")
+    # An install dir with a space AND an ampersand: the sed substitution used to eat the
+    # & (it means "the matched text") and write a corrupted plist path (measured
+    # 2026-10-10).
+    inst3 = sb / "mac-inst & co"
+    fake_venv(inst3, py)
+    amp_args = ["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-start",
+                "--no-path", "--python", py, "--label", "com.tinycmdr.amp",
+                "--install-dir", str(inst3)]
+    if not on_mac:
+        amp_args.insert(3, "--no-launchd")
+    got_amp = run(amp_args, env, pkg)
+    check("an install dir with & and a space installs", got_amp.returncode == 0,
+          f"rc={got_amp.returncode}; tail: {got_amp.stdout[-300:]}{got_amp.stderr[-300:]}")
+    if os.uname().sysname == "Darwin":
+        amp_plist = sb / "home" / "Library" / "LaunchAgents" / "com.tinycmdr.amp.plist"
+        check("...and the plist carries the escaped real path",
+              amp_plist.exists()
+              and "mac-inst &amp; co" in amp_plist.read_text(encoding="utf-8")
+              and "__APP__" not in amp_plist.read_text(encoding="utf-8"),
+              amp_plist.read_text(encoding="utf-8")[:200] if amp_plist.exists() else "no plist")
+    else:
+        print("SKIP the plist-escape half: launchd is macOS-only")
+    # A plain re-run (no --force) is the documented "add a lane" door, and the blanket
+    # refusal in the installer made that advice a dead end (measured 2026-10-10).
+    cfg_before = (inst / "config.json").read_bytes()
+    got2 = run([*args, "--install-dir", inst], env, pkg)
+    check("a plain re-run over the install exits 0 (no --force needed)",
+          got2.returncode == 0,
+          f"rc={got2.returncode}; tail: {got2.stdout[-400:]}{got2.stderr[-300:]}")
+    check("...and config.json is kept byte-for-byte",
+          (inst / "config.json").read_bytes() == cfg_before,
+          "config.json changed on a plain re-run")
+    # ...and the same run from the install's OWN copy, where every cp is a same-file
+    # copy (cp refuses those; set -e then killed the run - measured 2026-10-10).
+    got3 = run([args[0], inst / "install" / "install-tinycmdr-macos.sh", *args[2:],
+                "--install-dir", inst], env, inst)
+    check("a re-run from the install's own copy exits 0 (same-file cp)",
+          got3.returncode == 0,
+          f"rc={got3.returncode}; tail: {got3.stdout[-400:]}{got3.stderr[-300:]}")
+    # A foreign default-label plist must not stop a --no-launchd (files-only) run: that
+    # run never touches launchd, and the guard used to refuse it anyway (measured
+    # 2026-10-10).
+    la = sb / "home" / "Library" / "LaunchAgents"
+    la.mkdir(parents=True, exist_ok=True)
+    (la / "com.tinycmdr.agent.plist").write_text(
+        '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>'
+        "<key>Label</key><string>com.tinycmdr.agent</string>"
+        "<key>ProgramArguments</key><array>"
+        "<string>/somewhere/else/venv/bin/python</string>"
+        "<string>/somewhere/else/tinycmdr.py</string></array></dict></plist>",
+        encoding="utf-8")
+    inst2 = sb / "mac-inst-nolaunchd"
+    fake_venv(inst2, py)
+    got4 = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
+                "--no-launchd", "--no-path", "--python", py, "--install-dir", inst2],
+               env, pkg)
+    check("a --no-launchd install is not stopped by another install's label",
+          got4.returncode == 0,
+          f"rc={got4.returncode}; tail: {got4.stdout[-400:]}")
+    # Remove the plant: later cases share this sandbox home, and a foreign default-label
+    # plist would decide for them what this check decided for its own run.
+    (la / "com.tinycmdr.agent.plist").unlink()
     return inst
 
 
@@ -897,6 +988,54 @@ def run_with_stdin(cmd, env, cwd, stdin_text):
                           capture_output=True, input=stdin_text, timeout=300)
 
 
+def case_linux_without_systemd(sb, pkg, bindir, user, py):
+    """Containers, WSL2 and CI runners have no systemctl: the files-only door and the
+    uninstall must work there, and a run that WOULD need systemd must say what to do
+    (measured 2026-10-10: both died at pre-flight, naming no way forward)."""
+    nobin = write_stubs(sb / "bin-nosystemd", user, sb / "home")
+    for gone in ("systemctl", "loginctl"):
+        (nobin / gone).unlink()
+    inst = sb / "lin-nosysd"
+    fake_venv(inst, py)
+    log = sb / "logs" / "lin-nosysd.log"
+    env = sandbox_home_env(sb, nobin, log, user)
+    got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+               "--no-deps", "--no-sudoers", "--no-service", "--no-web",
+               "--install-dir", inst], env, pkg)
+    check("a files-only install works without systemctl",
+          got.returncode == 0,
+          f"rc={got.returncode}; tail: {got.stdout[-400:]}{got.stderr[-300:]}")
+    got2 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                "--no-deps", "--no-sudoers", "--install-dir", inst], env, pkg)
+    check("...while a run that needs systemd names --no-service instead",
+          got2.returncode == 1 and "--no-service" in (got2.stdout + got2.stderr),
+          f"rc={got2.returncode}; out={got2.stdout[-300:]}{got2.stderr[-300:]}")
+    got3 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                "--uninstall", "--install-dir", inst], env, pkg)
+    check("...and an uninstall works without systemctl",
+          got3.returncode == 0 and not inst.exists(),
+          f"rc={got3.returncode}; exists={inst.exists()}; out={got3.stdout[-200:]}")
+
+
+def case_web_port_validation(sb, pkg, bindir, user, py):
+    """--web-port with a typo used to be swallowed (the config writer's int() failed
+    into a try/except) and the page came up on the default port (measured 2026-10-10:
+    --web-port 88O0 installed "fine")."""
+    log = sb / "logs" / "webport.log"
+    env = sandbox_home_env(sb, bindir, log, user)
+    for label, script in (("Linux", "install/install-tinycmdr.sh"),
+                          ("macOS", "install/install-tinycmdr-macos.sh")):
+        got = run(["bash", pkg / script, "-y", "--web-port", "88O0"], env, pkg)
+        check("%s: a non-numeric --web-port is refused" % label,
+              got.returncode == 1
+              and "--web-port needs a port number" in got.stdout + got.stderr,
+              f"rc={got.returncode}; out={got.stdout[-200:]}{got.stderr[-200:]}")
+        got2 = run(["bash", pkg / script, "-y", "--web-port", "70000"], env, pkg)
+        check("%s: an out-of-range --web-port is refused" % label,
+              got2.returncode == 1 and "1-65535" in got2.stdout + got2.stderr,
+              f"rc={got2.returncode}; out={got2.stdout[-200:]}{got2.stderr[-200:]}")
+
+
 def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
     """The interactive installer asks, PROBES, and offers what it advertised.
 
@@ -1171,6 +1310,8 @@ def main():
         case_installer_cloud_key(sb, pkg, bindir, user, py)
         case_macos_cloud_key(sb, pkg, bindir, user, py)
         case_installer_token_and_allowlist_default(sb, pkg, bindir, user, py)
+        case_linux_without_systemd(sb, pkg, bindir, user, py)
+        case_web_port_validation(sb, pkg, bindir, user, py)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
     print("\n== a re-run over a configured install keeps it, and asks once ==")

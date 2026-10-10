@@ -1948,7 +1948,7 @@ def _body():
               and "-Filter \"Name='pythonw.exe'\"" not in _ps)
         _psi = (BASE / "install" / "install-tinycmdr.ps1").read_text(encoding="utf-8")
         check("...and the installer's copy spells it the same way (kept in step)",
-              "IndexOf($Dir," in _psi and 'like "*$Dir*"' not in _psi)
+              "IndexOf(($Dir.TrimEnd('\\') + '\\')" in _psi and 'like "*$Dir*"' not in _psi)
         # A user-PATH write must broadcast WM_SETTINGCHANGE, or a window opened right
         # after the install keeps Explorer's stale environment and answers "not
         # recognized" until logoff (a brand-new-install report, 2026-10-06).

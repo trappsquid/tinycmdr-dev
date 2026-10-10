@@ -1160,7 +1160,15 @@ def main():
                 raise SystemExit("cannot read the installer's $required list: it guards every "
                                  "install, so a build without it proves nothing")
             need = re.findall(r'"([^"]+)"', m.group(1))
-            miss = [n for n in need if not (stage_dir / n).exists()]
+            # Against the WIN container, not the staged tree: the zip is written with
+            # skip=platform_skip("win"), so a required name that only exists in the
+            # staged tree proves nothing for the download a user gets - a file that is
+            # both required and pruned passed the build and reached users as "package
+            # is missing X" at install time (the class of their own tests-dropped
+            # incident; measured 2026-10-10).
+            win_skip = platform_skip("win")
+            miss = [n for n in need
+                    if n in win_skip or not (stage_dir / n).exists()]
             if miss:
                 raise SystemExit("the installer requires file(s) the package does not carry: %s"
                                  % ", ".join(miss))

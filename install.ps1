@@ -16,6 +16,11 @@ param(
     [string[]] $InstallerArgs
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1's default protocol set excludes TLS 1.2 where .NET's
+# strong-crypto registry keys are unset, and GitHub requires it: without this the two
+# fetches below die "Could not create SSL/TLS secure channel" (update.ps1 and
+# tinycmdr.cmd set the same line; this door did not - measured 2026-10-10).
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $base = if ($env:TINYCMDR_URL) { $env:TINYCMDR_URL.TrimEnd('/') }
         else { 'https://github.com/trappsquid/tinycmdr/releases/latest/download' }
 $asset = 'tinycmdr-win.zip'
@@ -64,13 +69,21 @@ try {
     # There is no separate window to keep open here: this runs in the caller's own
     # terminal, so the wrapper's "Press any key to close this window" barrier must not
     # appear (the double-click .zip path keeps it - that window really does close).
+    $prevNoPause = $env:FB_NOPAUSE
     $env:FB_NOPAUSE = '1'
     Push-Location $src.FullName
     try {
         if ($InstallerArgs.Count -gt 0) { & cmd.exe /c INSTALL-WINDOWS.cmd @InstallerArgs }
         else { & cmd.exe /c INSTALL-WINDOWS.cmd }
         $rc = $LASTEXITCODE
-    } finally { Pop-Location }
+    } finally {
+        Pop-Location
+        # ...and back to what it was: the value leaked into the caller's environment and
+        # disarmed the .cmd door's window barrier for every later run in that same
+        # shell (measured 2026-10-10).
+        if ($null -ne $prevNoPause) { $env:FB_NOPAUSE = $prevNoPause }
+        else { Remove-Item Env:FB_NOPAUSE -ErrorAction SilentlyContinue }
+    }
 
     # 3 is the installer's "installed, but the model endpoint did not answer" - not a failure.
     if ($rc -ne 0 -and $rc -ne 3) {

@@ -112,7 +112,8 @@ printf '\n    the unpacked folder was temporary. The installed copy carries its 
 # one on macOS too, and on a Mac that path exists (it is in the package) but dies at its
 # first `getent` under `set -e`+`pipefail` - exit 127, no output, "so later:" followed by
 # nothing that works (I6). $installer is the same name this run handed over to.
-printf '    uninstaller (~/tinycmdr by default), so later:\n'
+printf '    uninstaller; the installer above printed the exact commands for where it installed.\n'
+printf '    With the default folder (~/tinycmdr), so later:\n'
 printf '      bash ~/tinycmdr/%s --verify-only\n' "$installer"
 printf '      bash ~/tinycmdr/%s --uninstall\n' "$installer"
 case "$installer" in

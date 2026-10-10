@@ -71,6 +71,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
+# The absolute path THIS script runs from: the recovery commands in the die messages
+# are for the reader to run later, and through the one-line door $0 is a path inside
+# the temp unpack - as printed, the command died with "No such file or directory"
+# from the reader's own shell (measured 2026-10-10).
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
 # The install belongs to the person who ran the installer, not to $HOME. `sudo` resets
 # HOME to /var/root (sudoers(5) env_reset), so every $HOME-derived path below pointed at
 # root's home the moment a reader followed install/README-macos.md's documented removal
@@ -175,6 +180,15 @@ say()  { printf '\n=== %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 warn() { printf '    ! %s\n' "$*" >&2; }
 die()  { printf '\n*** %s\n' "$*" >&2; exit 1; }
+
+# --web-port: digits only, 1-65535. A typo used to be swallowed silently (the config
+# writer's int() failed into a try/except) and the page came up on the default port
+# (measured 2026-10-10: --web-port 88O0 installed "fine").
+case "$WEB_PORT" in
+    ''|*[!0-9]*) die "--web-port needs a port number (got '$WEB_PORT')" ;;
+esac
+[ "$WEB_PORT" -ge 1 ] && [ "$WEB_PORT" -le 65535 ] \
+    || die "--web-port must be 1-65535 (got $WEB_PORT)"
 
 file_mode() {   # permission bits: BSD stat on macOS, GNU stat elsewhere
     if stat -f '%Lp' "$1" >/dev/null 2>&1; then stat -f '%Lp' "$1"; else stat -c '%a' "$1"; fi
@@ -407,6 +421,14 @@ if [ "$UNINSTALL" = 1 ]; then
             rm -f "$PLIST"
             _removed=1
             info "removed $PLIST"
+            # bootout and unload are both silent on failure, and neither can reach a
+            # GUI domain that is not there (an uninstall over SSH). Say so instead of
+            # reporting a removal that leaves the job respawning a deleted script
+            # (measured 2026-10-10).
+            if launchctl print "gui/$(id -u "$RUN_USER")/$LABEL" >/dev/null 2>&1; then
+                warn "the job $LABEL is STILL loaded (no GUI session here to boot it out):"
+                warn "log in at the console and run:  launchctl bootout gui/\$(id -u)/$LABEL"
+            fi
         else
             info "kept $PLIST - it belongs to another install (not $INSTALL_DIR)"
         fi
@@ -563,8 +585,19 @@ check_python() {
         if [ -z "$PY" ]; then
             v="none found"
         else
-            v="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)" \
-                || die "$PY could not run"
+            if ! v="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)"; then
+                # A path that EXISTS but cannot run is the macOS Command Line Tools
+                # placeholder (/usr/bin/python3 on a Mac with no CLT): it raises the CLT
+                # install dialog and exits non-zero. Treated as "no interpreter found",
+                # so the fetch offer below (and -y consent) applies - unless the reader
+                # named it with --python, which is their error to hear about.
+                if [ -n "$PY_ARG" ]; then
+                    die "--python $PY_ARG could not run - point it at a 3.10-3.12 interpreter (or --install-python)"
+                fi
+                info "$PY exists but cannot run (the Command Line Tools placeholder does this) - looking for another"
+                PY=""
+                continue
+            fi
         fi
         case "$v" in
             3.10|3.11|3.12)
@@ -582,10 +615,15 @@ connects). Use 3.12:  brew install python@3.12   then re-run with --python
             3.[0-9])
                 # --install-python is an explicit "give me a 3.12", so it wins over a 3.9
                 # that was passed by name (or found): fetch rather than refuse (the fetch
-                # used to be unreachable when --python was also passed).
-                if [ "$tries" = 0 ] && [ "$INSTALL_PYTHON" = 1 ]; then
+                # used to be unreachable when --python was also passed). A person at a
+                # terminal is offered the same fetch the no-interpreter branch offers;
+                # the refusal below stands under -y, where nobody can be asked.
+                if [ "$tries" = 0 ] \
+                   && { [ "$INSTALL_PYTHON" = 1 ] \
+                        || { [ "$YES" != 1 ] && tty_ask "the python here is $v, which cannot run tinycmdr. Fetch a private python 3.12 now (uv, no password, ~66 MB)?"; }; }; then
                     say "python"
                     tries=1
+                    FETCHED_PYTHON=1
                     PY="$(fetch_python)"
                     continue
                 fi
@@ -607,6 +645,7 @@ Install one:  brew install python@3.12   then re-run with --python /opt/homebrew
                         || tty_ask "no python 3.10-3.12 on this Mac ($v). Fetch a private python 3.12 now (uv, no password, ~66 MB)?"; }; then
                     say "python"
                     tries=1
+                    FETCHED_PYTHON=1
                     PY="$(fetch_python)"
                     continue
                 fi
@@ -705,9 +744,12 @@ if [ "$VERIFY_ONLY" = 1 ]; then
 fi
 
 # ---------------------------------------------------------------- install ---
-if [ -e "$INSTALL_DIR/tinycmdr.py" ] && [ "$FORCE" != 1 ]; then
-    die "$INSTALL_DIR already holds a tinycmdr. Re-run with --force to reinstall in place."
-fi
+# A re-run over an existing install is supported, not refused: the copy loop below
+# skips host-owned paths (the rule update.sh applies), the questions are gated on the
+# "already configured" answer above, and --force still does its extra bits (boot the
+# agent out early, keep tinycmdr.py.pre-reinstall). The blanket refusal that used to
+# sit here was the one install door in the fleet that could not re-run, while the
+# footer below and README-macos tell the reader to do exactly that to add a lane.
 
 # ---------------------------------------------------------------- questions ---
 # A reader who downloaded this and ran it knows two things at most: the server
@@ -741,6 +783,17 @@ fi
 if [ -z "$TG_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
     TG_TOKEN="$(grep -m1 '^TINYCMDR_TG_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
     if [ -n "$TG_TOKEN" ]; then info "reusing the Telegram token already in .env"; fi
+fi
+# A re-run over an install that is already configured keeps it: ask ONCE, with
+# keeping as the default, the way the Linux installer does. A "no" still reaches
+# every question below, so a re-run can still change or add a lane.
+if [ "$ASK" = 1 ] && [ -f "$INSTALL_DIR/config.json" ] && [ -f "$INSTALL_DIR/.env" ] &&
+   { [ -n "$TOKEN" ] || [ -n "$TG_TOKEN" ]; }; then
+    say "this install is already configured"
+    info "config.json and .env in $INSTALL_DIR are used as they are - nothing to re-enter"
+    if ask_yes "Keep the existing configuration?" y; then
+        ASK=0
+    fi
 fi
 if [ "$ASK" = 1 ]; then
     say "a few questions"
@@ -814,8 +867,12 @@ if [ "$ASK" = 1 ]; then
     info "local (llama.cpp, Ollama, vLLM on this Mac or your LAN) or cloud"
     info "(a hosted OpenAI-compatible provider, which needs an API key)."
     _kind_dflt=1
+    # The RFC1918 ranges is_lan_url() knows, 172.16/12 included: the two notions of
+    # "LAN" disagreed, so a 172.20.x.x endpoint was offered the cloud-key prompt
+    # (measured 2026-10-10).
     case "${MODEL_BASE_URL:-$DEFAULT_MODEL_BASE}" in
-        *//127.0.0.1:*|*//localhost:*|*"::1"*|*//10.*|*//192.168.*) ;;
+        *//127.0.0.1:*|*//localhost:*|*"::1"*|*//10.*|*//192.168.*|\
+        *//172.1[6-9].*|*//172.2[0-9].*|*//172.3[01].*) ;;
         *) _kind_dflt=2 ;;
     esac
     _kind="$(ask_choice "Which kind of endpoint is it?" "$_kind_dflt" \
@@ -1016,7 +1073,12 @@ if [ "$ASK" = 1 ]; then
         info "web search   : LAN only (own providers work; off-LAN ones are refused until allowed)"
     fi
     if ! ask_yes "Install now?"; then
-        info "nothing was changed"
+        if [ "${FETCHED_PYTHON:-0}" = 1 ]; then
+            info "nothing else was changed - but the private python fetched earlier stays"
+            info "in $INSTALL_DIR/.python (about 66 MB); remove that folder to undo it."
+        else
+            info "nothing was changed"
+        fi
         exit 0
     fi
 fi
@@ -1028,7 +1090,12 @@ fi
 # and the agent it displaced stays unloaded, which looks exactly like "the bot is gone
 # and nothing answers" (measured 2026-09-26 on macOS: the real install was
 # left unregistered by test installs sharing the default label).
-if [ "$IS_MAC" = 1 ]; then
+# Only a run that will WRITE or LOAD the agent can take it away: --no-launchd never
+# touches launchd (it exits before a plist is written), so the guard used to refuse
+# files-only installs with a reason that did not apply to them (measured 2026-10-10:
+# a --no-launchd re-run on a box with a real install was stopped by "this run would
+# boot that agent out" - it would not).
+if [ "$IS_MAC" = 1 ] && [ "$NO_LAUNCHD" != 1 ]; then
     _foreign=""
     if [ -f "$PLIST" ] && ! grep -qF "$INSTALL_DIR" "$PLIST" 2>/dev/null; then
         _foreign="$PLIST (it names another folder)"
@@ -1046,8 +1113,8 @@ if [ "$IS_MAC" = 1 ]; then
     $_foreign
 This run would boot that agent out. Give this install its own label (a probe or a
 second install always should):
-    bash $0 --label com.tinycmdr.$(hostname -s | tr 'A-Z' 'a-z') <your switches>
-or remove the other install first:  bash $0 --uninstall"
+    bash $SELF --label com.tinycmdr.$(hostname -s | tr 'A-Z' 'a-z') <your switches>
+or remove the other install first:  bash $SELF --uninstall"
     fi
 fi
 
@@ -1084,14 +1151,26 @@ host_owned() {
     for f in $HOST_TOP; do [ "$1" = "$f" ] && return 0; done
     return 1
 }
-_fl="$(mktemp)"
-(cd "$SRC" && find . -type f -print | sed 's|^\./||') > "$_fl"
-while IFS= read -r rel; do
-    host_owned "$rel" && continue
-    mkdir -p "$INSTALL_DIR/$(dirname "$rel")"
-    cp -p "$SRC/$rel" "$INSTALL_DIR/$rel"
-done < "$_fl"
-rm -f "$_fl"
+# $SRC = $INSTALL_DIR when the installer runs from the install's own copy: every cp
+# below would then be a same-file copy, which cp refuses ("are identical (not
+# copied)") and set -e kills the run - the door the footer tells the reader to use
+# (measured 2026-10-10). The files are already in place, so skip the copy; the -ef
+# probe catches a relative or symlinked --install-dir, where the strings differ but
+# the inodes do not.
+if [ "$SRC" = "$INSTALL_DIR" ] \
+   || { [ -f "$SRC/tinycmdr.py" ] && [ -f "$INSTALL_DIR/tinycmdr.py" ] \
+        && [ "$SRC/tinycmdr.py" -ef "$INSTALL_DIR/tinycmdr.py" ]; }; then
+    info "re-run from the install's own copy: the files are already in place"
+else
+    _fl="$(mktemp)"
+    (cd "$SRC" && find . -type f -print | sed 's|^\./||') > "$_fl"
+    while IFS= read -r rel; do
+        host_owned "$rel" && continue
+        mkdir -p "$INSTALL_DIR/$(dirname "$rel")"
+        cp -p "$SRC/$rel" "$INSTALL_DIR/$rel"
+    done < "$_fl"
+    rm -f "$_fl"
+fi
 # The starter drop-ins seed a FRESH install and never overwrite the operator's own:
 # tools/*.py are the agent's once they exist, and skills/ is the operator's runbooks.
 mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/skills"
@@ -1524,8 +1603,14 @@ fi
     for _k in $SECRET_SHARED; do
         grep -E "^${_k}=" "$SECRETS_FILE" | tail -n1 || true
     done
-} > "$INSTALL_DIR/.env"
-chmod 600 "$INSTALL_DIR/.env"
+} > "$INSTALL_DIR/.env.new-$$" \
+    || { rm -f "$INSTALL_DIR/.env.new-$$"; die "could not write .env (disk full?) - this host's own copy was left untouched"; }
+chmod 600 "$INSTALL_DIR/.env.new-$$"
+# BESIDE it and renamed, the shape the Linux installer was fixed to (A-2026-10-08-178):
+# the old `> "$INSTALL_DIR/.env"` truncated the host's only copy of its secrets the
+# moment the redirection was set up, so an interrupt or ENOSPC left it empty or
+# partial (measured 2026-10-10).
+mv -f "$INSTALL_DIR/.env.new-$$" "$INSTALL_DIR/.env"
 info ".env written (mode 600, token not in config.json)"
 if [ -n "$KEEP_ENV" ]; then
     info "kept this host's own keys (a model key is per bot)"
@@ -1704,7 +1789,15 @@ else
 mkdir -p "$PLIST_DIR"
 TPL="$SRC/install/com.tinycmdr.agent.plist"
 [ -f "$TPL" ] || die "package is missing install/com.tinycmdr.agent.plist"
-sed -e "s|__LABEL__|$LABEL|g" -e "s|__PYTHON__|$VPY|g" -e "s|__APP__|$INSTALL_DIR|g" \
+# Values are XML-ESCAPED first (& < >) and then SED-escaped: `&` means "the matched
+# text" in a sed replacement and `|` is the delimiter here, and a raw `&` or `<` in a
+# <string> makes the XML invalid - the plist used to be written with a corrupted path
+# that either failed plutil or loaded pointing nowhere (measured 2026-10-10: an
+# --install-dir like ~/R&D/tinycmdr).
+_xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+_esc() { _xml "$1" | sed -e 's/[\\&|]/\\&/g'; }
+sed -e "s|__LABEL__|$(_esc "$LABEL")|g" -e "s|__PYTHON__|$(_esc "$VPY")|g" \
+    -e "s|__APP__|$(_esc "$INSTALL_DIR")|g" \
     "$TPL" > "$PLIST"
 plutil -lint "$PLIST" >/dev/null || die "the generated plist is not valid: $PLIST"
 info "wrote $PLIST"
@@ -1720,7 +1813,9 @@ else
     launchctl bootout "gui/$(id -u "$RUN_USER")/$LABEL" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u "$RUN_USER")" "$PLIST" 2>/dev/null \
         || launchctl load -w "$PLIST" \
-        || die "launchctl could not load $PLIST (see $LOGDIR/launchd.err.log)"
+        || die "launchctl could not load $PLIST (see $LOGDIR/launchd.err.log).
+A Mac reached only over SSH has no GUI session to hold an agent: log in at the console and
+re-run, or load it there later with:  launchctl bootstrap gui/\$(id -u) \"$PLIST\""
     info "agent loaded as $LABEL"
 fi
 fi
@@ -1728,7 +1823,12 @@ fi
 say "done"
 info "install dir : $INSTALL_DIR"
 if [ "$SERVE" = 1 ]; then
-    info "agent       : $LABEL  ($PLIST)"
+    if [ "$NO_START" = 1 ]; then
+        info "agent       : $LABEL  ($PLIST) - NOT loaded (--no-start):"
+        info "              load it when ready:  launchctl bootstrap gui/\$(id -u) $PLIST"
+    else
+        info "agent       : $LABEL  ($PLIST)"
+    fi
     info "logs        : $INSTALL_DIR/tinycmdr.log, $LOGDIR/launchd.err.log"
     info "restart     : bash $INSTALL_DIR/maintenance/restart-tinycmdr-macos.sh"
     if [ "$WEB_ON" = 1 ]; then

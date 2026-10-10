@@ -73,10 +73,13 @@ if [ "${1:-}" = "update" ] && ! grep -q "releases/latest/download" "$HERE/tinycm
     else
         echo "tinycmdr: neither curl nor wget is available to update with" >&2; exit 1
     fi
-    sh "$UPD" "$HERE"
-    RC=$?
+    RC=0
+    # `sh "$UPD"` failing used to exit the script AT this line under set -e (rc 1, the
+    # temp file left behind): the code after it - `RC=$?` and the cleanup - was
+    # unreachable exactly when it was needed.
+    sh "$UPD" "$HERE" || RC=$?
     rm -f "$UPD"
-    exit $RC
+    exit "$RC"
 fi
 
 # Nothing is added for the bare case: the build's no-argument start is the page.

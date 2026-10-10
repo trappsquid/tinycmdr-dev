@@ -156,10 +156,15 @@ def main():
     check("the BAT no longer interpolates $InstallDir or $py.Path",
           bat is not None and "$InstallDir" not in bat and "$(" not in bat)
     check("the BAT body is pure ASCII too", bat is not None and bat.isascii())
-    check("the VBS is still written through the ASCII encoder",
-          'tinycmdr-service.vbs") $vbs -Encoding ASCII' in install)
-    check("the BAT is still written through the ASCII encoder",
-          'launch_tinycmdr.bat") $bat -Encoding ASCII' in install)
+    check("the VBS is written through the ASCII encoder, with CRLF decided here",
+          # The shipped .ps1 is LF-only, so the here-string's endings are the package's,
+          # not a decision: the writer normalises to CRLF now (measured 2026-10-10).
+          'tinycmdr-service.vbs") (($vbs.TrimEnd' in install
+          and "-Encoding ASCII" in install
+          and '"`r?`n", "`r`n"' in install)
+    check("the BAT is written the same way",
+          'launch_tinycmdr.bat") (($bat.TrimEnd' in install
+          and '+ "`r`n") -NoNewline -Encoding ASCII' in install)
     check("nothing writes a launcher as Unicode (ASCII-by-construction instead)",
           "-Encoding Unicode" not in install)
     check("the interpreter fallback is guarded for the non-ASCII case",
@@ -224,7 +229,14 @@ def main():
     stop_code = stop[stop.find("param([string] $Dir)"):] if "param([string] $Dir)" in stop else ""
     check("the stop filter scopes every process kind by the install dir, literally",
           "$_.Name -like 'python*' -or $_.Name -eq 'wscript.exe'" in stop_code
-          and "IndexOf($Dir" in stop_code and "OrdinalIgnoreCase" in stop_code,
+          and "IndexOf(($Dir.TrimEnd('\\') + '\\')" in stop_code
+          and "OrdinalIgnoreCase" in stop_code,
+          "filter: %r" % stop_code[:200])
+    check("...with a path BOUNDARY, so a sibling install's bot is never killed",
+          # The same fix maint/restart-tinycmdr.ps1 carries (A-2026-10-08-174): a bare
+          # substring let C:\x\tinycmdr match C:\x\tinycmdr-work\... and the sweep
+          # killed the sibling install's processes.
+          'IndexOf(($Dir.TrimEnd' in stop_code,
           "filter: %r" % stop_code[:200])
     check("...so a wildcard-shaped install dir still matches (the old -like did not)",
           '-like "*$Dir*"' not in stop_code,
@@ -277,8 +289,12 @@ def main():
     check("the bot-token prompt waits for the chat lane to be chosen",
           "-not $MattermostToken -and $Ask -and $WantChat" in install,
           "a page-only install is asked for a Mattermost token it just declined")
-    check("the closing summary counts the page as something selected",
-          "-not ($WantChat -or $WantTg -or $WantWeb -or $WantCli)" in install)
+    check("the closing summary reads the real registration state, not the wizard flags",
+          # The flags are $null on a keep-existing re-run, and the old test then told a
+          # re-run that had just registered the launcher that it "does not run in the
+          # background" (measured 2026-10-10).
+          "if (-not $RegisterTask) {" in install
+          and "-not ($WantChat -or $WantTg -or $WantWeb" not in install)
 
     print("\n== the removal door a double-click can run ==")
     door = source("UNINSTALL-WINDOWS.cmd")
@@ -571,13 +587,20 @@ def main():
     check("the PATH section says so", "left alone (-NoPath)" in install)
 
     print("\n== the python.org fallback download follows the architecture ==")
-    check("the asset is chosen from $env:PROCESSOR_ARCHITECTURE",
-          "PROCESSOR_ARCHITECTURE" in install and "$pyArch" in install)
-    check("all three architectures are mapped",
-          all(a in between(install, "$pyArch = switch", "$installerName") for a in
-              ('"AMD64"', '"ARM64"', '"x86"')))
-    check("no hardcoded amd64 asset URL is left",
-          "python-3.12.8-amd64.exe" not in install and "python-3.12.8-$pyArch.exe" in install)
+    check("the asset is chosen from the host architecture, WOW64 included",
+          # PROCESSOR_ARCHITEW6432 first: under a 32-bit PowerShell on a 64-bit host the
+          # other variable reads "x86" and the host wants the amd64 build.
+          "PROCESSOR_ARCHITEW6432" in install and "PROCESSOR_ARCHITECTURE" in install)
+    check("the architectures are mapped to python.org's installer-name suffixes",
+          # python.org publishes the 32-bit full installer as python-3.12.8.exe: x86 is
+          # an EMPTY suffix, and the old "-win32" name 404'd (measured 2026-10-10).
+          all(a in between(install, "$pySuffix = switch", "$installerName") for a in
+              ('"AMD64"', '"ARM64"'))
+          and '"-amd64"' in install and '"-arm64"' in install and 'default { "" }' in install)
+    check("no hardcoded arch asset URL is left",
+          "python-3.12.8-amd64.exe" not in install
+          and "python-3.12.8-win32.exe" not in install
+          and "$installerName" in install)
     check("the resolved interpreter's word size is checked",
           "Is64BitOperatingSystem" in install and "calcsize('P')" in install)
 

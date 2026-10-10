@@ -51,19 +51,25 @@ Unzip the package, open Terminal in that folder, and run:
 It asks, at the terminal, for everything the bot needs and writes nothing until you
 answer `Install now?`:
 
-    Mattermost bot token (input hidden, Enter to skip)
+    Mattermost bot token (input hidden, Enter to keep/skip)
     Mattermost server, no https:// (e.g. chat.example.com)
     Your Mattermost user id (optional, but without it the bot ignores your DMs)
     Also install a Telegram bot lane (a token from @BotFather)? [y/N]
-    Model endpoint [http://127.0.0.1:8081/v1]
+    Which kind of endpoint is it?               local / my LAN (no key) or cloud /
+                                                hosted (then it asks for that endpoint's
+                                                key; the key lands in .env, never
+                                                config.json)
+    Model endpoint [http://127.0.0.1:8081/v1]   asked for its metadata once, while you
+                                                watch
     Model id [main]
-    API key for it (blank if it needs none)     only asked when the endpoint is not
-                                                on this machine
     Add another endpoint? [y/N]                 repeatable. Each one is an
                                                 llm.fallbacks entry, tried in order
                                                 when the primary fails; its key goes
                                                 to .env (api_key_env), never config.json
     Install now? [Y/n]
+
+After `Install now?` it asks about the page once: this machine only or reachable from
+your network, and the access token (Enter keeps the host's own or mints one).
 
 Press Enter to take the value in brackets. Skipping the token installs the files with
 **no chat account**: a session (`--cli`) and a one-shot (`--once`) work right away, but
@@ -118,8 +124,7 @@ your shell history.
 **Not a terminal person?** Double-click `INSTALL-MACOS.command` in the package, and
 `UNINSTALL-MACOS.command` to remove it. Finder runs a `.command` in Terminal; it opens
 a `.sh` in TextEdit, which is where most people get stuck. (If the file came from a
-browser rather than the `curl` line above, macOS quarantines it: the first time,
-right-click it and choose Open.)
+browser, macOS quarantines it: the first time, right-click it and choose Open.)
 
 ## 4. Removing it
 
@@ -162,9 +167,11 @@ or a hosted provider. Any OpenAI-compatible `/v1` root works. Enter takes
 `http://127.0.0.1:8081/v1` with model `main` (the usual local llama.cpp shape).
 
 Point it at a hosted endpoint and it asks for that endpoint's key, which is kept in
-`config.json`'s `llm.api_key` - a hosted PRIMARY has no env var of its own, so that is
-where the build looks. A key in `.env` is the tidier shape when the endpoint is a
-FALLBACK entry instead (see `llm.fallbacks[].api_key_env` in `config.example.json`).
+`.env` as `TINYCMDR_LLM_API_KEY` - never `config.json`, because the agent reads that
+file into a prompt. (An older install whose `config.json` still carries `llm.api_key`
+keeps working: the build reads that first, then the env var.) A fallback entry's key
+is named by its own `api_key_env` instead (see `llm.fallbacks[]` in
+`config.example.json`).
 
 To skip the question on a machine that knows the answer: `--model-base-url` and
 `--model`, or `--use-fleet-model` to take both from `install/fleet-defaults.json`.
@@ -197,7 +204,7 @@ Local Network.
   `TINYCMDR_SEARCH_EGRESS`. While it is off, an off-LAN provider is refused with a `BLOCKED`
   line naming the setting rather than being called - a provider on your own LAN never needs it.
 - It does not install search API keys. Put `ANYSEARCH_API_KEY=...` in a
-  file passed as `--secrets-file`, or add it to `~/.tinycmdr/.env` later. With no key at all
+  file passed as `--secrets-file`, or add it to `~/tinycmdr/.env` later. With no key at all
   anysearch still answers on its anonymous tier - off this machine, rate-limited, which is why
   the flag above exists.
 - Provider order and endpoints are `search.providers` in `config.json`; a `searxng` entry keeps
@@ -207,4 +214,5 @@ Local Network.
   bot to answer, the other only for the search tool.
 - It does not create the bot account or the token (step 2).
 - It does not touch anything outside `~/tinycmdr`, `~/Library/LaunchAgents` and the
-  logs. `--uninstall` removes exactly those.
+  logs. `--uninstall` removes exactly those. (If the installer fetched your private
+  Python, `uv` also left its reusable download cache in `~/.cache/uv`.)

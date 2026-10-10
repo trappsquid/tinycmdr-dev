@@ -74,6 +74,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
+# The absolute path THIS script runs from: the recovery commands in the die messages
+# are for the reader to run later, and through the one-line door $0 is a path inside
+# the temp unpack - as printed, the command died with "No such file or directory"
+# from the reader's own shell (measured 2026-10-10).
+SELF="$HERE/$(basename "${BASH_SOURCE[0]}")"
 SERVICE_NAME="${TINYCMDR_SERVICE:-tinycmdr}"
 RUN_USER="${TINYCMDR_USER:-${SUDO_USER:-$(id -un)}}"
 # `getent` does not exist on every host, and with `set -e`+`pipefail` the bare pipeline
@@ -179,6 +184,15 @@ say()  { printf '\n=== %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
 warn() { printf '    ! %s\n' "$*" >&2; }
 die()  { printf '\n*** %s\n' "$*" >&2; exit 1; }
+
+# --web-port: digits only, 1-65535. A typo used to be swallowed silently (the config
+# writer's int() failed into a try/except) and the page came up on the default port
+# (measured 2026-10-10: --web-port 88O0 installed "fine").
+case "$WEB_PORT" in
+    ''|*[!0-9]*) die "--web-port needs a port number (got '$WEB_PORT')" ;;
+esac
+[ "$WEB_PORT" -ge 1 ] && [ "$WEB_PORT" -le 65535 ] \
+    || die "--web-port must be 1-65535 (got $WEB_PORT)"
 
 # ---------------------------------------------------------------- logging ---
 # Transcribe to a log when we can write one. A log left behind by another user
@@ -392,7 +406,7 @@ if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" != 0 ]; then
         die "a user install needs your own systemd session (no bus at \
      ${XDG_RUNTIME_DIR:-unset}/bus). Log in on the box and try again, or enable
      lingering from root:  sudo loginctl enable-linger $RUN_USER
-     For the system install instead:  sudo bash $0 --mode system"
+     For the system install instead:  sudo bash $SELF --mode system"
     fi
 fi
 
@@ -411,6 +425,11 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     fi
     printf '  mode         : %s (%s)\n' "$INSTALL_MODE" "$UNIT"
     printf '  unit file    : %s\n' "$([ -f "$UNIT" ] && echo present || echo MISSING)"
+    if [ "$INSTALL_MODE" = user ] && [ ! -f "$UNIT" ] \
+            && [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
+        printf '  note         : a SYSTEM unit exists (/etc/systemd/system/%s.service);\n' "$SERVICE_NAME"
+        printf '                 verify from root:  sudo %s --verify-only --mode system\n' "$SELF"
+    fi
     printf '  enabled      : %s\n' "$(sctl is-enabled "$SERVICE_NAME" 2>&1 || true)"
     printf '  active       : %s\n' "$(sctl is-active "$SERVICE_NAME" 2>&1 || true)"
     printf '  mattermost   : %s://%s:%s\n' "$(cfgval mattermost.scheme)" \
@@ -440,13 +459,22 @@ fi
 # -------------------------------------------------------------- pre-flight ---
 if [ "$INSTALL_MODE" = system ] && [ "$(id -u)" != 0 ]; then
     die "a system install writes $UNIT and needs root:
-     sudo bash $0 --mode system
-     ...or install it for yourself with no root at all:  bash $0 --mode user"
+     sudo bash $SELF --mode system
+     ...or install it for yourself with no root at all:  bash $SELF --mode user"
 fi
 [ "$INSTALL_MODE" = user ] || [ "$(id -u)" = 0 ] \
     || die "internal: system mode without root reached pre-flight (report this)"
 [ -f "$SRC/tinycmdr.py" ] || die "tinycmdr.py not found next to install/ (looked in $SRC)"
-command -v systemctl >/dev/null || die "systemd not found - this installer is for Debian/Ubuntu hosts"
+# Only a run that will WRITE or DRIVE a unit needs systemd. --no-service (files only)
+# and --uninstall never do - they are exactly what a container, a WSL2 box or a CI
+# runner can use - and the unconditional check refused both with a message that named
+# no way forward (measured 2026-10-10).
+if [ "$NO_SERVICE" != 1 ] && [ "$UNINSTALL" != 1 ]; then
+    command -v systemctl >/dev/null || die "systemd not found - and this run would need it to
+register the service.
+For a files-only install (no unit):  bash $SELF --no-service <your switches>
+To remove an install:                bash $SELF --uninstall <your switches>"
+fi
 id -u "$RUN_USER" >/dev/null 2>&1 || die "no such user: $RUN_USER"
 
 # ------------------------------------------------------------------- identity ---
@@ -463,8 +491,8 @@ case "$_unit_exec" in
     *) die "the service name $SERVICE_NAME already belongs to another install:
     $_unit_exec
 Give this install its own unit and it will leave that one alone:
-    TINYCMDR_SERVICE=tinycmdr-$(hostname -s) bash $0 <your switches>
-or remove the other install first:  bash $0 --uninstall" ;;
+    TINYCMDR_SERVICE=tinycmdr-$(hostname -s) bash $SELF <your switches>
+or remove the other install first:  bash $SELF --uninstall" ;;
 esac
 
 say "pre-flight"
@@ -477,15 +505,49 @@ info "service user : $RUN_USER"
 # which is not the user name on an AD/LDAP box, a `useradd -N` account, a host with
 # USERGROUPS_ENAB=no, or a Mac-style `staff` group.
 info "service group: $RUN_GROUP"
+# The uninstall never needs python (it greps the version out by hand), so it is not
+# held to the interpreter band: a host whose python3 moved on, or was removed, must
+# still be able to remove an install (measured 2026-10-10).
+if [ "$UNINSTALL" != 1 ]; then
+if ! command -v "$PY" >/dev/null 2>&1 && [ ! -x "$PY" ]; then
+    die "no python found ($PY). tinycmdr runs on Python 3.10-3.12:
+     Debian/Ubuntu:  sudo apt-get install -y python3 python3-venv
+     (where the distro's python3 is older than 3.10, install 3.12 from your distro,
+      a backport or python.org)
+     ...or point this run at one:  TINYCMDR_PYTHON=/usr/bin/python3.12 bash $SELF ..."
+fi
 "$PY" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 12) else 1)' \
     || die "$PY is $("$PY" -V 2>&1); tinycmdr runs on Python 3.10-3.12.
 python3.13 and newer resolve a broken mmpy_bot; 3.9 predates write_text(newline=...).
-Install python3.12 (apt install python3.12 python3.12-venv), or point this run at one:
-TINYCMDR_PYTHON=/usr/bin/python3.12 bash $0 ..."
+Install one the distro carries (python3.12 where available), or point this run at one:
+TINYCMDR_PYTHON=/usr/bin/python3.12 bash $SELF ..."
+# Debian/Ubuntu ship python3 without ensurepip until python3-venv is installed, and
+# that fix needs root while this door's default is a no-root USER install: say it
+# HERE, before a file is written (measured 2026-10-10: the run copied everything,
+# then died mid-install blaming the log).
+if { [ ! -x "$INSTALL_DIR/venv/bin/python" ] || [ "$FORCE" = 1 ]; } \
+   && [ "$(id -u)" != 0 ] \
+   && ! "$PY" -c 'import ensurepip' >/dev/null 2>&1; then
+    die "$(command -v "$PY" || echo "$PY") cannot build venvs yet (python3-venv is not installed),
+and that fix needs root. Run it once, then re-run the installer exactly as before:
+     sudo apt-get install -y python3-venv
+     ...or install system-wide, which does this for you:  sudo bash $SELF --mode system"
+fi
 info "python       : $($PY -V 2>&1)  ($(command -v "$PY"))"
+fi
 
 if [ "$UNINSTALL" = 1 ]; then
     say "uninstall"
+    # A SYSTEM install is invisible to a plain user-mode run: the unit lives in /etc
+    # and the caller's scope holds nothing, so the old flow deleted ~/tinycmdr and
+    # reported success while the root service kept crash-looping (measured
+    # 2026-10-10). When the user scope holds nothing and the system scope holds this
+    # service, name the right door instead.
+    if [ "$INSTALL_MODE" = user ] && [ ! -f "$UNIT" ] \
+            && [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
+        die "this is a SYSTEM install (unit /etc/systemd/system/$SERVICE_NAME.service):
+Remove it with:  sudo bash $SELF --uninstall --mode system"
+    fi
     _removed=0
     sctl disable --now "$SERVICE_NAME" 2>/dev/null || true
     if [ -f "$UNIT" ]; then
@@ -509,10 +571,18 @@ if [ "$UNINSTALL" = 1 ]; then
     fi
     # the passwordless-sudo grant is per-USER, not per-install: only the default
     # install's removal takes it.
-    if [ "$(id -u)" = 0 ] && [ "$INSTALL_MODE" = system ] \
-            && [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
-        rm -f "/etc/sudoers.d/${RUN_USER}-tinycmdr"
-        info "sudo grant removed"
+    if [ "$(id -u)" = 0 ] && [ "$INSTALL_MODE" = system ]; then
+        if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
+            rm -f "/etc/sudoers.d/${RUN_USER}-tinycmdr"
+            info "sudo grant removed"
+        elif [ -f "/etc/sudoers.d/${RUN_USER}-tinycmdr" ]; then
+            # The grant is per-USER, not per-install, so a non-default install cannot
+            # know whether another install still needs it - but a removal that leaves
+            # unrestricted passwordless root behind must say so (measured 2026-10-10).
+            warn "left the passwordless-sudo grant in place: /etc/sudoers.d/${RUN_USER}-tinycmdr"
+            warn "remove it by hand if no other install needs it:"
+            warn "  sudo rm /etc/sudoers.d/${RUN_USER}-tinycmdr"
+        fi
     fi
     # Deleting an install takes config.json, .env, sessions/, tools/ and notes with
     # it, so this asks - and requires --yes/--force when there is no terminal - and
@@ -551,6 +621,13 @@ if [ "$UNINSTALL" = 1 ]; then
         info "an install that lives elsewhere: --install-dir <its folder>"
     else
         info "unit $SERVICE_NAME removed"
+        # The install may have enabled lingering; the removal must not leave the
+        # account set to start at boot without saying so (measured 2026-10-10).
+        if [ "$INSTALL_MODE" = user ] \
+                && loginctl show-user "$RUN_USER" 2>/dev/null | grep -q 'Linger=yes'; then
+            info "lingering    : still enabled for $RUN_USER - disable it if nothing"
+            info "               else needs it:  sudo loginctl disable-linger $RUN_USER"
+        fi
     fi
     exit 0
 fi
@@ -872,8 +949,12 @@ if [ "$ASK_Q" = 1 ]; then
     info "local (llama.cpp, Ollama, vLLM on this machine or your LAN) or cloud"
     info "(a hosted OpenAI-compatible provider, which needs an API key)."
     _kind_dflt=1
+    # The RFC1918 ranges is_lan_url() knows, 172.16/12 included: the two notions of
+    # "LAN" disagreed, so a 172.20.x.x endpoint was offered the cloud-key prompt
+    # (measured 2026-10-10).
     case "$MODEL_BASE_DFLT" in
-        *//127.0.0.1:*|*//localhost:*|*"::1"*|*//10.*|*//192.168.*) ;;
+        *//127.0.0.1:*|*//localhost:*|*"::1"*|*//10.*|*//192.168.*|\
+        *//172.1[6-9].*|*//172.2[0-9].*|*//172.3[01].*) ;;
         *) _kind_dflt=2 ;;
     esac
     _kind="$(ask_choice "Which kind of endpoint is it?" "$_kind_dflt" \
@@ -1208,16 +1289,11 @@ fi
 
 # ------------------------------------------------------------------- files ---
 say "files"
-keep=""
-if [ "$FORCE" = 1 ] && [ -d "$INSTALL_DIR" ]; then
-    keep="$(mktemp -d)"
-    for f in .env config.json notes.md notes-archive.md \
-             jobs.json state.json sessions tools snapshots; do
-        if [ -e "$INSTALL_DIR/$f" ]; then
-            cp -a "$INSTALL_DIR/$f" "$keep/" 2>/dev/null || true
-        fi
-    done
-fi
+# The old --force keep/restore pair went in this batch: every name it saved (.env,
+# config.json, notes.md, jobs.json, state.json, sessions, tools, snapshots) is
+# covered by host_owned() below, so the copy loop never overwrote them and the
+# restore was a no-op - two lists of "host files" where one is the rule. The lone
+# exception, notes-archive.md, is written by nothing in this tree.
 mkdir -p "$INSTALL_DIR"
 # Everything the package carries lands FLAT, minus the paths this host owns - the rule
 # update.sh applies. This used to be a hand-written list of names, and that list is a
@@ -1236,14 +1312,26 @@ host_owned() {
     for f in $HOST_TOP; do [ "$1" = "$f" ] && return 0; done
     return 1
 }
-_fl="$(mktemp)"
-(cd "$SRC" && find . -type f -print | sed 's|^\./||') > "$_fl"
-while IFS= read -r rel; do
-    host_owned "$rel" && continue
-    mkdir -p "$INSTALL_DIR/$(dirname "$rel")"
-    cp -p "$SRC/$rel" "$INSTALL_DIR/$rel"
-done < "$_fl"
-rm -f "$_fl"
+# $SRC = $INSTALL_DIR when the installer runs from the install's own copy: every cp
+# below would then be a same-file copy, which cp refuses ("are the same file") and
+# set -euo pipefail kills the run - the door the footer tells the reader to use
+# (measured 2026-10-10). The files are already in place, so skip the copy; the -ef
+# probe catches a relative or symlinked --install-dir, where the strings differ but
+# the inodes do not.
+if [ "$SRC" = "$INSTALL_DIR" ] \
+   || { [ -f "$SRC/tinycmdr.py" ] && [ -f "$INSTALL_DIR/tinycmdr.py" ] \
+        && [ "$SRC/tinycmdr.py" -ef "$INSTALL_DIR/tinycmdr.py" ]; }; then
+    info "re-run from the install's own copy: the files are already in place"
+else
+    _fl="$(mktemp)"
+    (cd "$SRC" && find . -type f -print | sed 's|^\./||') > "$_fl"
+    while IFS= read -r rel; do
+        host_owned "$rel" && continue
+        mkdir -p "$INSTALL_DIR/$(dirname "$rel")"
+        cp -p "$SRC/$rel" "$INSTALL_DIR/$rel"
+    done < "$_fl"
+    rm -f "$_fl"
+fi
 # The starter drop-ins seed a FRESH install and never overwrite the operator's own:
 # tools/*.py are the agent's once they exist, and skills/ is the operator's runbooks.
 mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/skills"
@@ -1252,14 +1340,6 @@ if [ -d "$SRC/tools" ]; then
 fi
 if [ -d "$SRC/skills" ]; then
     cp -Rn "$SRC/skills/." "$INSTALL_DIR/skills/" 2>/dev/null || true
-fi
-if [ -n "$keep" ]; then
-    for f in "$keep"/*; do
-        # -n: a kept file must not clobber what the copy just installed -
-        # that is how an old starter tool would survive an upgrade.
-        if [ -e "$f" ]; then cp -an "$f" "$INSTALL_DIR/"; fi
-    done
-    rm -rf "$keep"
 fi
 mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/sessions"
 chmod +x "$INSTALL_DIR/tinycmdr.py" 2>/dev/null || true
@@ -1294,25 +1374,33 @@ info "copied $(version_of "$INSTALL_DIR/tinycmdr.py") to $INSTALL_DIR"
 say "python environment"
 if [ ! -x "$INSTALL_DIR/venv/bin/python" ] || [ "$FORCE" = 1 ]; then
     if ! "$PY" -c 'import ensurepip' >/dev/null 2>&1; then
+        # Non-root is refused in pre-flight; here root fixes it for the whole host.
         if [ "$NO_DEPS" = 1 ]; then
-            die "python3-venv is missing and --no-deps was given (apt install python3-venv)"
+            die "python3-venv is missing and --no-deps was given - install it and re-run:
+  sudo apt-get install -y python3-venv"
         fi
         info "installing python3-venv (apt)"
         DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv \
-            || die "apt-get install python3-venv failed - see $LOG"
+            || die "apt-get install python3-venv failed - run it by hand to see why:
+  apt-get install -y python3-venv"
     fi
     rm -rf "$INSTALL_DIR/venv"
-    "$PY" -m venv "$INSTALL_DIR/venv" || die "could not create the venv in $INSTALL_DIR"
+    "$PY" -m venv "$INSTALL_DIR/venv" \
+        || die "could not create the venv in $INSTALL_DIR - a read-only or full install dir
+is the usual cause"
 fi
 "$INSTALL_DIR/venv/bin/python" -m pip install --quiet --disable-pip-version-check \
     --upgrade pip >/dev/null 2>&1 || info "pip self-upgrade skipped (offline?)"
 "$INSTALL_DIR/venv/bin/python" -m pip install --quiet --disable-pip-version-check \
-    -r "$INSTALL_DIR/requirements.txt" || die "pip install failed - see $LOG"
+    -r "$INSTALL_DIR/requirements.txt" \
+    || die "pip install failed - see $LOG (no network, or a proxy blocking pypi.org,
+is the usual cause)"
 info "python   : $("$INSTALL_DIR/venv/bin/python" -V 2>&1)"
 info "mmpy_bot : $("$INSTALL_DIR/venv/bin/python" -c 'import importlib.metadata as m; print(m.version("mmpy_bot"))' 2>&1 || echo MISSING)"
 info "requests : $("$INSTALL_DIR/venv/bin/python" -c 'import importlib.metadata as m; print(m.version("requests"))' 2>&1 || echo MISSING)"
 "$INSTALL_DIR/venv/bin/python" -c 'import requests, mmpy_bot, croniter' \
-    || die "the venv is missing a dependency (requests/mmpy_bot/croniter)"
+    || die "the venv is missing a dependency (requests/mmpy_bot/croniter) - install it by hand:
+  $INSTALL_DIR/venv/bin/python -m pip install -r $INSTALL_DIR/requirements.txt"
 
 # ------------------------------------------------------------------- config ---
 # ---- the page: loopback, or reachable from your network? --------------------
@@ -1764,6 +1852,11 @@ if [ "$SERVE" = 0 ]; then
     info "the files are installed; a session (--cli) and a one-shot (--once) work now."
     info "add a chat token (or drop --no-web / --no-service) and re-run to register the"
     info "service."
+    # The tree was copied and the venv built as whoever ran this: in a root files-only
+    # (system-mode) run the files stayed root-owned while the summary handed them to
+    # $RUN_USER (measured 2026-10-10). chown_to is a no-op when the runner is already
+    # the service user, and non-fatal otherwise.
+    chown_to -R "$INSTALL_DIR"
 fi
 if [ "$SERVE" = 1 ]; then
 say "systemd unit"
@@ -1785,7 +1878,11 @@ $BOOT_DEPS
 Type=simple
 $UNIT_USER_LINES
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$VENV_PY $INSTALL_DIR/tinycmdr.py $APP_ARGS
+# QUOTED: systemd splits ExecStart on whitespace, so a space in HOME or in
+# --install-dir made argv out of the path halves and the unit died 203/EXEC with the
+# failure blamed on the service (measured 2026-10-10; every Environment= line above
+# was already quoted).
+ExecStart="$VENV_PY" "$INSTALL_DIR/tinycmdr.py" $APP_ARGS
 Environment="HOME=$USER_HOME"
 Environment="USER=$RUN_USER"
 Environment="LOGNAME=$RUN_USER"
@@ -1830,18 +1927,22 @@ else
     warn "the unit is written but NOT enabled. In a user session, run:"
     warn "  systemctl --user enable --now $SERVICE_NAME"
 fi
-if [ "$INSTALL_MODE" = user ] && [ "$_HAVE_BUS" = 1 ]; then
-    info "enabled at login: $(sctl is-enabled "$SERVICE_NAME" 2>&1)"
-    # Lingering is what turns "starts when I log in" into "starts with the machine".
-    # It needs root, so a no-root install may not be allowed to set it.
-    if loginctl show-user "$RUN_USER" 2>/dev/null | grep -q 'Linger=yes'; then
-        info "lingering      : already on, so it also starts at boot, no login needed"
-    elif loginctl enable-linger "$RUN_USER" 2>/dev/null; then
-        info "lingering      : enabled (starts at boot, no login needed)"
+if [ "$INSTALL_MODE" = user ]; then
+    if [ "$_HAVE_BUS" = 1 ]; then
+        info "enabled at login: $(sctl is-enabled "$SERVICE_NAME" 2>&1)"
+        # Lingering is what turns "starts when I log in" into "starts with the machine".
+        # It needs root, so a no-root install may not be allowed to set it.
+        if loginctl show-user "$RUN_USER" 2>/dev/null | grep -q 'Linger=yes'; then
+            info "lingering      : already on, so it also starts at boot, no login needed"
+        elif loginctl enable-linger "$RUN_USER" 2>/dev/null; then
+            info "lingering      : enabled (starts at boot, no login needed)"
+        else
+            info "lingering      : not enabled (needs root) - the agent starts at your"
+            info "                 next login. To start it at boot, ask for:"
+            info "                 sudo loginctl enable-linger $RUN_USER"
+        fi
     else
-        info "lingering      : not enabled (needs root) - the agent starts at your"
-        info "                 next login. To start it at boot, ask for:"
-        info "                 sudo loginctl enable-linger $RUN_USER"
+        info "enabled        : not yet - no user systemd bus here (see the note above)"
     fi
 else
     info "enabled at boot: $(sctl is-enabled "$SERVICE_NAME" 2>&1)"
@@ -1849,6 +1950,12 @@ fi
 
 if [ "$NO_START" = 1 ]; then
     info "--no-start: not starting it now"
+elif [ "$INSTALL_MODE" = user ] && [ "$_HAVE_BUS" != 1 ]; then
+    # The no-bus warn above says the unit is written and not enabled; restarting it
+    # anyway is what died with a raw "Failed to connect to bus" under set -e
+    # (measured 2026-10-10). Say the same thing the warn said and finish.
+    info "not started: no user systemd bus here - in a user session, run:"
+    info "  systemctl --user enable --now $SERVICE_NAME"
 else
     say "start"
     sctl restart "$SERVICE_NAME"
