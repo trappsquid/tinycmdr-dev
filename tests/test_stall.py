@@ -714,6 +714,35 @@ def test_stale_worker_exits_instead_of_stealing_the_channel():
           ch not in d.active or d.active[ch].get("gen") == 5, d.active)
 
 
+def test_a_zombie_worker_does_not_clear_the_replacement_s_busy_flag():
+    """The watchdog abandons a wedged run (bumping worker_gen and respawning), and
+    the written-off worker unwinds only later: if its exit clears the `running`
+    flag, the operator's next plain message is queued silently behind the live run
+    - no steering, no "⏳ Queued" notice - which is the state the watchdog exists to
+    end."""
+    d = _dispatcher()
+    ch = "chan-zombie-busy"
+    q = fb.queue.Queue()
+    q.put(("alice", "work", "m1", "m1", True))
+    d.worker_gen[ch] = 4              # this worker owns generation 4
+    saved = d._handle
+
+    def _zombied(*a, **k):
+        # the watchdog acts while the message is being handled: the generation
+        # bumps, and the replacement's run marks the channel busy again
+        d.worker_gen[ch] = 5
+        d.running.discard(ch)
+        d.running.add(ch)
+
+    d._handle = _zombied
+    try:
+        d._worker(ch, q, 4)
+    finally:
+        d._handle = saved
+    check("a zombie worker's exit leaves the replacement's run marked busy",
+          ch in d.running, d.running)
+
+
 def test_activity_tracking_keeps_a_healthy_run_off_the_watchdog():
     d = _dispatcher()
     ch = "chan-live"
@@ -2047,6 +2076,31 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
           fb.parse_inline_tool_calls("just an answer") == []
           and fb.strip_inline_tool_calls("just an answer") == "just an answer",
           "prose")
+
+    # ...and a reply that merely QUOTES the markup is answered as written. The
+    # unanchored findall used to execute a fenced example and strip it from the
+    # shown answer; only a reply that IS the call blocks (optionally behind one
+    # think fence) may run.
+    quoted = ("This is the format the template failed to convert:\n"
+              "```\n"
+              "<tool_call>\n<function=shell>\n<parameter=command>\n"
+              "echo quoted-example\n</parameter>\n</function>\n"
+              "</tool_call>\n```\n"
+              "I have not run anything.")
+    out2, calls2, payloads2 = _scripted_run([{"content": quoted},
+                                             {"content": "answered"}])
+    _second = payloads2[1] if len(payloads2) > 1 else []
+    check("inline: a quoted example never becomes a real call",
+          not any(m.get("tool_calls") for m in _second)
+          and not any(m.get("role") == "tool" for m in _second),
+          [(m.get("role"), bool(m.get("tool_calls"))) for m in _second])
+    check("inline: ...the model is nudged to use the interface instead",
+          any("did NOT run" in str(m.get("content") or "") for m in _second),
+          [str(m.get("content"))[:60] for m in _second])
+    _whole = getattr(fb, "inline_calls_are_the_whole_reply", None)
+    check("inline: the whole-reply predicate accepts the bare form",
+          callable(_whole) and _whole(leaked)
+          and not _whole(quoted) and not _whole("just an answer"), "predicate")
 
 
 def test_startup_validation_catches_an_unconfigured_host():

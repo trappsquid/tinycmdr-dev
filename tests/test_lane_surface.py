@@ -730,6 +730,42 @@ Hermetic: the staged copy is the module, so `logs/state.json` lands in the stage
           _D._listener_deaf(_Ws(None), None, now=_now) == "" and _D._ws_probe_warned
           and not _warned_before, _D._ws_probe_warned)
 
+    # ---- the deaf restart frees the folder lock BEFORE spawning the replacement --------
+    # The replacement takes the single-instance lock at startup (non-blocking): spawned
+    # while this process still held it, it aborted "another tinycmdr is already running"
+    # inside the 0.5s window, and the old process then exited - a dead bot with nothing
+    # left to relaunch it.
+    _R = T.MattermostDispatcher()
+    _order = []
+    _saved_deaf = (T.restart_owner, T._release_lock, T._spawn_replacement, T.os._exit)
+    _real_release = T._release_lock
+
+    def _watched_release():
+        _order.append("release")
+        _real_release()
+
+    def _probe_spawn():
+        _order.append("spawn")
+
+    def _probe_exit(code):
+        _order.append("exit")
+        raise SystemExit(code)
+
+    T.restart_owner = lambda: "self"
+    T._release_lock = _watched_release
+    T._spawn_replacement = _probe_spawn
+    T.os._exit = _probe_exit
+    try:
+        try:
+            _R._restart_deaf("graded")
+        except SystemExit:
+            pass
+    finally:
+        (T.restart_owner, T._release_lock, T._spawn_replacement,
+         T.os._exit) = _saved_deaf
+    check("the deaf restart frees the lock BEFORE spawning the replacement",
+          _order[:2] == ["release", "spawn"] and "exit" in _order, _order)
+
     print()
     if FAILS:
         print("%d check(s) failed: %s" % (len(FAILS), ", ".join(FAILS)))

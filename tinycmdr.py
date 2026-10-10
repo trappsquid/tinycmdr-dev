@@ -2632,6 +2632,14 @@ def _repair_doubled_calls(calls):
         fn["arguments"] = one
 
 
+def _sse_error_text(err):
+    """One bounded line for a server-reported stream error (dict, str or JSON blob)."""
+    if isinstance(err, dict):
+        err = err.get("message") or err.get("error") or err
+    text = " ".join(str(err).split())
+    return text[:200] or "no detail"
+
+
 def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                  first_byte_seconds=None):
     """Consume an SSE chat completion into the same shape the JSON path returns.
@@ -2659,6 +2667,11 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     # ends with NEITHER has been truncated (a server killed mid-answer), not answered.
     # A clean close is not a completion.
     saw_done = False
+    # A failure the SERVER announced mid-stream (llama.cpp's `error:` event, vLLM's
+    # `data: {"error": ...}` chunk). Both are followed by a normal-looking `[DONE]`,
+    # so without this the partial text would pass every terminal check below and be
+    # handed back as the model's answer (A-2026-10-08-125).
+    srv_error = None
     suse, timings = {}, {}
     stats = {"deltas": 0, "chars": 0, "reasoning_chars": 0, "ttft": None,
              "tps": 0.0, "server_tps": 0.0, "reasoning_text": "",
@@ -2780,6 +2793,9 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     reader = threading.Thread(target=_reader, daemon=True, name="llm-stream")
     reader.start()
     t0 = time.time()
+    # `last` is the last time the stream carried OUTPUT - text, reasoning or a tool
+    # fragment - never merely a line: `:` keep-alive comments and progress-only
+    # chunks prove the socket is alive, NOT that the model is writing.
     last = t0
     while True:
         if cancel_event is not None and cancel_event.is_set():
@@ -2792,30 +2808,34 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
             raise OperatorStop(
                 f"stopped by the operator mid-stream after "
                 f"{int(time.time() - t0)}s ({stats['deltas']} chunk(s) read)")
+        # The deadline is checked on EVERY pass, not only when the queue goes
+        # quiet: a server or proxy that keeps the socket busy with the keep-alive
+        # pings this harness ASKS for would otherwise hold a wedged generation for
+        # as long as it pings - the check used to run only after 0.25s of no line
+        # at all (A-2026-10-08-126).
+        # Before the first OUTPUT the wait is a PREFILL, and the bound is the
+        # request timeout; after it, this is a stalled stream and the idle bound
+        # applies. The flag is "a chunk carried text/tool fragments", not "a chunk
+        # arrived": with prompt progress on, the server sends chunks during the
+        # prefill, and those must not shorten a healthy prefill's rope from the
+        # request timeout to the idle gap.
+        limit = first_byte_seconds if not stats["generating"] else idle_seconds
+        if limit and (time.time() - last) > limit:
+            _close()
+            waited = int(time.time() - last)
+            if not stats["generating"]:
+                raise StreamFailed(
+                    f"no first byte for {waited}s (prefill limit {limit}s) - the "
+                    f"endpoint accepted the request and is still thinking")
+            raise StreamFailed(
+                f"stream went quiet for {waited}s "
+                f"(idle limit {limit}s) after {stats['deltas']} chunk(s)")
         try:
             raw_line = lines.get(timeout=0.25)
         except queue.Empty:
             if done["eof"]:
                 break
-            # Before the first OUTPUT the wait is a PREFILL, and the bound is the
-            # request timeout; after it, this is a stalled stream and the idle bound
-            # applies. The flag is "a chunk carried text/tool fragments", not "a chunk
-            # arrived": with prompt progress on, the server sends chunks during the
-            # prefill, and those must not shorten a healthy prefill's rope from the
-            # request timeout to the idle gap.
-            limit = first_byte_seconds if not stats["generating"] else idle_seconds
-            if limit and (time.time() - last) > limit:
-                _close()
-                waited = int(time.time() - last)
-                if not stats["generating"]:
-                    raise StreamFailed(
-                        f"no first byte for {waited}s (prefill limit {limit}s) - the "
-                        f"endpoint accepted the request and is still thinking")
-                raise StreamFailed(
-                    f"stream went quiet for {waited}s "
-                    f"(idle limit {limit}s) after {stats['deltas']} chunk(s)")
             continue
-        last = time.time()
         if raw_line is None:
             continue
         text = (raw_line.decode("utf-8", "replace")
@@ -2825,6 +2845,10 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                 stats["pings"] += 1
             continue
         if not text.startswith("data:"):
+            if text.startswith("error:"):
+                # llama.cpp reports a mid-generation failure as a bare SSE event
+                # (`error: {...}`), then closes with [DONE].
+                srv_error = srv_error or _sse_error_text(text[6:])
             continue
         blob = text[5:].strip()
         if blob == "[DONE]":
@@ -2835,6 +2859,11 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
             chunk = json.loads(blob)
         except json.JSONDecodeError:
             # a torn line is not fatal: the stream carries whole JSON per line
+            continue
+        if isinstance(chunk, dict) and chunk.get("error"):
+            # vLLM reports the failure as a data chunk carrying an `error` object
+            # and no choices, then closes with [DONE].
+            srv_error = srv_error or _sse_error_text(chunk["error"])
             continue
         if isinstance(chunk.get("usage"), dict) and chunk["usage"]:
             suse = chunk["usage"]
@@ -2863,6 +2892,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
             fragments = _delta_tool_calls(d)
             if text or rtext or fragments:
                 stats["generating"] = True
+                last = time.time()      # output: the idle bound is measured from here
                 if stats["ttft"] is None:
                     stats["ttft"] = time.time() - t0
             chars_in = rchars_in = 0
@@ -2959,6 +2989,14 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                     on_delta(stats)
                 except Exception:           # noqa: BLE001 - progress must not kill a call
                     pass
+    if srv_error is not None:
+        # The server SAID it failed mid-generation. [DONE] (or a finish_reason
+        # before it) may well have arrived after the error, so every terminal check
+        # below would pass and the partial text would be handed back as the answer.
+        # This must beat them all; the caller retries the call without streaming.
+        _close()
+        raise StreamFailed(
+            "the server reported an error mid-stream: %s" % srv_error)
     if done["err"] is not None and not terminal:
         # A reader error is FATAL unless the stream had already finished properly
         # a stream that died after the first delta used to be handed
@@ -18141,6 +18179,20 @@ def strip_inline_tool_calls(text):
     return _INLINE_CALL_RE.sub("", text or "").strip()
 
 
+def inline_calls_are_the_whole_reply(text):
+    """True when `text` is inline tool-call blocks and NOTHING else.
+
+    The unanchored findall used to execute any reply that merely MENTIONED the
+    markup - a fenced example, an explanation of the format, a quoted file - and
+    stripped it from the shown answer (A-2026-10-08-128). Whitespace around the
+    blocks is fine, and one leading think fence is skipped (a server with no
+    reasoning parser leaks its whole think block into content); a reply that is
+    only a think fence parses to no calls anyway."""
+    rest = _INLINE_CALL_RE.sub("", text or "")
+    rest = re.sub(r"(?s)^\s*<think>.*?</think>", "", rest)
+    return bool((text or "").strip()) and not rest.strip()
+
+
 def _num(v):
     """Format a sampling value for humans: the endpoint reports float32, so a
     configured 0.95 comes back as 0.949999988079071."""
@@ -20051,11 +20103,24 @@ class Agent:
                         payload.pop(k, None)
                     _record_attempt(usage, url, "error", f"stream: {e}",
                                     time.time() - t0)
-                    log.warning("streaming failed on %s (%s) - retrying this call without "
-                                "streaming, and keeping this endpoint off streaming for the "
-                                "rest of THIS process: prompt progress, pings and the "
-                                "close-on-cancel all ride the streaming path "
-                                "", url, e)
+                    if e.not_a_stream:
+                        log.warning("streaming failed on %s (%s) - retrying this call "
+                                    "without streaming, and keeping this endpoint off "
+                                    "streaming for the rest of THIS process: prompt "
+                                    "progress, pings and the close-on-cancel all ride "
+                                    "the streaming path", url, e)
+                    else:
+                        # The log named a process-wide downgrade for EVERY
+                        # StreamFailed, but a transient failure (a prefill timeout,
+                        # an idle gap, a mid-stream break) does not blacklist the
+                        # endpoint - only a server that ignored stream:true does
+                        # (A-2026-10-08-127).
+                        log.warning("streaming failed on %s (%s) - retrying this call "
+                                    "without streaming; a prefill timeout, an idle gap "
+                                    "and a mid-stream break are transient, so this "
+                                    "endpoint stays eligible and later calls keep "
+                                    "streaming: prompt progress, pings and the "
+                                    "close-on-cancel ride the streaming path", url, e)
                     continue
                 except requests.HTTPError as e:
                     status = _http_status(e)
@@ -21009,10 +21074,14 @@ class Agent:
                         reply.pop("reasoning_content", None)
                     messages.append(reply)
                     tool_calls = reply.get("tool_calls") or []
-                    if not tool_calls:
+                    if not tool_calls and inline_calls_are_the_whole_reply(
+                            reply.get("content")):
                         # A template that fails to convert its own textual tool
-                        # calls leaves the XML in content. Execute it instead of
-                        # posting markup as the reply.
+                        # calls leaves the XML in content - and then the reply is
+                        # NOTHING but the call blocks. A reply that merely quotes
+                        # the markup (a fence, prose, a file it read) is answered
+                        # as written: parsing it would execute a quotation
+                        # (A-2026-10-08-128).
                         inline = parse_inline_tool_calls(reply.get("content"))
                         if inline:
                             log.warning("[%s] %d tool call(s) arrived as inline "
@@ -31645,7 +31714,15 @@ class MattermostDispatcher:
                                "⚠️ I hit an internal error on that message — "
                                "it's in the log, and I'm still listening.")
                 finally:
-                    self.running.discard(channel_id)
+                    # Only while THIS worker still owns the channel: the stall
+                    # watchdog bumps worker_gen and respawns, and an abandoned
+                    # worker that cleared the flag here would make the operator's
+                    # next plain message queue silently behind the live run (no
+                    # steering, no "queued" notice) - the exact state the watchdog
+                    # exists to end (A-2026-10-08-130).
+                    with self.workers_lock:
+                        if self.worker_gen.get(channel_id) == gen:
+                            self.running.discard(channel_id)
         finally:
             with self.workers_lock:
                 if self.worker_gen.get(channel_id) == gen:
@@ -31866,6 +31943,12 @@ class MattermostDispatcher:
         """
         owner = restart_owner()
         log.critical("websocket listener deaf (%s) - restarting (owner: %s)", why, owner)
+        # BEFORE the spawn, the order perform_restart uses: the replacement takes
+        # the single-instance lock at startup (non-blocking), so a lock still held
+        # here made it abort with "another tinycmdr is already running" inside the
+        # 0.5s window, and this process then exited - a dead bot with nothing left
+        # to relaunch it (A-2026-10-08-129).
+        _release_lock()
         if owner == "self":
             try:
                 _spawn_replacement()
@@ -31874,7 +31957,6 @@ class MattermostDispatcher:
                 return
             time.sleep(0.5)
             os._exit(0)
-        _release_lock()
         time.sleep(0.5)
         os._exit(RESTART_EXIT_CODE)
 

@@ -181,6 +181,58 @@ other suites stub it.
                   "%s: %s" % (type(e).__name__, e))
 
 
+    # ---------------------------------------------------------------- the server said it failed
+    def test_an_sse_error_event_is_a_failure_not_an_answer():
+        """llama.cpp sends `error: {...}` then [DONE]; vLLM sends data: {"error": ...}
+        then [DONE]. The [DONE] sets terminal and saw_done, so without reading the
+        error the partial text passes every terminal check and comes back as the
+        model's answer."""
+        for label, line, text in (
+                ("llama.cpp", 'error: {"message": "failed to decode, OOM"}', "OOM"),
+                ("vLLM", 'data: {"error": {"message": "engine died"}}', "engine died")):
+            script = sse(delta(content="partial answer")) + [(0.0, line), SSE_END]
+            try:
+                data, _ = run_stream(script, idle_seconds=5, first_byte_seconds=5)
+                check("an SSE error is a failure, not the answer (%s)" % label,
+                      False, data["choices"][0]["message"])
+            except fb.StreamFailed as e:
+                check("an SSE error is a failure, not the answer (%s)" % label,
+                      "reported an error mid-stream" in str(e) and text in str(e)
+                      and not e.not_a_stream, e)
+            except Exception as e:                              # noqa: BLE001
+                check("an SSE error is a failure, not the answer (%s)" % label, False,
+                      "%s: %s" % (type(e).__name__, e))
+
+    def test_an_error_only_stream_is_not_mistaken_for_not_a_stream():
+        script = [(0.0, 'error: {"message": "no slot available"}'), SSE_END]
+        try:
+            run_stream(script, idle_seconds=5, first_byte_seconds=5)
+            check("an error-only stream is a stream error, not 'not a stream'",
+                  False, "returned")
+        except fb.StreamFailed as e:
+            check("an error-only stream is a stream error, not 'not a stream'",
+                  "no slot available" in str(e) and not e.not_a_stream, e)
+        except Exception as e:                                  # noqa: BLE001
+            check("an error-only stream is a stream error, not 'not a stream'",
+                  False, "%s: %s" % (type(e).__name__, e))
+
+    # ---------------------------------------------------------------- keep-alive pings are not output
+    def test_keepalive_pings_do_not_extend_the_idle_bound():
+        """A wedged generation that still pings must trip the idle bound: the pings
+        prove the socket is alive, not that the model is writing. They arrive faster
+        than the queue timeout, so the old check (only reached when the queue went
+        empty for 0.25s) never ran."""
+        script = sse(delta(content="start")) + [(0.1, ": ping") for _ in range(12)]
+        try:
+            run_stream(script, idle_seconds=0.3, first_byte_seconds=5)
+            check("a pinging wedge is still an idle failure", False, "returned")
+        except fb.StreamFailed as e:
+            check("a pinging wedge is still an idle failure", "quiet" in str(e), e)
+        except Exception as e:                                  # noqa: BLE001
+            check("a pinging wedge is still an idle failure", False,
+                  "%s: %s" % (type(e).__name__, e))
+
+
     # ---------------------------------------------------------------- a torn stream is not the answer
     def test_a_torn_stream_is_not_the_answer():
         script = sse(delta(content="partial answer")) + \
@@ -548,6 +600,76 @@ other suites stub it.
                   seen[1] if len(seen) > 1 else seen)
         finally:
             fb.CONFIG["llm"] = saved
+
+
+    # ---------------------------------------------------------------- the fallback log tells the truth
+    def test_a_transient_stream_failure_is_logged_as_per_call():
+        """Every StreamFailed used to be logged as "keeping this endpoint off
+        streaming for the rest of THIS process" - a process-wide downgrade that a
+        transient failure (a prefill timeout, an idle gap, a mid-stream break) does
+        not make. Only a server that ignored stream:true is blacklisted."""
+        import logging
+        saved = json.loads(json.dumps(fb.CONFIG["llm"]))
+        url = "http://127.0.0.1:1/v1"
+
+        def held():
+            return [u for u in fb._STREAM_UNSUPPORTED if u.startswith(url)]
+
+        def drive(exc):
+            recs = []
+            h = logging.Handler()
+            h.emit = lambda rec: recs.append(rec.getMessage())
+            fb.log.addHandler(h)
+            real_post, real_stream = fb._post_watchdog, fb._stream_chat
+            fb._STREAM_UNSUPPORTED.difference_update(held())
+
+            def fake_post(u, headers, payload, timeout, grace, cancel_event=None,
+                          stream=False):
+                if payload.get("stream"):
+                    return FakeResp([(0.0, "data: [DONE]")])
+                raise RuntimeError("the non-streamed retry is not the subject")
+
+            def fake_stream(resp, **kw):
+                raise exc
+
+            fb._post_watchdog = fake_post
+            fb._stream_chat = fake_stream
+            try:
+                fb.CONFIG["llm"]["base_url"] = url
+                fb.CONFIG["llm"]["model"] = "main"
+                fb.CONFIG["llm"]["fallbacks"] = []
+                fb.CONFIG["llm"]["stream"] = True
+                fb.AGENT._window_cache = 32768
+                fb.AGENT._window_at = 0.0
+                fb.AGENT._envelope_cache = None
+                try:
+                    fb.AGENT._chat([{"role": "system", "content": "s"},
+                                    {"role": "user", "content": "hi"}],
+                                   session_key="f7")
+                except Exception:                               # noqa: BLE001
+                    pass
+            finally:
+                fb._post_watchdog, fb._stream_chat = real_post, real_stream
+                fb.log.removeHandler(h)
+            return "\n".join(recs)
+
+        try:
+            msg = drive(fb.StreamFailed("stream went quiet for 3s (idle limit 2s)"))
+            check("a transient stream failure is logged per-call",
+                  "retrying this call without streaming" in msg
+                  and "rest of THIS process" not in msg, msg[-300:])
+            check("...and a transient failure does not blacklist the endpoint",
+                  not held(), fb._STREAM_UNSUPPORTED)
+            ff = fb.StreamFailed("the response carried no SSE data (not a stream?)",
+                                 not_a_stream=True)
+            msg2 = drive(ff)
+            check("a server that answered plain JSON IS logged as blacklisted",
+                  "rest of THIS process" in msg2, msg2[-300:])
+            check("...and is remembered for the process",
+                  held(), fb._STREAM_UNSUPPORTED)
+        finally:
+            fb.CONFIG["llm"] = saved
+            fb._STREAM_UNSUPPORTED.difference_update(held())
 
 
     # ---------------------------------------------------------------- a tool's OperatorStop is an answer
