@@ -21,6 +21,7 @@ One-shot task: python tinycmdr.py --once "why is plex crashing"
 """
 
 import ast
+import atexit
 import base64
 import contextlib
 import datetime as _dt
@@ -186,6 +187,13 @@ _log_listener = logging.handlers.QueueListener(
         _log_path, maxBytes=5 * 1024 * 1024,
         backupCount=3, encoding="utf-8"))
 _log_listener.start()
+# A short-lived door (a verb, a scheduled run, --once) exits with records still in the
+# queue, and the listener thread is a daemon: the interpreter tears it down mid-write,
+# so what was logged just before exit never reaches the file. Measured 2026-10-10 on the
+# Windows box: a refused verb's line reached the console and not the file, one of three
+# calls dropped with nothing said; a 200-record burst before sys.exit lost all of it.
+# One exit hook drains the queue wherever the process leaves (A-2026-10-05-78).
+atexit.register(_log_listener.stop)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -41959,10 +41967,6 @@ def main():
                          BASE_DIR, instance_busy_note().replace("\n", " "))
             print(f"\n*** tinycmdr is already running from this folder ***\n"
                   f"{instance_busy_note()}\n", file=sys.stderr)
-            try:
-                _log_listener.stop()  # drain queued log records before exit
-            except Exception:
-                pass
             sys.exit(3)
 
     if "--app" in sys.argv:

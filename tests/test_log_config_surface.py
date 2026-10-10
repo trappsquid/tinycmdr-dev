@@ -54,6 +54,7 @@ so an except around super().emit() would be dead code (A-2026-10-08-141).
     import logging.handlers
     import os
     import shutil
+    import subprocess
     import sys
     import tempfile
     from pathlib import Path
@@ -147,6 +148,29 @@ so an except around super().emit() would be dead code (A-2026-10-08-141).
                   "could not be written" in captured2.getvalue()
                   and "--- Logging error ---" not in captured2.getvalue(),
                   captured2.getvalue()[:200])
+
+            # A short-lived door (a verb, a scheduled run, --once) exits with records still
+            # in the queue, and the listener thread is a daemon: the interpreter used to
+            # tear it down mid-write, so the tail never reached the file - measured
+            # 2026-10-10 on the Windows box (a refused verb's line reached the console and
+            # not the file, 5 of 23 calls silently; a 200-record burst before sys.exit lost
+            # all of it). One exit hook drains the queue now (A-2026-10-05-78).
+            child = work / "burst-child.py"
+            burst_log = work / "burst.log"
+            child.write_text(
+                "import sys\n"
+                "sys.path.insert(0, %r)\n"
+                "import tinycmdr\n"
+                "for i in range(200):\n"
+                "    tinycmdr.log.info('burst %%04d', i)\n"
+                "sys.exit(0)\n" % str(STAGE), encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(child)],
+                                  env=dict(os.environ, TINYCMDR_LOG_FILE=str(burst_log)),
+                                  capture_output=True, text=True, timeout=60)
+            landed = (burst_log.read_text(encoding="utf-8").count("burst ")
+                      if burst_log.exists() else 0)
+            check("a burst logged just before exit is all in the file (the queue is drained)",
+                  proc.returncode == 0 and landed == 200, (proc.returncode, landed))
 
             if FAILS:
                 print("\n%d FAILED: %s" % (len(FAILS), "; ".join(FAILS)))
