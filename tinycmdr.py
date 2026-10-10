@@ -22468,7 +22468,6 @@ class Destination:
     name = "?"
     has_human = False      # can ask() reach somebody?
     merge_tools = False    # is a line expensive (a notification) or free?
-    max_lines = 0          # 0 = no limit; else roll the batch line at this many
     # Does this lane want the call as it STARTS? Chat does not: the batch line on
     # completion is its record, and a post per call would double the notifications
     # a phone gets. A transcript does - "it is running this right now" is the
@@ -31182,7 +31181,6 @@ class MattermostDestination(Destination):
     name = "mattermost"
     has_human = True
     merge_tools = True
-    max_lines = 4
 
     def __init__(self, dispatcher, channel_id, root_id=None):
         self.d = dispatcher
