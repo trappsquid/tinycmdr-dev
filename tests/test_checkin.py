@@ -1251,6 +1251,46 @@ def test_two_different_calls_are_never_folded_into_one():
     check("every call is on the surface", all(f"step-{i}" in body for i in range(3)), body)
     check("the cap still forces a second message", len(d.posts) == 2, d.posts)
 
+def test_a_mid_run_infra_failure_does_not_claim_nothing_changed():
+    """The infra-failure answer must not say "nothing was changed" over real work.
+
+    Measured 2026-10-10 driving the stage: the endpoint went down mid-run after the run
+    had already minted a tool and written files, and the operator-facing answer read
+    "The task did not run; nothing was changed." With completed calls the answer has to
+    say they stand.
+    """
+    redirect_files()
+    fb.AGENT.histories.clear()
+    fb.AGENT.model_overrides.clear()
+    fb.AGENT.last_usage.clear()
+    saved_chat = fb.AGENT._chat
+    saved_cfg = copy.deepcopy(fb.CONFIG["agent"])
+    seen = {"n": 0}
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None, max_tokens=None,
+                  cancel_event=None, on_delta=None, session_key=None):
+        seen["n"] += 1
+        if seen["n"] == 1:
+            return {"role": "assistant", "content": "Probing.",
+                    "tool_calls": [{"id": "1", "function": {
+                        "name": "shell",
+                        "arguments": json.dumps({"command": "echo infra-probe"})}}]}
+        raise fb.InfraError("endpoint died on the wire")
+
+    fb.AGENT._chat = fake_chat
+    try:
+        out = fb.AGENT.run("infra-mid", "do the probe",
+                           interim_cb=lambda t: None,
+                           progress_done_cb=lambda *a: None)
+    finally:
+        fb.AGENT._chat = saved_chat
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(saved_cfg)
+    check("the mid-run failure names the calls that stand",
+          "mid-flight" in out and "STANDS" in out and "nothing was changed" not in out,
+          out[:240])
+
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

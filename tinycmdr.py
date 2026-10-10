@@ -14820,8 +14820,18 @@ def ask_operator(session_key, question, ctx=None, options=None, timeout=None,
             pass
         return "stopped", "the run was cancelled while the question was open"
     try:
-        door["post_done"]("⌛ No answer — I am applying my own judgment and will say "
-                          "what I assumed.")
+        # The drawn line must be the one the configuration HONORS: with
+        # ask_timeout_continues false (the default) the tool raises OperatorStop right
+        # after this post, so "applying my own judgment" was a promise the run did not
+        # keep - the operator read one thing and got a stop (measured 2026-10-10 driving
+        # the console lane: "⌛ No answer — I am applying my own judgment…" then "🛑
+        # Stopped"). One branch, two honest texts.
+        if CONFIG["agent"].get("ask_timeout_continues", False):
+            door["post_done"]("⌛ No answer — I am applying my own judgment and will "
+                              "say what I assumed.")
+        else:
+            door["post_done"]("⌛ No answer — stopping here rather than acting on an "
+                              "assumption.")
     except Exception:
         pass
     return "timeout", f"no answer within {int(wait)}s"
@@ -21354,6 +21364,18 @@ class Agent:
                         if isinstance(e, InfraError):
                             log.error("[%s] infra: %s", session_key, e)
                             usage["infra_failed"] = True
+                            if calls:
+                                # "Nothing was changed" is only true when nothing RAN.
+                                # Measured 2026-10-10 driving the stage: the endpoint
+                                # died mid-run after the mint had already created a
+                                # tool and written files, and the operator was told
+                                # nothing had changed.
+                                return (f"⚠️ **LLM infrastructure failure, not a "
+                                        f"model failure** — {e}\n\nThe run stopped "
+                                        f"mid-flight after {calls} completed tool "
+                                        f"call(s): whatever they already did STANDS "
+                                        f"- check what changed before retrying, or "
+                                        f"check the endpoint.")
                             return (f"⚠️ **LLM infrastructure failure, not a "
                                     f"model failure** — {e}\n\nThe task did not "
                                     f"run; nothing was changed. Retry, or check "

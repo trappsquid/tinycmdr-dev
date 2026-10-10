@@ -632,9 +632,66 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
     return main()
 
 
+def _suite_test_jobs_race():
+    """The process tool's state save under a batch: one temp name, two writers.
+
+    A batch's tool calls run in a thread pool, and `_save` used a FIXED
+    `process-jobs.json.tmp`: the first `os.replace` moves the shared tmp away and the
+    second dies ENOENT on its own path (measured 2026-10-10 driving the stage - a
+    status+output batch gave the operator `ERROR in tool 'process'` for a job that had
+    finished cleanly). The same defect `_census_save` fixed for itself; this member
+    hammers the save from four threads and grades that none of them lose.
+    """
+    import importlib.util
+    import json as _json
+    import tempfile as _tempfile
+    import threading
+    from pathlib import Path
+
+    PASSES, FAILS = [], []
+
+    def check(name, cond, detail=""):
+        (PASSES if cond else FAILS).append(name)
+        print(("ok   " if cond else "FAIL ") + name + ("" if cond else "   " + str(detail)))
+
+    BASE = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location("hunt_process_tool",
+                                                  BASE / "tools" / "process.py")
+    proc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(proc)
+    work = Path(_tempfile.mkdtemp(prefix="fbproc-race-"))
+    proc.JOBS_FILE = work / "logs" / "process-jobs.json"
+    errs = []
+
+    def hammer(n):
+        for i in range(n):
+            try:
+                proc._save({"j%d" % i: {"pid": i, "command": "x", "log": "l",
+                                        "in": "s", "started": "t"}})
+            except BaseException as e:                        # noqa: BLE001 - graded
+                errs.append("%s: %s" % (type(e).__name__, e))
+
+    threads = [threading.Thread(target=hammer, args=(60,)) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    check("two saves racing lose nothing", not errs, errs[:2])
+    try:
+        loaded = _json.loads(proc.JOBS_FILE.read_text(encoding="utf-8"))
+    except Exception as e:                                    # noqa: BLE001 - graded
+        loaded = {"__error__": str(e)}
+    check("and the state file is valid JSON after the storm",
+          isinstance(loaded, dict) and "__error__" not in loaded, str(loaded)[:120])
+
+    print()
+    print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
+    return 1 if FAILS else 0
+
+
 def main():
     rc = 0
-    for name, fn in (("test_shim", _suite_test_shim), ("test_root_safety", _suite_test_root_safety), ("test_supervise", _suite_test_supervise)):
+    for name, fn in (("test_shim", _suite_test_shim), ("test_root_safety", _suite_test_root_safety), ("test_supervise", _suite_test_supervise), ("test_jobs_race", _suite_test_jobs_race)):
         rc |= _run(name, fn)
     return 1 if rc else 0
 

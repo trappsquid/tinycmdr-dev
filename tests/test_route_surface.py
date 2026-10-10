@@ -566,12 +566,21 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     # increment sat inside the census branch, so 12 shell calls whose command vocabulary
     # did not fingerprint (ls, sleep, tail, ffmpeg chains) were invisible to the gate.
     # "echo" is the shape with NO fingerprint by construction (no verb in the list).
-    fb._run_state_reset("mint-count-1")
-    for _ in range(3):
-        fb.Agent._exec_tool(fb.AGENT,
-                            {"function": {"name": "shell",
-                                          "arguments": {"command": "echo count-me"}}},
-                            {"session_key": "mint-count-1", "config": fb.CONFIG})
+    # _exec_tool writes the carry sidecar per result, beside the sessions: into a temp
+    # SESSIONS_DIR here, because the gate's report reads a repo-tree write as a leak
+    # (named sessions/ on every run while this wrote into the tree).
+    import tempfile as _sess_tmp
+    _saved_sessions = fb.SESSIONS_DIR
+    fb.SESSIONS_DIR = Path(_sess_tmp.mkdtemp(prefix="fbtest-mint-sessions-"))
+    try:
+        fb._run_state_reset("mint-count-1")
+        for _ in range(3):
+            fb.Agent._exec_tool(fb.AGENT,
+                                {"function": {"name": "shell",
+                                              "arguments": {"command": "echo count-me"}}},
+                                {"session_key": "mint-count-1", "config": fb.CONFIG})
+    finally:
+        fb.SESSIONS_DIR = _saved_sessions
     _byc = (fb.run_state("mint-count-1") or {}).get("calls_by") or {}
     check("every successful hand-driven call counts toward the run's hand total",
           int(_byc.get("shell") or 0) == 3, _byc)

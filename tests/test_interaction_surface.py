@@ -530,6 +530,40 @@ and no durable state is touched.
             fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
 
 
+    def test_the_timeout_line_matches_what_the_run_will_do():
+        """The drawn line and the action must agree.
+
+        With ask_timeout_continues false (the default) the tool raises OperatorStop
+        right after the wait, so the door must NOT promise "applying my own judgment"
+        (measured 2026-10-10 driving the console lane: the operator read exactly that
+        line and then got "🛑 Stopped. The run was abandoned where it stood").
+        """
+        saved_wait = fb.CONFIG["agent"].get("ask_user_wait_seconds")
+        saved_ct = fb.CONFIG["agent"].get("ask_timeout_continues")
+        fb.CONFIG["agent"]["ask_user_wait_seconds"] = 2
+        dd = dispatcher()
+        try:
+            fb.CONFIG["agent"]["ask_timeout_continues"] = False
+            door = dd.ask_door_factory("chan-t", "sess-t")
+            status, _ = fb.ask_operator("sess-t", "which one?", door=door, timeout="2s")
+            line = " | ".join(t for _, t in dd.posted)
+            check("the default timeout says it is stopping, not guessing",
+                  status == "timeout" and "stopping here" in line
+                  and "applying my own judgment" not in line, line[-160:])
+            fb.CONFIG["agent"]["ask_timeout_continues"] = True
+            door2 = dd.ask_door_factory("chan-t2", "sess-t2")
+            fb.ask_operator("sess-t2", "which one?", door=door2, timeout="2s")
+            line2 = " | ".join(t for _, t in dd.posted)
+            check("...and the configured continue says it is guessing",
+                  "applying my own judgment" in line2, line2[-160:])
+        finally:
+            fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
+            if saved_ct is None:
+                fb.CONFIG["agent"].pop("ask_timeout_continues", None)
+            else:
+                fb.CONFIG["agent"]["ask_timeout_continues"] = saved_ct
+
+
     def test_an_empty_reply_is_not_an_answer():
         """A door that sets the event with "" (a stray newline, a row claimed with no text)
     must fall through to the no-answer path, not hand the model an empty

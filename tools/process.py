@@ -422,9 +422,24 @@ def _load():
 
 def _save(jobs):
     JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = JOBS_FILE.with_name("process-jobs.json.tmp")
-    tmp.write_text(json.dumps(jobs, indent=2), encoding="utf-8")
-    os.replace(tmp, JOBS_FILE)
+    # One unique temp per save: a batch's tool calls run in a thread pool, and a FIXED
+    # temp name loses one of two saves - the first os.replace moves the shared tmp away
+    # and the second dies with ENOENT on its own path (measured 2026-10-10 driving the
+    # stage: a status+output batch, and the operator got `ERROR in tool 'process'` for a
+    # job that had finished cleanly). The same defect _census_save fixed for itself;
+    # mkstemp in the target directory keeps the replace atomic on one filesystem.
+    fd, tmp = tempfile.mkstemp(prefix="process-jobs.", suffix=".tmp",
+                               dir=str(JOBS_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(jobs, indent=2))
+        os.replace(tmp, JOBS_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _hidden():
