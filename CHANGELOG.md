@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-10
+
 ### Added
 - **One page commands several boxes (the legion):** `agent.a2a_remotes` gives the page a rail section and a tab per cohort — orders relay server-to-server over A2A and a cohort's run streams back line by line through the card-declared run-lines extension, with `web.a2a_policy: "read_only"` to bound what an arriving peer may run on that box (tests/test_legion.py, tests/test_webui_page.py, tests/test_webui.py).
 
