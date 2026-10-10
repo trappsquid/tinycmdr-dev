@@ -22655,6 +22655,7 @@ COLOR_NARRATION = "#2ecc71"
 COLOR_TOOL = "#f1c40f"   # amber: a tool call that ran
 COLOR_STATUS = "#ffffff"
 COLOR_FAIL = "#e74c3c"     # red: reserved for failures
+COLOR_ASK = "#3498db"      # blue: a question waiting on the operator
 
 
 def want_color(color):
@@ -25807,12 +25808,13 @@ def model_command(session_key, arg):
 # --- color ---------------------------------------------------------------------
 # Mattermost has no text color, but a post can carry Slack-style attachments, which
 # render as a colored left bar. The
-# bar is what tells the three kinds of line apart at a glance, so a note sandwiched
+# bar is what tells the kinds of line apart at a glance, so a note sandwiched
 # under a tool call is visibly a different thing from the tool call:
 #   green - the model's own narration: what it is about to do
 #   amber - a tool call that ran
 #   white - harness status and the Done summary
 #   red   - a failure: a tool that exited non-zero, or a run that ended badly
+#   blue  - a question: the run is blocked until the operator answers
 # (red is not used for ordinary activity - the operator reads red as "something is
 # wrong", so it is kept for the cases where that is true)
 # Command replies and the final answer stay UNBARRED, so a plain post reads as the
@@ -31115,7 +31117,7 @@ class MattermostDestination(Destination):
         return {"note": COLOR_NARRATION, "narration": COLOR_NARRATION,
                 "tool": COLOR_TOOL, "tool_done": COLOR_TOOL,
                 "tool_fail": COLOR_FAIL, "checkin": COLOR_STATUS, "say": COLOR_STATUS,
-                "ask": COLOR_STATUS, "status": COLOR_TOOL,
+                "ask": COLOR_ASK, "status": COLOR_TOOL,
                 "error": COLOR_FAIL}.get(kind, COLOR_STATUS)
 
     def line(self, kind, text, src="main"):
@@ -31170,6 +31172,7 @@ class MattermostDestination(Destination):
         """
         if not self.channel_id:
             return None
+        del label      # the lane's own _ask_label says how to answer (see _ask_prompt)
         ev = threading.Event()
         row = {"event": ev, "answer": None}
         held = self.d.pending.setdefault(self.channel_id, row)   # the atomic claim
@@ -31179,11 +31182,9 @@ class MattermostDestination(Destination):
                                  "answer that one first; this one was not asked.")
                 return None
             self.d.pending[self.channel_id] = row  # the old one is answered: take over
-        body = question
-        if options:
-            body += " — reply " + " / ".join(options)
         try:
-            self.line("ask", body)
+            self.line("ask", self.d._ask_prompt(self.channel_id, question,
+                                                options, wait))
         except Exception:
             if self.d.pending.get(self.channel_id) is row:
                 self.d.pending.pop(self.channel_id, None)
@@ -31339,6 +31340,24 @@ class MattermostDispatcher:
         return ("reply here or @mention me (in a channel Mattermost only hands me "
                 "messages addressed to me)")
 
+    def _ask_prompt(self, channel_id, question, options, timeout):
+        """The question as the channel sees it: numbered options, how to answer,
+        how to cancel, and how long the wait is.
+
+        Both question paths render through this - the ask_user door and the confirm
+        gate - because a question is one affordance, whichever code asked it. The
+        confirm question used to render as prose with no numbers, no hint and no
+        window, while ask_user on the same lane numbered its options and said all
+        three, and RunReporter.confirm resolves a bare number to the option it
+        names - an affordance nothing on the confirm screen advertised (measured
+        2026-10-06).
+        """
+        return (_ask_format(question, options)
+                + "\n_(" + self._ask_label(channel_id) + " — or `/tinycmdr stop` to "
+                "cancel this run. Waiting up to "
+                f"{max(1, int((timeout or 300) / 60))} min; if nothing "
+                f"arrives I carry on with my own judgment.)_")
+
     def open_question(self, session_key, question, options, timeout):
         """Open a question for this session: register it and post it. NO wait here.
 
@@ -31352,13 +31371,8 @@ class MattermostDispatcher:
         ch = self._session_channel.get(session_key)
         self.pending_asks[ch if ch else session_key] = row
         _ASK_PENDING[session_key] = row
-        opts = ""
         self._post(ch, None,
-                   _ask_format(question, row["options"])
-                   + "\n_(" + self._ask_label(ch) + " — or `/tinycmdr stop` to "
-                   "cancel this run. Waiting up to "
-                   f"{max(1, int((timeout or 300) / 60))} min; if nothing "
-                   f"arrives I carry on with my own judgment.)_")
+                   self._ask_prompt(ch, question, row["options"], timeout))
         return row
 
     def close_question(self, session_key, answered=False):
@@ -36752,13 +36766,22 @@ def cli_question_wait(box, wait=None):
 def cli_ask_print(question, options=None, out=None, colour=True):
     """The question and its prompt, printed. Drawing only: who WAITS for the line
     depends on the shape - cli_ask_line for a yes/no at the prompt, ask_user's row
-    for a question whose answer releases a parked run."""
+    for a question whose answer releases a parked run.
+
+    The options are NUMBERED, the affordance every other lane already gives: chat
+    numbers them and resolves a bare number to the option it names, while this
+    printed `reply yes / no / session / always` and left the operator to retype a
+    verbatim word (reported live; measured 2026-10-06).
+    """
     out = out or sys.stdout
     text = " ".join(str(question or "").split())
     say = (lambda s: print(amber(s), file=out)) if colour else (lambda s: print(s, file=out))
     say("  " + text)
-    if options:
-        say("  reply " + " / ".join(str(o) for o in options))
+    opts = [str(o).strip() for o in (options or []) if str(o).strip()]
+    if opts:
+        for i, o in enumerate(opts, 1):
+            say("  %d. %s" % (i, o))
+        say("  reply with a number, or just type your answer in your own words")
     print(green("  > ") if colour else "  > ", end="", flush=True)
 
 

@@ -839,6 +839,51 @@ def test_one_question_at_a_time_per_channel():
           got)
 
 
+def test_the_confirm_question_renders_like_the_ask_door():
+    """A-270 + A-283 (2026-10-06): the MM confirm question rendered its options as
+    prose (`question - reply yes / no / session / always`) with no numbers, no
+    "how do I answer" hint and no window, while the ask_user door on the same lane
+    numbered its options and said all three. RunReporter.confirm resolves a bare
+    number to the option it names, so the numbering is a real affordance nothing on
+    the confirm screen advertised."""
+    d = _dispatcher()
+    ch = "chan-confirm-render"
+    got = {}
+
+    def _ask():
+        got["v"] = fb.MattermostDestination(d, ch, None).ask(
+            "Allow `rm -rf build`?", ["yes", "no", "session", "always"], wait=8)
+
+    t = threading.Thread(target=_ask, daemon=True)
+    t.start()
+    time.sleep(0.4)
+    shown = [text for _, text in d.posted if "Allow" in text]
+    body = shown[-1] if shown else ""
+    check("the options are numbered", "**1.** yes" in body and "**4.** always" in body,
+          body)
+    check("how to answer is said (a DM needs no @mention)", "reply here" in body, body)
+    check("the stop / window footer is rendered",
+          "/tinycmdr stop" in body and "Waiting up to" in body, body)
+    row = d.pending.get(ch)
+    if row is not None:
+        row["answer"] = "yes"
+        row["event"].set()
+    t.join(8)
+    check("the answer still lands", got.get("v") == "yes", got)
+
+
+def test_a_question_is_not_painted_like_routine_noise():
+    """A-282 (2026-10-06): `_color` mapped ask to COLOR_STATUS - the same white as
+    checkin, say and status - on the lane where a question blocks a run."""
+    ask = fb.MattermostDestination._color("ask")
+    routine = {fb.MattermostDestination._color(k)
+               for k in ("checkin", "say", "status", "note", "narration", "tool")}
+    check("the ask tone is its own colour", ask not in routine,
+          (ask, sorted(routine)))
+    check("...and is not the failure red",
+          ask != fb.MattermostDestination._color("error"), ask)
+
+
 def test_a_long_answer_is_cut_on_a_line_and_never_inside_a_fence():
     """A-263 (2026-10-06): `_chunks` sliced at MAX_POST_LEN with no boundary rule.
     Measured with a 1,200-line fenced answer: the first post ended

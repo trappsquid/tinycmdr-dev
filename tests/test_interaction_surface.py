@@ -943,6 +943,19 @@ path), so the tests are numbered.
               got)
 
 
+    def test_5_options_are_numbered_at_the_prompt():
+        """A-279 (2026-10-06): cli_ask_print printed the options as prose
+        (`reply yes / no / session / always`) with no numbers, while every other
+        lane numbered the same question and resolves a bare number."""
+        out = io.StringIO()
+        fb.cli_ask_print("Allow `rm`?", ["yes", "no", "session", "always"],
+                         out=out, colour=False)
+        text = out.getvalue()
+        check("the options are numbered", "1. yes" in text and "4. always" in text,
+              text)
+        check("a number is offered as an answer", "number" in text, text)
+
+
     def test_a_launch_opens_a_fresh_conversation():
         """Typing `tinycmdr` means START: the console must not resume yesterday's transcript.
 
