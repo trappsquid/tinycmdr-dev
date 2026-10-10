@@ -2557,6 +2557,27 @@
       },
       "detail": "The spill pointer names search_files as the search door for the full text, while disclosure hides a core tool until find_tools reveals it (measured against the default tool list, 2026-10-10). The note says so now, so the model is not sent to a name its list does not show.",
       "gate": "RED on the pre-fix build: the pointer does not name find_tools; green on the batch"
+    },
+    {
+      "id": "legion-hub-and-the-mesh-page",
+      "title": "one page commands several boxes: the legion rail, cohort tabs and the A2A relay",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "964b212",
+        "expect": "untagged"
+      },
+      "detail": "The page could command only the box it ran on. With agent.a2a_remotes set it commands those boxes too: a rail section (PRAETORIUM pinned; one row per cohort with its COHORS number, host, version and a ready/working/silent dot), a tab per engaged cohort (the list kept per browser in legion.json; which tab is ACTIVE is view state), and a channel per cohort whose transcript is that cohort's own run lines. The browser talks only to the hub and only ever names a CONFIGURED cohort - never a URL, so the relay cannot be aimed anywhere the operator did not write down - and each cohort's token stays in the hub's .env (token_env), one token per box so a lost one rotates alone. Live lines ride the card-declared tinycmdr/GetRunLines extension: the frame carries the web page's own uid-keyed lines, is bounded WITH the task ring, writes nothing to disk, and a cohort that does not declare it degrades to the final answer alone (both ways verified). Orders register and return at once (one dedicated daemon thread per order, bounded by LEGION_TASK_MAX_SECONDS); when the socket dies the hub reads the cohort's own task store by the client-minted taskId - the order is NEVER re-sent (the suite measures one run on the peer across a forced read timeout) - and a hub restart is repaired from that store by the census thread and drawn in the transcript exactly once, with a task the cohort no longer knows REPORTED rather than re-run. web.a2a_policy: read_only refuses every write/exec tool for runs that arrived over /a2a while the box's own page keeps them (unknown tools fail closed); an off-LAN cohort URL warns once at startup, with the overlay's 100.64/10 counted as LAN; every inbound SendMessage and every hub dispatch is one log line. Zero rent: with no remotes the page draws none of it and fetches nothing extra (the /api/sessions reply carries the count), and the census thread is started only when cohorts are configured.",
+      "gate": "GREEN on the batch: tests/test_legion.py (new, declared must on Windows) drives a stub A2A peer over loopback end to end - blocking reply, a forced read timeout falling back to the store with exactly one run on the peer, an unreachable cohort failing loudly by its own deadline, restart repair with its 'nothing was re-run' branch, the read_only policy gate, the frame bound moving with the task store, and the tab/record bounds; the page shim's legion scenario covers the rail, the tabs, the badge, the cohort channel and the no-cohort zero-touch case; tests/test_webui.py covers 401/Origin/framing on the new routes. Falsified with tc-falsify against the pre-fix build: the old build answers UnsupportedOperationError for the extension and the suite goes RED on it."
+    },
+    {
+      "id": "legion-broadcast-comitia",
+      "title": "one order fanned out to every cohort is not built",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "The legion ships one cohort at a time on purpose: a second order while one runs is refused 409 with the reason, and each tab keeps its own conversation. The deferred shape is an ALL COHORTS tab that fans one order out to N boxes, collects an answer into each cohort's own tab and badges which have reported. What it needs that does not exist yet: a fan-out that does not trip the host-wide WEB_RUN_LIVE_MAX after two cohorts, an aggregation line for the hub's own transcript, and a rule for a cohort already on campaign when the fan-out starts (skip it, queue it, or refuse the whole assembly).",
+      "gate": "the ALL COHORTS tab: one order, N cohorts, an answer per cohort, a badge per report - and the fan-out's own bound"
     }
   ]
 }
