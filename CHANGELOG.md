@@ -5,7 +5,10 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.99] - 2026-10-09
+
+### Changed
+- **Three more suites are graded on Windows:** the suites this batch touched - sub-agent results, the schedule and the safety surface - ride the `must` tier, which the dev CI runs on every push (tests/windows-tier.json).
 
 ### Fixed
 - **Chat help and the chat verbs agree with the lane:** `/help` lists `/plan`, `/fork`, `/reasoning` and the management verbs (`update` named), and `/tinycmdr reasoning|approvals|failures` run from a channel instead of being refused while the same lane answers `/reasoning` (tests/test_interaction_surface.py, tests/test_verbs.py).
