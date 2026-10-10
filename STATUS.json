@@ -2578,6 +2578,28 @@
       },
       "detail": "The legion ships one cohort at a time on purpose: a second order while one runs is refused 409 with the reason, and each tab keeps its own conversation. The deferred shape is an ALL COHORTS tab that fans one order out to N boxes, collects an answer into each cohort's own tab and badges which have reported. What it needs that does not exist yet: a fan-out that does not trip the host-wide WEB_RUN_LIVE_MAX after two cohorts, an aggregation line for the hub's own transcript, and a rule for a cohort already on campaign when the fan-out starts (skip it, queue it, or refuse the whole assembly).",
       "gate": "the ALL COHORTS tab: one order, N cohorts, an answer per cohort, a badge per report - and the fan-out's own bound"
+    },
+    {
+      "id": "one-floor-for-the-secret-sweep",
+      "title": "the secret sweep's length floor is one number",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1bb0ac1",
+        "expect": "untagged"
+      },
+      "detail": "The sweep's length floors disagreed: the config-section arm accepted 6 chars while the llm.api_key and environment arms kept 12, so a hand-set 10-char page token or an 8-char endpoint key was missing from the mask and reached the transcript, the log and the chat. One floor (6) now covers every secret-named arm; below it the value is a placeholder word like \"none\" and masking it would mangle prose.",
+      "gate": "RED on the pre-fix build: a 10-char token-named environment value, an 8-char llm.api_key and an 8-char fallback key all pass unmasked; green on the batch"
+    },
+    {
+      "id": "spill-masked-at-rest",
+      "title": "the spill text is masked before it lands at rest",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "0ce8df3",
+        "expect": "untagged"
+      },
+      "detail": "cap_output spilled the raw text - the run loop's own scrub ran after it - so a secret a tool result carried sat raw in spill/ on disk, and the folder took the umask (0755). Both writers (cap_output and a delegate's answer) mask before the digest, the file, the index row and the window; the folder is created 0700 and tightened when found wide.",
+      "gate": "RED on the pre-fix build: the raw secret is in the spill file, the returned window and the index row, and the folder stays 0755; green on the batch"
     }
   ]
 }

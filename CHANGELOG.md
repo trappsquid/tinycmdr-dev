@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **One page commands several boxes (the legion):** `agent.a2a_remotes` gives the page a rail section and a tab per cohort — orders relay server-to-server over A2A and a cohort's run streams back line by line through the card-declared run-lines extension, with `web.a2a_policy: "read_only"` to bound what an arriving peer may run on that box (tests/test_legion.py, tests/test_webui_page.py, tests/test_webui.py).
 
+### Fixed
+- **The secret sweep's floors are one number:** the environment and `llm.api_key` arms accept the config arm's 6-char floor, so a hand-set short page token or endpoint key is masked instead of reaching the transcript, the log and the chat (tests/test_safety_surface.py).
+- **The spill is masked before it lands at rest:** tool output and a delegate's answer are masked before the spill file, its index row and the prompt window are built, and `spill/` is created 0700 and tightened when found wide (tests/test_spill_state_surface.py).
+
 ## [1.1.1] - 2026-10-10
 
 ### Fixed
