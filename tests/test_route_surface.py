@@ -611,6 +611,18 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     finally:
         fb.REGISTRY.custom.clear()
         fb.REGISTRY.custom.update(_keep_shelf)
+    _st_oc = fb.run_state("mint-order-covered-1", create=True)
+    _st_oc["calls_by"] = {"shell": 6}
+    _st_oc["order_repeats"] = 3
+    _st_oc["order_words"] = ["housekeeping", "sweep", "the", "notes"]
+    _st_oc["skills_read"] = ["dvd-pipeline"]
+    fb.REGISTRY.custom.update(_shelf)
+    try:
+        check("a repeated ORDER whose runbook a tool covers is not offered either",
+              fb.mint_offer("mint-order-covered-1", None, source="main") == "")
+    finally:
+        fb.REGISTRY.custom.clear()
+        fb.REGISTRY.custom.update(_keep_shelf)
     _st_un = fb.run_state("mint-uncovered-1", create=True)
     _st_un["calls_by"] = {"shell": 6}
     _st_un["skills_read"] = ["camera-swap"]
@@ -684,6 +696,7 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     _line9 = fb.mint_offer_line("mintline-1")
     check("a fired census invites the model to offer it in the report",
           "SAY SO in your report" in _line9 and "2 separate runs" in _line9, _line9[:200])
+    check("...naming the live mint route", "create_tool" in _line9, _line9[:200])
     check("...once per run", fb.mint_offer_line("mintline-1") == "")
     _st10 = fb.run_state("mintline-2", create=True)
     _st10["mint_ent"] = {"count": 3, "sample": "x"}
@@ -708,6 +721,18 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     _st8["remembered"] = 1
     check("no offer when the run already saved it",
           fb.remember_offer("offer-8", _rep2, source="main") == "")
+    _st_rb = fb.run_state("offer-9", create=True)
+    _st_rb["calls_by"] = {"shell": 6}
+    _st_rb["order_words"] = ["list", "the", "notes", "filing", "directory"]
+    _st_rb["skills_read"] = ["notes-filing"]
+    check("a run that read a runbook gets no save-or-dismiss offer (the runbook is durable)",
+          fb.remember_offer("offer-9", _rep2, source="main", trigger="event") == "")
+    _st_rb2 = fb.run_state("offer-10", create=True)
+    _st_rb2["calls_by"] = {"shell": 6}
+    _st_rb2["order_words"] = ["collect", "the", "dvd", "checksums", "again"]
+    _line_rb = fb.remember_offer("offer-10", _rep2, source="main", trigger="event")
+    check("...and a run that learned it by hand still does",
+          _line_rb and "save it" in _line_rb, _line_rb)
     check("a repeated ORDER offers the mint without any command census",
           _line5 and "run #3" in _line5 and "mint it" in _line5, _line5)
     _CMD = "Get-PSDrive C | Select-Object Used,Free"
@@ -716,6 +741,13 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
           bool(_sig) and "get-psdrive" in _sig, _sig)
     check("a read_file has none (only hand-driven calls count)",
           fb._procedure_sig("read_file", {"path": "x"}) == "")
+    check("a lone generic probe is not a routine",
+          fb._procedure_sig("shell", {"command": "ps aux | head -1"}) == ""
+          and fb._procedure_sig("shell", {"command": "grep -rn todo ."}) == "")
+    check("...but two verbs still fingerprint",
+          fb._procedure_sig("shell", {"command": "ps aux | grep llama"}) != "")
+    check("...and a lone non-probe verb keeps its shape",
+          fb._procedure_sig("shell", {"command": "curl -s http://x/y"}) == "curl")
 
     def _bump(run_id):
         fb._EVENT_RUN["mint-sess"] = run_id
@@ -736,6 +768,7 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     first = fb.mint_hint("shell", {}, _ctx, e2)
     check("the hint needs the SECOND run, not the third",
           "separate runs" in first and "toolsmith" in first, first[:160])
+    check("...and it names the live mint route first", "create_tool" in first, first[:160])
     check("...and not a second time in that run", fb.mint_hint("shell", {}, _ctx, e2) == "")
     _ctx2 = {"session_key": "mint-2"}          # a fresh session, as a restart gives
     check("...once per SHAPE, not per session: the census remembers the hint",

@@ -820,6 +820,17 @@ capability is told so instead of being guessed at.
                                     {"session_key": "s-absent"})
     check("a tool this box never had still reads as absent",
           "exists on this box" in out and "find_tools" not in out, out[:140])
+    _dropin = fb.TOOLS_DIR / "half_baked.py"
+    _dropin.write_text("NAME = 'half_baked'\nDESCRIPTION = 'x'\nSCHEMA = {}\n"
+                       "def run(args, ctx):\n    return ''\n", encoding="utf-8")
+    try:
+        _, _, out = fb.Agent._exec_tool(fb.AGENT, {"function": {"name": "half_baked",
+                                                                "arguments": {}}},
+                                        {"session_key": "s-dropin"})
+        check("a tool file on disk that is not loaded is named, not denied",
+              "exists on disk" in out and "next start" in out, out[:200])
+    finally:
+        _dropin.unlink()
 
     # ---- the hidden tools are NAMED in the static prompt (first operator drive, ---------
     # 2026-09-23). The model would not spend the discovery call: asked which tool edits by a

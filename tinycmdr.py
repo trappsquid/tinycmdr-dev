@@ -7123,6 +7123,12 @@ _SHELL_VERB_RX = re.compile(r"\b(?:get|set|new|remove|select|sort|where|measure|
                             r"start|stop|restart|copy|move|invoke|out|write|read|"
                             r"find|grep|awk|sed|curl|ssh|tar|ps|df|du|date|python)\b",
                             re.I)
+# The shell-verb fallback can reduce a shape to ONE word; these carry no procedure - every
+# run touches one of them, so a lone `ps`/`grep`/`df`/`date` must not earn "this shape has
+# now run in N separate runs" (measured 2026-10-10: `ps aux | head -1` in two runs, and the
+# live box's census held "8 separate runs (grep)"). Two verbs, or one that is not an
+# everyday probe (curl, ssh, remove...), still fingerprint.
+_GENERIC_PROBE_VERBS = frozenset(("ps", "df", "du", "date", "grep", "awk", "sed", "find"))
 
 
 def _procedure_sig(name, args):
@@ -7143,6 +7149,8 @@ def _procedure_sig(name, args):
     cmds = sorted({m.group(0).lower() for m in _CMDLET_RX.finditer(text)})
     if not cmds:
         cmds = sorted({m.group(0).lower() for m in _SHELL_VERB_RX.finditer(text)})
+        if len(cmds) == 1 and cmds[0] in _GENERIC_PROBE_VERBS:
+            return ""
     if len(cmds) < 1:
         return ""
     return "+".join(cmds[:6])
@@ -7266,9 +7274,9 @@ def mint_hint(name, args, ctx, ent):
     return ("\n[HARNESS: you have now used this same set of commands in %d separate runs "
             "on this box (most recently %s), e.g. `%s`. Two things to do about it, and the "
             "second is the one that matters:\n"
-            "  1. if it is routine, mint it - toolsmith {\"action\": \"new\", "
-            "\"name\": \"<snake_name>\", \"description\": \"<one line>\", "
-            "\"argspec\": \"<arg:type=default, ...>\"};\n"
+            "  1. if it is routine, mint it - create_tool {\"name\": \"<snake_name>\", "
+            "\"code\": \"<the complete tool source>\"} (validated and loaded live; "
+            "toolsmith action=new only writes the file, live at the next start);\n"
             "  2. if you are not minting it now, SAY SO in your report and offer it: one line "
             "naming the repetition (N runs) and what the tool would do, so the operator can "
             "answer \"mint it\". An operator who is never offered a tool never gets one.]"
@@ -7472,6 +7480,17 @@ def mint_offer(session_key, reporter, source="main"):
         return ""
     if int(by.get("create_tool") or 0) or int(by.get("toolsmith") or 0):
         return ""
+    books = [b for b in (st.get("skills_read") or []) if b]
+    open_books = [b for b in books if not runbook_covered_by(b)]
+    if books and not open_books:
+        # Every runbook this run read already HAS a tool: the mint question is answered
+        # twice over, and asking it reads as the harness not knowing its own box (operator
+        # report, 2026-10-10). The read sits ABOVE the order and census branches now
+        # (measured 2026-10-10): the order branch fired first and asked to mint the routine
+        # a loaded tool already covered, and the census branch is the same code family.
+        log.info("[%s] mint offer skipped: a tool already covers the %s runbook",
+                 session_key, ", ".join(books[-3:]))
+        return ""
     # The memory half of this pair belongs to remember_offer() now, and it is event-driven
     # (2026-10-04): it fires on the run's own hand-call count instead of only for an order
     # that reads as a "where is X" question, and a dismissal is remembered for the shape.
@@ -7512,16 +7531,6 @@ def mint_offer(session_key, reporter, source="main"):
         # The procedure was performed THROUGH a tool that already exists (computer use,
         # a GUI driver): there is nothing to mint, and the offer would be noise.
         log.info("[%s] mint offer skipped: the run used a computer/GUI tool", session_key)
-        return ""
-    books = [b for b in (st.get("skills_read") or []) if b]
-    open_books = [b for b in books if not runbook_covered_by(b)]
-    if books and not open_books:
-        # Every runbook this run read already HAS a tool: the mint question is answered
-        # twice over, and asking it reads as the harness not knowing its own box (operator
-        # report, 2026-10-10). The GUI skip above stands the same way: nothing to mint,
-        # nothing to ask.
-        log.info("[%s] mint offer skipped: a tool already covers the %s runbook",
-                 session_key, ", ".join(books[-3:]))
         return ""
     if open_books:
         # The run READ a runbook and then did its steps by hand. That is the "combine the
@@ -7632,6 +7641,16 @@ def remember_offer(session_key, reporter, source="main", trigger="lookup"):
         if not (st.get("order_is_lookup") and hand >= 2):
             return ""
     elif hand < int(CONFIG["agent"].get("remember_offer_steps") or 4):
+        return ""
+    books = [b for b in (st.get("skills_read") or []) if b]
+    if books:
+        # The run READ a runbook, and the runbook is the durable copy on disk - "nothing it
+        # learned went to memory, so the next run re-derives it" was false for a run whose
+        # calls walked a procedure that already lives in a file (measured 2026-10-10: the
+        # orders that read a runbook each earned the line). The mint offer's covered-runbook
+        # stand-down, on the memory side.
+        log.info("[%s] remember offer skipped: this run read the %s runbook (durable on "
+                 "disk)", session_key, ", ".join(books[-3:]))
         return ""
     words = sorted({str(w) for w in (st.get("order_words") or []) if w})
     if not words:
@@ -17392,7 +17411,7 @@ def mint_offer_line(session_key):
     log.info("[%s] report-time mint invitation (shape seen in %d runs)",
              session_key or "-", int(ent["count"]))
     return ("- Repeatable procedure, offered not assumed: this run has now used `%s`-shaped "
-            "commands in %d separate runs. Either mint it now (toolsmith action=new) or, if "
+            "commands in %d separate runs. Either mint it now (create_tool) or, if "
             "you are not minting it, SAY SO in your report in one line - name the repetition "
             "and what the tool would do - so the operator can answer \"mint it\"."
             % (ent.get("sample") or "the same commands", int(ent["count"])))
@@ -18039,7 +18058,7 @@ How you work:
 - A sub-agent's report is a CLAIM, not a measurement. Re-check a specific fact before you repeat it as true, or say plainly that you did not (measured: a verifier invented a config difference the parent passed on as its own).
 - If a result is NOT in your context, that call did not happen in this run: say exactly that, in one line, and move on. Mining the session files, the log, the transcript or spill/ for an outcome you never received is the slowest way to answer "I have none" (measured: 18 minutes and four re-reads of the build for a call that never ran).
 - Keep going until solved, or until you can state precisely what is broken and what is needed.
-- Your tool list is deliberately short: anything else is one call away - find_tools by name or by what you want to do (scheduling, past sessions, notes, sub-agents, file search, custom tools), or just call it and the harness keeps it for the session. find_tools with no query lists everything this box has: never claim a capability is missing without checking, never rebuild a route from the filesystem up, and never re-implement a hidden tool instead of calling it (measured: 40s replicating one call). A NEW tool is built with a tool - `toolsmith action=new name description argspec` or `create_tool`, live on the next call - not by hand-writing `tools/<name>.py` and self-importing it (measured: 11 calls wasted while the tool sat named in its prompt).
+- Your tool list is deliberately short: anything else is one call away - find_tools by name or by what you want to do (scheduling, past sessions, notes, sub-agents, file search, custom tools), or just call it and the harness keeps it for the session. find_tools with no query lists everything this box has: never claim a capability is missing without checking, never rebuild a route from the filesystem up, and never re-implement a hidden tool instead of calling it (measured: 40s replicating one call). A NEW tool is built with a tool - `create_tool {{name, code}}` validates the code and loads it, live on the next call; `toolsmith action=new name description argspec` only writes the file, so it is live at the next start - not by hand-writing `tools/<name>.py` and self-importing it (measured: 11 calls wasted while the tool sat named in its prompt).
 {inventory}- File work goes through the harness tools, not the shell: read_file (it lists directories too), search_files {{pattern, path}} (regex, line numbers, ONE call - it replaces grep, rg, findstr, Select-String), edit_file. Searching file CONTENT through the shell is the miss this box pays most for (measured: 6 shell calls where one search_files does it). Shell is for what the file tools cannot do: services, processes, OS state, one-off commands.
 - Checking the work is the last step: re-run the command, re-read the change, open the page, and make the check test the claim itself — a file existing proves nothing about what is in it or who wrote it. High-stakes checks go to delegate_task so the work is not grading itself.
 
@@ -21026,6 +21045,21 @@ class Agent:
                     f"it only when config `{_gate}` has at least one entry; `{_gate}` is "
                     f"{_state} - add an entry there and restart the bot. No rebuild or "
                     f"new tool is needed; the tool appears after the restart.")
+            # A drop-in FILE that is on disk but not loaded is not "nothing by that name":
+            # toolsmith action=new (or a hand write) put tools/<name>.py there, and a
+            # drop-in is loaded only at the next start (measured 2026-10-10: a mint through
+            # toolsmith answered "nothing by that name exists" over the file). Say what is
+            # on disk and the door that makes it live, instead of denying it.
+            try:
+                _on_disk = (TOOLS_DIR / f"{name}.py").is_file()
+            except OSError:
+                _on_disk = False
+            if _on_disk:
+                return name, args, (
+                    f"ERROR: unknown tool '{name}' - tools/{name}.py exists on disk but "
+                    f"this process has not loaded it. A file on disk is live at the next "
+                    f"start; create_tool loads one on the spot (and refuses a name whose "
+                    f"file already exists).")
             # A tool the schema list did not carry (disclosure hides some on purpose)
             # still exists in the registry, so this is a genuine unknown. _match_tools
             # searches HIDDEN tools only, and those are tools this box really has: a hit
