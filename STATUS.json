@@ -2473,10 +2473,10 @@
     {
       "id": "script-cannot-walk-the-confirm-tier",
       "title": "a script cannot carry a declined command past the tier",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "a4e282f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The confirm tier was one file away from bypassed (measured 2026-10-10 driving the stage): a recursive delete was declined five spellings in a row, the run wrote it into run.sh, and `bash run.sh` carried it through - the command line has no delete verb, and no tier read the file's CONTENT (the content tier carries the Windows shapes, not the POSIX deletes); the directory was gone. A script-shaped write (.sh/.bash/.zsh/.ksh/.command/.ps1/.bat/.cmd) now has its content read as commands, per line: comments stripped, the confirm tier and the endpoint/prompt-surface gates, the target-aware delete rule, then the never tier - a block anywhere wins over a confirm anywhere. The shell also reads back a file an interpreter is pointed at when this process just made it, so the payload cannot move out of sight by being written first; the never tier was one file away the same way (`mkfs` inside a written script). The system prompt says a DECLINED command is an answer, never re-spelled and never wrapped.",
       "gate": "RED on the pre-fix build: the script deletes its decoy dir (write gate, run gate and never tier all missed it); green on the batch"
@@ -2484,10 +2484,10 @@
     {
       "id": "mint-guidance-points-at-create-tool",
       "title": "the mint guidance points at the live route",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1504e85",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The prompt's \"toolsmith action=new ... or create_tool, live on the next call\" read as covering both routes, and for toolsmith it was false: REGISTRY.reload_tool has exactly one caller (create_tool) and toolsmith only writes the file, so a minted tool was uncallable until a restart and a follow-up call answered \"nothing by that name exists\" over the file on disk (measured 2026-10-10), with create_tool then refusing the name as already taken. The prompt line, the mint hint and the report-time invitation name create_tool first now, and an unknown tool whose drop-in file is on disk says the file is there and loads at the next start.",
       "gate": "RED on the pre-fix build: the hint and the invitation name only toolsmith, and the on-disk file is denied; green on the batch"
@@ -2495,10 +2495,10 @@
     {
       "id": "offer-branches-read-the-registry",
       "title": "the offer branches read the registry before the order branch fires",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1504e85",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The order branch fired before any registry read and asked to mint the routine a loaded tool already covered (measured 2026-10-10: the offer came back for the exact order answered \"mint it\" an hour earlier, whose runbook was wrapped by the loaded tool - the runbook branch would have stood down, the order branch knew nothing). The covered-runbook stand-down sits above the order and census branches now, the same read the runbook branch keeps, so a repeated order whose runbooks are all covered stands down with the log naming them.",
       "gate": "RED on the pre-fix build: the repeated covered order earns the offer; green on the batch"
@@ -2506,10 +2506,10 @@
     {
       "id": "census-ignores-lone-probes",
       "title": "a lone generic probe is not a routine",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1504e85",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The single-verb fallback could reduce a census shape to one everyday probe, so any two runs that touched ps, grep, df or date earned \"this shape has now run in 2 separate runs\" (measured 2026-10-10: `ps aux | head -1` in two runs; the live box's census carried \"8 separate runs (grep)\") and the invitation quoted the thin premise back. A lone verb from the probe deny-list is no shape now; two verbs, or a lone verb that is not an everyday probe, still fingerprint.",
       "gate": "RED on the pre-fix build: a lone ps or grep fingerprints; green on the batch"
@@ -2517,10 +2517,10 @@
     {
       "id": "remember-offer-stands-down-after-a-runbook",
       "title": "a run that read a runbook is not asked to save what the runbook holds",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1504e85",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The remember offer told operators \"nothing it learned went to memory - so the next run of this re-derives it\" for runs whose calls walked a runbook - the durable copy on disk (measured 2026-10-10: each order that read one earned the line). The offer stands down when the run read a runbook, with the log naming it; a run that learned the facts by hand still offers.",
       "gate": "RED on the pre-fix build: the runbook-reading run earns the offer; green on the batch"
@@ -2528,10 +2528,10 @@
     {
       "id": "spill-index-is-budgeted",
       "title": "the spill index is budgeted per render",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "7d7780f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The spill index rides every request of the run, and it listed every spill of the session with no cap - the header's \"older lines drop off this list\" sentence was static, true of nothing (rows are ~110-160 chars per spill). The index is budgeted like the carry's own index now: the newest rows within twelve rows and 2400 chars, newest kept, with the count of what was left out said per render.",
       "gate": "RED on the pre-fix build: 25 spills render 2204 chars and the oldest rows are listed; green on the batch"
@@ -2539,10 +2539,10 @@
     {
       "id": "carry-drops-the-inline-excerpt",
       "title": "the carry does not re-buy the inline spill excerpt",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "7d7780f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The inline spill excerpt (200..cap//4 chars of cause-naming lines from the dropped middle) is a same-turn recovery aid, but the carry stored the capped result verbatim - every later request of the next run re-bought those exact lines (measured 2026-10-10). The carry copy strips the excerpt now; the head, the tail and the pointer stay. The excerpt's closing bracket moved to its own line so the strip cannot cut a line that merely ends in one.",
       "gate": "RED on the pre-fix build: the stored carry copy still carries the excerpt; green on the batch"
@@ -2550,10 +2550,10 @@
     {
       "id": "spill-pointer-names-find-tools",
       "title": "the spill pointer names find_tools for a hidden search_files",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "7d7780f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The spill pointer names search_files as the search door for the full text, while disclosure hides a core tool until find_tools reveals it (measured against the default tool list, 2026-10-10). The note says so now, so the model is not sent to a name its list does not show.",
       "gate": "RED on the pre-fix build: the pointer does not name find_tools; green on the batch"
