@@ -8367,8 +8367,7 @@ def tool_shell(args, ctx):
         _named_tool = _tool_for_file_name(_named_tool) or _named_tool
         reveal_tools((ctx or {}).get("session_key"), [_named_tool])
         return _tool_door_answer(_named_tool, _tool_args_shape(_named_tool))
-    confirm_hit = (_confirm_hit(command) or _endpoint_self_harm(command)
-                   or _endpoint_load_request(command) or _prompt_surface_write(command))
+    confirm_hit = _shell_tier_hit(command)
     if confirm_hit:
         # One gate for shell and tools: it can REFUSE outright (a fresh steering gap),
         # not only decline. See endpoint_gate().
@@ -8377,6 +8376,9 @@ def tool_shell(args, ctx):
         if refusal:
             return refusal
     refusal = _destructive_refusal(command, "shell: " + command, ctx)
+    if refusal:
+        return refusal
+    refusal = _script_run_refusal(command, "shell: " + command, ctx)
     if refusal:
         return refusal
     blocked = is_blocked(command)
@@ -9230,14 +9232,16 @@ def shell_guard(text, ctx, subject="process: "):
     command it was.
     """
     text = str(text or "")
-    hit = (_confirm_hit(text) or _endpoint_self_harm(text)
-           or _endpoint_load_request(text) or _prompt_surface_write(text))
+    hit = _shell_tier_hit(text)
     if hit:
         refusal = endpoint_gate(subject + text[:110], hit,
                                 (ctx or {}).get("confirm_cb"))
         if refusal:
             return refusal
     refusal = _destructive_refusal(text, subject + text[:110], ctx)
+    if refusal:
+        return refusal
+    refusal = _script_run_refusal(text, subject + text[:110], ctx)
     if refusal:
         return refusal
     blocked = is_blocked(text)
@@ -9264,6 +9268,177 @@ def confirm_gate(text, subject, ctx):
     quoted = next((l for l in lines if re.search(hit, l, re.IGNORECASE)),
                   lines[0] if lines else "(empty)")
     return endpoint_gate("%s: %s" % (subject, quoted[:120]), hit,
+                         (ctx or {}).get("confirm_cb"))
+
+
+# ---- the command tier over a FILE: a script is a command whose body is a file ---------
+#
+# Measured 2026-10-10 driving the stage: a recursive delete was declined five spellings in
+# a row, so the run wrote the same command into run.sh and ran the shell `bash run.sh` -
+# the command line carries no delete verb, and no tier read the file's CONTENT (the
+# content tier carries the Windows shapes, not the POSIX deletes). The directory was gone.
+# Both halves below read a written script as what it is: commands.
+
+_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".ksh", ".command", ".ps1", ".bat", ".cmd")
+_SCRIPT_SCAN_BYTES = 65536      # a file past this is read as its first 64 KB
+_WRAPPER_NEW_GRACE = 2.0        # filesystem timestamp granularity (FAT is 2s)
+
+
+def _script_shaped(path):
+    """True for a suffix whose CONTENT is commands (a bare word there IS a command)."""
+    try:
+        return Path(str(path)).suffix.lower() in _SCRIPT_SUFFIXES
+    except Exception:
+        return False
+
+
+def _strip_script_comment(line):
+    """A script line with its own comment removed, quotes honoured.
+
+    A `#` starts a comment at a word boundary (POSIX) outside quotes; a REM/:: line is a
+    batch comment. Comments are prose, and reading them as commands is what cost a 300s
+    stall and a declined write in 2026-09-25 - the incident that put the machine verbs in
+    the CONTENT tier at command positions only.
+    """
+    out, quote, i, prev = [], None, 0, ""
+    s = str(line)
+    while i < len(s):
+        ch = s[i]
+        if quote:
+            if ch == quote and prev != "\\":
+                quote = None
+            out.append(ch)
+        elif ch in "\"'":
+            quote = ch
+            out.append(ch)
+        elif ch == "#" and (i == 0 or s[i - 1] in " \t;|&("):
+            break
+        else:
+            out.append(ch)
+        prev, i = ch, i + 1
+    text = "".join(out)
+    low = text.lower()
+    if low.strip() == "rem" or low.lstrip().startswith(("rem ", "::")):
+        return ""                    # a batch comment line
+    return text
+
+
+def _shell_tier_hit(text):
+    """The confirm-tier hit for a shell string, in ONE place: tool_shell and shell_guard
+    carried the same expression, and a drop-in tool's spawn asks the same question."""
+    return (_confirm_hit(text) or _endpoint_self_harm(text)
+            or _endpoint_load_request(text) or _prompt_surface_write(text))
+
+
+def _shell_text_risk(text):
+    """(kind, why, line) for TEXT read as command lines - block | confirm | None.
+
+    One reader for the two routes measured above, so the lines inside a script (write
+    time) and the file behind an interpreter (run time) walk the same rules a typed
+    command walks: the confirm tier and the endpoint/prompt-surface gates, the
+    target-aware delete rule, then the never tier. Comments are stripped per line, and a
+    BLOCK anywhere wins over a confirm anywhere - the never tier is the one no approval
+    unlocks.
+    """
+    first_confirm = None
+    for raw in _guard_join_continuations(str(text or "")).splitlines():
+        line = _strip_script_comment(raw).strip()
+        if not line:
+            continue
+        blocked = is_blocked(line)
+        if blocked:
+            return ("block", blocked, line)
+        risk = destructive_risk(line)
+        if risk and risk[0] == "block":
+            return ("block", risk[1], line)
+        if first_confirm is None:
+            hit = _shell_tier_hit(line)
+            if hit:
+                first_confirm = ("confirm", hit, line)
+            elif risk:
+                first_confirm = ("confirm", risk[1], line)
+    return first_confirm
+
+
+def _script_write_gate(path, text, subject, ctx):
+    """The command tier over a script-shaped write's CONTENT, or None.
+
+    A write that lands commands on disk is a command whose body is a file: `write_file
+    run.sh` + the shell `bash run.sh` was measured (2026-10-10) walking a declined
+    recursive delete straight past every tier. Content is read as commands only for a
+    script-shaped suffix - in a prose file a bare word is prose, the same split
+    _confirm_hit's two kinds make.
+    """
+    if not _script_shaped(path):
+        return None
+    risk = _shell_text_risk(text)
+    if not risk:
+        return None
+    kind, why, line = risk
+    if kind == "block":
+        return _blocked_answer(why)
+    return endpoint_gate("%s: %s" % (subject, line[:120]),
+                         "%s - line: %s" % (why, line[:160]),
+                         (ctx or {}).get("confirm_cb"))
+
+
+def _wrapped_script_file(command):
+    """The file an interpreter is about to run, when this process just made it.
+
+    `bash run.sh` is a command line with no delete verb in it; the verb sits in the file
+    the run itself wrote. The tokens are unwrapped by the same prefix rule every guard
+    reads (sudo, env, glue), a run-the-rest switch (`sh -c`, `cmd /c`) is already the
+    command tier's own business, and only a payload that IS one path counts. A file older
+    than this process is the box's own, not something this run put out of sight - that
+    mtime test is why a hand-written script keeps running without a question.
+    """
+    for segment in _SEGMENT_RX.split(_guard_join_continuations(str(command or ""))):
+        argv = _shlex_words(segment)
+        if not argv:
+            continue
+        argv, payload = _guard_unwrap(argv)
+        cand = None
+        if payload is not None:
+            words = _shlex_words(payload)
+            cand = words[0] if len(words) == 1 else None
+        elif argv and _guard_verb(argv[0]) in _GUARD_INTERPRETERS:
+            rest = [w for w in argv[1:] if not w.startswith("-") and w != "--"]
+            cand = rest[0] if rest else None
+        if not cand:
+            continue
+        p = Path(cand).expanduser()
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if not p.is_file() or st.st_mtime < START_TIME - _WRAPPER_NEW_GRACE:
+            continue
+        return p
+    return None
+
+
+def _script_run_refusal(command, subject, ctx):
+    """The command tier over the file an interpreter is about to run, or None.
+
+    The run-time half of the same rule: a file this process wrote is read back when an
+    interpreter is pointed at it, so `bash run.sh` asks the question the command line
+    itself cannot.
+    """
+    path = _wrapped_script_file(command)
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read(_SCRIPT_SCAN_BYTES)
+    except OSError:
+        return None
+    risk = _shell_text_risk(content)
+    if not risk:
+        return None
+    kind, why, line = risk
+    if kind == "block":
+        return _blocked_answer(why)
+    return endpoint_gate(subject, "%s - in %s: %s" % (why, path, line[:120]),
                          (ctx or {}).get("confirm_cb"))
 
 
@@ -9803,6 +9978,10 @@ def tool_edit_file(args, ctx):
                            "edit_file %s" % path, ctx)
     if refusal:
         return refusal
+    refusal = _script_write_gate(path, args.get("new_string") or "",
+                                 "edit_file %s" % path, ctx)
+    if refusal:
+        return refusal
     refusal = _surface_write_gate(path, "edit_file", ctx)
     if refusal:
         return refusal
@@ -10334,6 +10513,9 @@ def tool_write_file(args, ctx):
     refusal = confirm_gate(_content, "write_file %s" % path, ctx)
     if refusal:
         return refusal
+    refusal = _script_write_gate(path, _content, "write_file %s" % path, ctx)
+    if refusal:
+        return refusal
     refusal = _surface_write_gate(path, "write_file", ctx)
     if refusal:
         return refusal
@@ -10341,8 +10523,10 @@ def tool_write_file(args, ctx):
     # so, because the model cannot see the question and the operator wants to read that it
     # was asked (drive, 2026-09-23: a `.cmd` payload matched confirm_patterns and the run
     # reported "the harness wrote back OK" with no mention that a human had been asked).
-    _gated = "  [HARNESS: this content matched agent.confirm_patterns and the operator " \
-             "approved it]" if _confirm_hit(_content, "confirm_content_patterns") else ""
+    _gated = ("  [HARNESS: this content matched agent.confirm_patterns and the operator "
+              "approved it]" if (_confirm_hit(_content, "confirm_content_patterns")
+                                 or (_script_shaped(path)
+                                     and _confirm_hit(_content))) else "")
     try:
         # Name the dirs a write invents: `no_such_dir/sub/p.txt` used to build the tree
         # silently, so a typo'd path looked like a successful write (A-2026-10-05-74).
@@ -17863,7 +18047,7 @@ How you work:
 - Answer the message you were actually given: never reply that it is "noise", "nothing actionable" or a "truncated paste" — the operator knows what they sent, and that reads as a broken bot. If it is genuinely ambiguous, quote it back and say what you tried; if you ran tools, the answer must contain what they returned (names, values, pass/fail), not your own status.
 - Save durable machine facts (paths, container names, quirks) with memory (action=add): short, replacing stale facts instead of piling up contradictions.
 - Anything recurring ("check X every morning") becomes a schedule job: it runs autonomously and reports back to the channel. Use search_sessions to recall how past issues were solved, delegate_task to farm out self-contained subtasks in parallel.
-- Shell: each call is a fresh {shell_name}; use absolute paths. A coarse filter blocks obvious destructive commands (rm -rf /, mkfs, dd, disk wipes, encoded blobs) but it is a SEATBELT, not a boundary: execute_code's source is checked, a command assembled at runtime is not, so targeted and reversible is on you. A shutdown or restart, a recursive delete, file content, tool code and manifest commands take the CONFIRM tier (the operator is asked first). Overwrite via write_file so backups happen.
+- Shell: each call is a fresh {shell_name}; use absolute paths. A coarse filter blocks obvious destructive commands (rm -rf /, mkfs, dd, disk wipes, encoded blobs) but it is a SEATBELT, not a boundary: execute_code's source is checked, a command assembled at runtime is not, so targeted and reversible is on you. A shutdown or restart, a recursive delete, file content, tool code and manifest commands take the CONFIRM tier (the operator is asked first). A command the confirm tier DECLINED is an answer, not an obstacle: report it and stop - never re-spell it, and never wrap it in a script or code to have it run another way; a written script's content is read as commands, and so is a script an interpreter runs. Overwrite via write_file so backups happen.
 - Final report: terse and factual - root cause, what changed, current state, follow-ups. Verify each claim before you make it: read the change back, re-run the check, watch the restart.
 
 Machine: {facts}

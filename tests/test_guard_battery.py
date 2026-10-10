@@ -746,6 +746,75 @@ def test_an_allow_pattern_whitelists_only_its_segment():
         fb.CONFIG["agent"]["allow_patterns"] = saved
 
 
+def test_a_written_script_cannot_carry_a_declined_command():
+    """The confirm tier is not one file away from bypassed (measured 2026-10-10).
+
+    Driven live: a recursive delete was declined five spellings in a row, so the run wrote
+    run.sh with the same command and ran `bash run.sh` - the command line had no delete verb
+    in it, and the file's CONTENT was read by no tier (the content tier carries the Windows
+    shapes, not the POSIX deletes). The never tier was one file away the same way: `mkfs`
+    inside a written script. A script-shaped write is read as commands now, and an
+    interpreter pointed at a file this process just made is read back the same way; a file
+    already on the box is not.
+    """
+    import tempfile
+    work = Path(tempfile.mkdtemp(prefix="tc-guards-script-"))
+    target = work / "decoy"
+    target.mkdir()
+    script = work / "run_rm.sh"
+    ctx_none = {"session_key": "script-belt"}                 # a lane with no door
+    ctx_yes = {"session_key": "script-belt", "confirm_cb": lambda subject: True}
+
+    out = fb.tool_write_file({"path": str(script),
+                              "content": "#!/bin/bash\nrm -rf %s\n" % target},
+                             ctx_none)
+    check("write_file: a recursive delete in a script is declined before it lands",
+          out.startswith("DECLINED") and not script.exists(), out[:160])
+
+    out = fb.tool_write_file({"path": str(script),
+                              "content": "#!/bin/bash\nrm -rf %s\n" % target},
+                             ctx_yes)
+    check("...and the approved write lands", out.startswith("OK") and script.exists(),
+          out[:160])
+
+    # the run-time half: a file the write gate never saw (written outside it, or by an
+    # older build) is read back when an interpreter is pointed at it
+    late = work / "late.sh"
+    late.write_text("#!/bin/bash\nrm -rf %s\n" % target)
+    out = fb.tool_shell({"command": "bash %s" % late}, ctx_none)
+    check("shell: bash of a script written this run is declined on the file's content",
+          out.startswith("DECLINED") and str(late) in out, out[:160])
+    check("...and the target is still there", target.exists())
+    out = fb.tool_shell({"command": "sudo bash %s" % late}, ctx_none)
+    check("...a prefix does not change it", out.startswith("DECLINED"), out[:160])
+    out = fb.tool_shell({"command": "bash %s" % late}, ctx_yes)
+    check("...and an approved run goes through",
+          not out.startswith("DECLINED") and not target.exists(), out[:120])
+
+    # a file older than this process is the box's own, not something the run put out of
+    # sight: it runs without a question
+    old = work / "old.sh"
+    old.write_text("#!/bin/bash\necho old-ran\n")
+    when = fb.START_TIME - 3600
+    os.utime(old, (when, when))
+    out = fb.tool_shell({"command": "bash %s" % old}, ctx_none)
+    check("shell: an old script is not re-read", "old-ran" in out, out[:160])
+
+    # a comment is prose, not a command (the 2026-09-25 false-positive shape)
+    noted = work / "noted.sh"
+    out = fb.tool_write_file({"path": str(noted),
+                              "content": "#!/bin/bash\n# rm -rf %s\necho ok\n" % target},
+                             ctx_none)
+    check("write_file: a delete in a COMMENT does not ask", out.startswith("OK"), out[:160])
+
+    # the never tier keeps its own ground through a script
+    never = work / "never.sh"
+    out = fb.tool_write_file({"path": str(never),
+                              "content": "#!/bin/bash\nmkfs.ext4 /dev/sdz\n"}, ctx_none)
+    check("write_file: a never-tier command in a script is refused, not asked",
+          out.startswith("BLOCKED") and not never.exists(), out[:160])
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
