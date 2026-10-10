@@ -392,6 +392,10 @@ code's own terms:
         if 'vals.add(fb["api_key"])' in SRC.read_text(encoding="utf-8", errors="replace"):
             out = fb.scrub("failover used " + FBKEY)
             check("a fallback api_key is still redacted", FBKEY not in out, out)
+            fb.CONFIG["llm"]["fallbacks"][0]["api_key"] = "fbshort1"
+            fb._SECRETS = fb._secret_values()
+            out = fb.scrub("failover used fbshort1")
+            check("an 8-char fallback api_key is redacted too", "fbshort1" not in out, out)
         else:
             print("skip a fallback key check (this build has no fallback endpoints)")
         out = fb.scrub("token " + MM)
@@ -411,6 +415,23 @@ code's own terms:
               "pwabcd1234" not in out, out)
         check("and a 3-char one is still below the floor", "abc" not in fb._SECRETS)
 
+        # One floor for all three arms (2026-10-10): the env and llm.api_key arms kept
+        # 12 while the config arm accepted 6, so a hand-set 10-char page token or an
+        # 8-char endpoint key reached the transcript, the log and the chat unmasked.
+        os.environ["TINYCMDR_TEST_TOKEN"] = "tok1234567"
+        os.environ["TINYCMDR_TEST_TOO_SHORT_TOKEN"] = "abcde"
+        fb.CONFIG["llm"]["api_key"] = "k8ch8ar1"
+        fb._SECRETS = fb._secret_values()
+        out = fb.scrub("the page token is tok1234567 here")
+        check("a 10-char *_TOKEN environment value is redacted",
+              "tok1234567" not in out, out)
+        out = fb.scrub("the endpoint key k8ch8ar1 is in use")
+        check("an 8-char llm.api_key is redacted", "k8ch8ar1" not in out, out)
+        check("and a 5-char value is still below the floor", "abcde" not in fb._SECRETS)
+        # Put the long key back: later checks in this member assert on it.
+        fb.CONFIG["llm"]["api_key"] = KEY
+        fb._SECRETS = fb._secret_values()
+
         # the regression the sweep's own comment records: a looser name test swept PATH out
         # of ordinary log lines, so a path line must come through untouched
         probe = "PATH entry C:\\Windows\\System32 and C:\\Program Files\\Python312"
@@ -427,6 +448,8 @@ code's own terms:
         os.environ.pop("TINYCMDR_ENV_TOKEN", None)
         os.environ.pop("TINYCMDR_TEST_SUDO_PASSWORD", None)
         os.environ.pop("TINYCMDR_TEST_TOO_SHORT_PASSWD", None)
+        os.environ.pop("TINYCMDR_TEST_TOKEN", None)
+        os.environ.pop("TINYCMDR_TEST_TOO_SHORT_TOKEN", None)
 
     # ---- a key added after import is swept too -----------------------------
     # _SECRETS was frozen at import, so `config set llm.api_key` (the guard skips the llm

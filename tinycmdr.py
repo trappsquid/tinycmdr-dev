@@ -3537,39 +3537,36 @@ def _secret_values():
     """Every secret this process was handed, so anything leaving the process —
     tool output entering context, an answer posted to chat, notes carried in the
     system prompt, a log line — can be masked first."""
+    # ONE floor (6) for every secret-NAMED arm below - config section, llm.api_key and
+    # environment alike (2026-10-10). The arms used to disagree, 12 against 6, and each
+    # measurement landed on the skipped side: a 10-char web token quoted into chat
+    # (2026-09-25), a 10-char SUDO_PASSWORD (2026-09-29), a hand-set 10-char page token
+    # and an 8-char endpoint key (2026-10-10). A skipped secret in _SECRETS is a secret
+    # that reaches the transcript, the log and the chat. Not lower than 6: under it the
+    # value is a placeholder word like "none", and masking that mangles prose.
     vals = set()
     for section in ("mattermost", "search", "web", "telegram"):
         for k, v in (CONFIG.get(section) or {}).items():
-            # A field NAMED token/key/secret is a secret whatever its length. The 12-char
-            # floor here hid the one that leaked (measured 2026-09-25 driving a live install: asked
-            # where the web token lived, the run quoted it into chat - a 10-char value the
-            # sweep had skipped). The floor stays for ENVIRONMENT values below, where a
-            # short value is usually a word like "none" - with one exception there, a
-            # name ending in PASSWORD/PASSWD, which is a credential at any length.
+            # A field NAMED token/key/secret is a secret whatever its length.
             if isinstance(v, str) and len(v) >= 6 and (
                     "token" in k or "key" in k or "secret" in k):
                 vals.add(v)
     for fb in CONFIG["llm"].get("fallbacks", []):
-        if isinstance(fb.get("api_key"), str) and len(fb["api_key"]) >= 12:
+        if isinstance(fb.get("api_key"), str) and len(fb["api_key"]) >= 6:
             vals.add(fb["api_key"])
     # The PRIMARY endpoint's key too (2026-09-22). A hosted primary keeps its key
     # in llm.api_key, and this sweep covered the fallbacks and not the main one - exactly
     # backwards, since the primary key is the one in use on every call. A leaked key here
     # is one injected instruction away from leaving the box.
     _primary_key = CONFIG["llm"].get("api_key")
-    if isinstance(_primary_key, str) and len(_primary_key) >= 12:
+    if isinstance(_primary_key, str) and len(_primary_key) >= 6:
         vals.add(_primary_key)
     for k, v in os.environ.items():
         # Only vars whose name ENDS in a secret-ish word. A looser test (any
         # name containing "PAT"/"KEY") swept up PATH and PATHEXT, whose values
-        # then got «redacted» out of ordinary log lines and paths. A name ending in
-        # PASSWORD/PASSWD is the exception to the 12-char floor: it is a credential at
-        # 6, the rule the config-side sweep above already uses. Measured 2026-09-29 -
-        # the floor skipped this install's 10-char SUDO_PASSWORD, and a skipped secret
-        # in _SECRETS is a secret that reaches the transcript, the log and the chat.
-        if isinstance(v, str) and _SECRET_NAME_RX.search(
-                k) and (len(v) >= 12 or (re.search(r"(?i)_?passw(or)?d$", k)
-                                         and len(v) >= 6)):
+        # then got «redacted» out of ordinary log lines and paths. The NAME test is
+        # what keeps PATH out; the length floor is the shared 6.
+        if isinstance(v, str) and _SECRET_NAME_RX.search(k) and len(v) >= 6:
             vals.add(v)
     vals.discard("none")
     return vals
