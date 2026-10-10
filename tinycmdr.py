@@ -682,11 +682,22 @@ DEFAULT_CONFIG = {
         # (2026-10-04). 0 keeps the old ask-once behaviour; the delivery still annotates a
         # run that will not act ("stopped short") rather than asking forever.
         "nudge_retries": 3,
-        # Delivery guard: how many times a run may announce the work as complete while still
-        # queueing tool calls before the harness demands the report (and, two announcements
-        # later, forces it). Measured 2026-09-18 on the Windows test box: five announcements in 25 minutes
-        # with no report, and the repeat-based loop guard saw none of them.
+        # Delivery REMINDER (advisory only since 2026-10-10): how many times a reply may
+        # say the work is complete while tool calls are still queued before ONE line
+        # suggests delivering, if it is done. It never ends a run and never blocks a
+        # continuation: a phrase list cannot tell narration from a stall, and the old
+        # version demanded the report mid-flight on the live box (the demand landed at
+        # step 51 of an audit that then worked for hours). 0 disables the reminder.
         "deliver_after_announcements": 3,
+        # The state-based half of the same idea - what actually guards the "one more
+        # check" attractor. A turn whose EVERY tool call was a duplicate (same arguments
+        # AND same result) or a refusal taught the run nothing: `idle_turn_nudge` such
+        # turns in a row earn one line; `idle_turn_stop` of them end the run with its
+        # report and the stated reason. Any productive call - a new result, a first-time
+        # failure, a mutation, plan movement - clears the counter, so this can only fire
+        # on a run standing still, whatever words it uses. 0 disables either half.
+        "idle_turn_nudge": 4,
+        "idle_turn_stop": 10,
         # Keep the full text compaction is about to destroy, in sessions/<key>.transcript.jsonl.
         "session_transcript": True,
         "progress_updates": True,
@@ -13477,7 +13488,8 @@ def _annotate_promise(answer, calls):
         return answer
     return (answer + "\n\n⚠️ **stopped short** — this answer ends on a stated intention, "
             f"not on a result: the run made {calls} tool call(s) and its last turn asked "
-            "for none. Whatever it says it was about to do has not run yet.")
+            "for none. Whatever it says it was about to do has not run yet — send "
+            "`continue` to pick it up.")
 
 
 def _delete_custom_tool(args, ctx):
@@ -18438,7 +18450,11 @@ def _state(mutate=None):
 # repeat-based loop guard cannot see it: measured live on the Windows test box 2026-09-18, where the model
 # announced the same conclusion five times in 25 minutes ("fresh pass complete ... two claims left
 # to pin ... then writing it up") and answered every announcement with another tool round instead
-# of the report. This is the detector for that class.
+# of the report. ADVISORY ONLY since 2026-10-10: this is a phrase list, and a phrase list cannot
+# tell narration from a stall - it fired mid-flight on the live box (the demand landed at step 51
+# of an audit that kept working for hours). The count still logs and earns ONE reminder line;
+# what ends a stuck run now is `idle_turn_stop`, which counts duplication and refusals - state,
+# not words - so no model's phrasing can end a task early.
 _COMPLETION_RX = re.compile(
     r"\b(pass|task|job|analysis|work|audit|review|report|run)\b[^.\n]{0,60}?"
     r"\b(complete|completed|done|finished)\b"
@@ -21671,13 +21687,14 @@ class Agent:
             _run = run_state(session_key, create=True)
             _run["calls"] = 0
             _run["progress_at"] = 0
-            # Per-RUN counters: the completion-announcement guard and the compaction tally. The
-            # announcement count deliberately SURVIVES a continuation segment (a run that keeps
-            # saying it is done must not be handed another budget), so it is reset here, not in
-            # the segment branch.
+            # Per-RUN counters: the completion reminder and the compaction tally. The
+            # announcement count SURVIVES a continuation segment (segments are one run),
+            # so the reminder fires once per run rather than once per segment.
             _run["announced"] = 0
-            _run["deliver_forced"] = False
             _run["deliver_nudge"] = False
+            _run["idle_turns"] = 0
+            _run["idle_nudge"] = False
+            _run["idle_stop"] = False
             _run["compactions"] = 0
             _run["atlas_reask"] = False
             _run["route_hint_used"] = 0
@@ -21873,23 +21890,22 @@ class Agent:
                         _harness_spoke_last(messages, reply),
                         reply, tool_calls, _messages_chars(messages))
                     _prompt_seen = _prompt_now
-                    # Delivery guard: count announcements of completion that arrive WITH more
-                    # tool calls queued. Reach the threshold and the run is told to deliver;
-                    # two past that and the wrap-up is forced, because the alternative is
-                    # another hour of checks that no repeat-based guard will ever see.
+                    # Delivery REMINDER: count announcements of completion that arrive WITH
+                    # more tool calls queued. At the threshold the run gets ONE line that
+                    # suggests delivering if it is done - advisory only (2026-10-10): it
+                    # never ends a run and never blocks a continuation, because a phrase
+                    # list cannot tell narration from a stall.
                     if tool_calls:
                         if _COMPLETION_RX.search(str(reply.get("content") or "")):
                             _run["announced"] = int(_run.get("announced") or 0) + 1
-                            _deliver_after = int(
-                                CONFIG["agent"].get("deliver_after_announcements") or 3)
+                            _d = CONFIG["agent"].get("deliver_after_announcements")
+                            _deliver_after = 3 if _d is None else max(0, int(_d))
                             log.info("[%s] completion announced %d time(s) with %d tool "
-                                     "call(s) queued (deliver at %d)",
+                                     "call(s) queued (reminder at %d)",
                                      session_key, _run["announced"], len(tool_calls),
                                      _deliver_after)
-                            if _run["announced"] == _deliver_after:
+                            if _deliver_after and _run["announced"] == _deliver_after:
                                 _run["deliver_nudge"] = True
-                            elif _run["announced"] >= _deliver_after + 2:
-                                _run["deliver_forced"] = True
                     if not tool_calls:
                         # A correction that arrived while the model was writing this answer
                         # gets a turn of its own: an answer composed before the correction is
@@ -22430,6 +22446,9 @@ class Agent:
                     else:
                         work(0, tool_calls[0])
                     nudges = []
+                    # Idle-turn accounting starts here: a turn with tool calls counts as
+                    # idle until ONE call proves otherwise (see the counter past the loop).
+                    _idle_turn = True
                     for i, entry in enumerate(results):
                         if entry is None:
                             # Never skip this. An unanswered tool_call_id makes
@@ -22476,13 +22495,18 @@ class Agent:
                         with dedupe_lock:
                             ent = executed.get(key)
                             _cmp = _dedupe_text(output)
-                            if ent and ent[1] == _cmp:
+                            _dup = bool(ent) and ent[1] == _cmp
+                            if _dup:
                                 ent[0] += 1
                                 repeat_no = ent[0]
                             elif not refused:
                                 executed[key] = [1, _cmp]
                             elif ent:
                                 repeat_no = ent[0]
+                        if not refused and not _dup:
+                            # A result this run has not seen for this call is progress -
+                            # first-time failures included: the failure IS the news.
+                            _idle_turn = False
                         body = scrub(output)
                         if repeat_no >= 2:
                             with dedupe_lock:
@@ -22500,6 +22524,7 @@ class Agent:
                                          "content": body})
                         calls += 1
                         if _is_mutation(name, args, output) and not refused:
+                            _idle_turn = False   # the world changed: never idle
                             # A refused call never ran, so it must not appear in
                             # the "what I changed" evidence list — that would
                             # report a change that did not happen.
@@ -22577,6 +22602,35 @@ class Agent:
                                 log.debug("progress_done_cb failed",
                                           exc_info=True)
 
+                    # Idle-turn counter (2026-10-10): the state-based guard for the "one
+                    # more check" attractor, whatever words the model wraps it in. A turn
+                    # whose every call repeated a result already known, or was refused,
+                    # taught the run nothing. One line at the nudge threshold; at the stop
+                    # threshold the run wraps up with its report and the reason, because
+                    # the alternative is another hour of identical rounds that no phrase
+                    # list can see.
+                    if tool_calls:
+                        if _idle_turn:
+                            _run["idle_turns"] = int(_run.get("idle_turns") or 0) + 1
+                        else:
+                            _run["idle_turns"] = 0
+                        _idle_n = int(_run.get("idle_turns") or 0)
+                        _iv = CONFIG["agent"].get("idle_turn_nudge")
+                        _idle_after = 4 if _iv is None else max(0, int(_iv))
+                        _sv = CONFIG["agent"].get("idle_turn_stop")
+                        _idle_stop_at = 10 if _sv is None else max(0, int(_sv))
+                        if _idle_n and _idle_stop_at and _idle_n >= _idle_stop_at \
+                                and not spun and not _run.get("idle_stop"):
+                            _run["idle_stop"] = True
+                            log.warning("[%s] idle: %d turn(s) in a row with nothing new "
+                                        "- wrapping up with the reason", session_key,
+                                        _idle_n)
+                        elif _idle_n and _idle_after and _idle_n == _idle_after \
+                                and not _run.get("idle_stop"):
+                            _run["idle_nudge"] = True
+                            log.warning("[%s] idle: %d turn(s) in a row with nothing new",
+                                        session_key, _idle_n)
+
                     # Every nudge lands AFTER the last tool result of this
                     # assistant turn. Appending it inside the loop above put a
                     # user message between the tool results of a BATCHED turn,
@@ -22610,11 +22664,19 @@ class Agent:
                                 f"the plan says: {plan_current_line(session_key)}.")
                     if _run.pop("deliver_nudge", False):
                         nudges.append(
-                            f"SYSTEM: you have announced this work as complete "
-                            f"{int(_run.get('announced') or 0)} times and still have not "
-                            f"delivered a report. Stop starting new checks. Emit the final "
-                            f"report in your next reply with NO further tool calls, and say "
-                            f"plainly which parts you could not verify.")
+                            f"SYSTEM: you have said this work was complete "
+                            f"{int(_run.get('announced') or 0)} times while still queueing "
+                            f"tool calls. If the task IS finished, deliver the report now "
+                            f"with no further tool calls and say plainly which parts you "
+                            f"could not verify; if it is not finished, ignore this line "
+                            f"and continue - nothing here stops the run.")
+                    if _run.pop("idle_nudge", False):
+                        nudges.append(
+                            f"SYSTEM: the last {int(_run.get('idle_turns') or 0)} turns "
+                            f"produced nothing new - every tool call repeated a result you "
+                            f"already had, or was refused. Repeating them will not help. "
+                            f"Change approach (a different path, argument or command), or "
+                            f"say plainly in one line what is blocking you.")
                     if _restate_note:
                         # LAST, and never inside the per-call loop above: the loop
                         # guard's nudge must stay the first one queued (a user
@@ -22628,11 +22690,11 @@ class Agent:
                     steps += len(tool_calls)
                     over_steps = steps >= max_steps
                     over_time = (now_mono() - t0) > max_seconds
-                    if over_steps or over_time or spun or _run.get("deliver_forced"):
+                    if over_steps or over_time or spun or _run.get("idle_stop"):
                         why = ("step budget" if over_steps
                                else "time budget" if over_time
                                else "loop guard" if spun
-                               else "delivery guard")
+                               else "no progress")
                         _open = plan_open(session_key)
                         # A cap with work left is a checkpoint, not the end: continue on
                         # the same task in a fresh segment rather than stopping and waiting
@@ -22641,15 +22703,11 @@ class Agent:
                         # re-planned. Sub-agents never continue, and neither does a run the
                         # LOOP GUARD stopped - that one is looping, not slow.
                         _st = run_state(session_key) or {}
-                        # A run that kept announcing completion without delivering gets no
-                        # further segment: the announcement loop is exactly the state a bigger
-                        # budget feeds (2026-09-18).
-                        _announced = int(_st.get("announced") or 0)
-                        _deliver_after = int(
-                            CONFIG["agent"].get("deliver_after_announcements") or 3)
-                        if _announced >= _deliver_after and not spun:
-                            log.warning("[%s] not continuing: completion announced %d time(s) "
-                                        "without a report", session_key, _announced)
+                        # A run that is standing still gets no further segment: another
+                        # budget would buy the same idle turns again.
+                        if _run.get("idle_stop"):
+                            log.warning("[%s] not continuing: %d idle turn(s) in a row",
+                                        session_key, int(_run.get("idle_turns") or 0))
                         # The TURN budget cannot be refilled: the counter behind `turn` is
                         # the loop variable of `range(max_turns)`, so a new segment inherits
                         # what is left while the notice used to promise "a fresh budget"
@@ -22661,8 +22719,8 @@ class Agent:
                         # exactly this reason - `turn` itself is reused below for the
                         # assistant message dict.
                         _turns_left = max(0, max_turns - _turn_no + 1)
-                        if (not spun and depth == 0 and _segments < _seg_cap
-                                and _announced < _deliver_after and _turns_left > 0
+                        if (not spun and not _run.get("idle_stop") and depth == 0
+                                and _segments < _seg_cap and _turns_left > 0
                                 and CONFIG["agent"].get("auto_continue", True)
                                 and (_open or not _st.get("plan"))):
                             _segments += 1
@@ -22721,8 +22779,19 @@ class Agent:
                                      + "; ".join(f"{i}. {t}" for i, t in _open[:4])
                                      + ("." if len(_open) <= 4
                                         else f" (and {len(_open) - 4} more)."))
+                        _wrap_line = (
+                            "SYSTEM: your task budget is exhausted."
+                            if why in ("step budget", "time budget")
+                            else ("SYSTEM: you repeated the same call with identical "
+                                  "arguments and results without moving on."
+                                  if spun and spun_tool else
+                                  "SYSTEM: you kept restating the same status without "
+                                  "moving on." if spun else
+                                  "SYSTEM: the last turns produced nothing new - every "
+                                  "tool call repeated a result already known or was "
+                                  "refused."))
                         messages.append({"role": "user", "content": (
-                            "SYSTEM: your task budget is exhausted. Do NOT "
+                            _wrap_line + " Do NOT "
                             "call any more tools. Answer with exactly these "
                             "four lines, one per line, each starting with its "
                             "label, a terse value after the label and "
@@ -22781,18 +22850,23 @@ class Agent:
                                      f"identical arguments and results {loop_stop} "
                                      f"times without moving on") if spun_tool else
                                     "kept restating the same status without moving on")
+                            _back = ("" if depth else
+                                     "\n\nSend 'continue' and I'll pick it up with a "
+                                     "different approach.")
                             return (f"🔁 Stopped a loop: {spun} — {_why}, so I wrapped up "
                                     f"instead of burning the budget "
                                     f"({steps} steps, {int(now_mono() - t0)}s)."
-                                    f"\n\n" + (answer or "(no summary)"))
-                        _label = ("Delivery guard" if why == "delivery guard"
-                                  else "Budget reached")
-                        _tail = ("you kept announcing completion without reporting, so I "
-                                 "wrapped up.\n\n" if why == "delivery guard"
+                                    f"{_back}\n\n" + (answer or "(no summary)"))
+                        _label = "No progress" if why == "no progress" else "Budget reached"
+                        _tail = ("nothing new arrived for "
+                                 f"{int(_run.get('idle_turns') or 0)} turn(s) in a row, "
+                                 "so I wrapped up.\n\n" if why == "no progress"
                                  else "wrapping up early.\n\n")
+                        _back = ("" if depth else
+                                 "\n\nSend 'continue' and I'll carry on from here.")
                         return (f"⏱️ {_label} ({steps} steps, "
-                                f"{int(now_mono() - t0)}s) — " + _tail
-                                + (answer or "(no summary)"))
+                                f"{int(now_mono() - t0)}s) — " + _tail + _back.lstrip("\n")
+                                + "\n\n" + (answer or "(no summary)"))
 
                 _limit = ("⚠️ Hit the turn limit without finishing. "
                         "Send 'continue' and I'll pick up where I left off.")

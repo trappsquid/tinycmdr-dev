@@ -3507,10 +3507,12 @@ def test_the_safety_seatbelt_covers_execute_code_too():
         fb.log.removeHandler(h)
 
 
-def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
-    """    times in 25 minutes and answered every announcement with another tool round, while every
-    call was distinct, so no repeat-based guard could see it. The delivery guard counts
-    announcements that arrive with tool calls queued, demands the report, then forces it."""
+def test_a_run_that_keeps_announcing_completion_gets_one_reminder():
+    """ADVISORY since 2026-10-10. Measured on the live box: a model narrating "pass
+    complete" mid-audit had the old demand land at step 51 and the run was wrapped
+    while it still had hours of work. The count now earns exactly one reminder line,
+    ends nothing and blocks no continuation - words cannot end a run; the state-based
+    idle counter below is what guards the "one more check" class."""
     import copy as _copy
     probe = TMP / "announce_probe.txt"
     probe.write_text("stable\n", encoding="utf-8")
@@ -3535,7 +3537,7 @@ def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
                   cancel_event=None, on_delta=None, session_key=None, **kw):
         payloads.append(_copy.deepcopy(messages))
         if used["n"] >= len(seq):
-            raise AssertionError("the run kept asking the model past the forced wrap-up")
+            raise AssertionError("the run kept asking the model past its scripted end")
         r = seq[used["n"]]
         used["n"] += 1
         return r
@@ -3556,12 +3558,108 @@ def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
         fb.run_state(key, create=True)["announced"] = 0
 
     blobs = [json.dumps(p) for p in payloads]
-    check("delivery guard: the announcement nudge reached the model",
-          any("announced this work as complete" in b for b in blobs), len(payloads))
-    check("delivery guard: the wrap-up was forced, not a budget",
-          "Delivery guard" in out, out[:160])
-    check("delivery guard: no continuation was granted to it",
-          all("segment" not in (s or "") for s in seen), seen)
+    # The reminder persists in the conversation once delivered, so the property is
+    # "delivered once and never duplicated", not "in exactly one payload".
+    _counts = [sum(1 for m in p if "said this work was complete" in json.dumps(m))
+               for p in payloads]
+    check("delivery reminder: delivered once and never duplicated",
+          any(_counts) and max(_counts) == 1, _counts)
+    check("delivery reminder: no end is forced by the words",
+          "Delivery guard" not in out and "No progress" not in out, out[:200])
+    check("delivery reminder: the model's own ending is the run's ending",
+          "nothing left undone" in out, out[:200])
+
+
+def test_zero_deliver_reminders_disables_even_the_line():
+    """0 = off, explicitly (2026-10-10): the old `or 3` turned an explicit 0 back
+    into 3, so an operator could not switch the reminder off."""
+    import copy as _copy
+    probe = TMP / "announce_zero.txt"
+    probe.write_text("stable\n", encoding="utf-8")
+
+    def round_n(n):
+        return {"role": "assistant",
+                "content": f"Fresh pass {n} is complete.",
+                "tool_calls": [{"id": str(n), "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": str(probe) + "-" + str(n)})}}]}
+
+    for n in range(1, 6):
+        (TMP / f"announce_zero.txt-{n}").write_text(f"stable {n}\n", encoding="utf-8")
+    scripted = [round_n(n) for n in range(1, 6)]
+    scripted.append({"role": "assistant", "content": "Done: the scripted end."})
+
+    saved_chat = fb.AGENT._chat
+    saved = dict(fb.CONFIG["agent"])
+    payloads, used = [], {"n": 0}
+    seq = list(scripted)
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None, max_tokens=None,
+                  cancel_event=None, on_delta=None, session_key=None, **kw):
+        payloads.append(_copy.deepcopy(messages))
+        if used["n"] >= len(seq):
+            raise AssertionError("kept asking past the scripted end")
+        r = seq[used["n"]]
+        used["n"] += 1
+        return r
+
+    key = "announce-zero"
+    fb.AGENT._chat = fake_chat
+    fb.CONFIG["agent"].update(deliver_after_announcements=0, max_steps=100,
+                              max_minutes=30, plan_from_request=False,
+                              progress_updates=False)
+    try:
+        out = fb.AGENT.run(key, "pass after pass", say_cb=lambda s: None)
+    finally:
+        fb.AGENT._chat = saved_chat
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(saved)
+        fb.run_state(key, create=True)["announced"] = 0
+
+    blobs = [json.dumps(p) for p in payloads]
+    # Both wordings, because the pre-fix build's line must fail this too.
+    _forbidden = ("announced this work as complete", "said this work was complete")
+    check("deliver_after_announcements 0: no reminder line at all",
+          all(not any(f in b for f in _forbidden) for b in blobs), len(payloads))
+    check("deliver_after_announcements 0: the run ends on its own answer",
+          "the scripted end" in out, out[:160])
+
+
+def test_a_run_with_nothing_new_wraps_up_with_the_reason_and_a_way_back():
+    """The state-based half (2026-10-10). Two probe files read in a loop: every round
+    after the first pair repeats a result (or is refused), so the turns are idle
+    whatever the model SAYS. Two idle turns earn one line; four end the run - with
+    "No progress", the count, and how to resume, because a stop the operator cannot
+    understand is the complaint this replaces."""
+    a = TMP / "idle_a.txt"
+    b = TMP / "idle_b.txt"
+    a.write_text("constant A\n", encoding="utf-8")
+    b.write_text("constant B\n", encoding="utf-8")
+
+    def rd(n, path):
+        return {"role": "assistant", "content": f"Checking again (round {n}).",
+                "tool_calls": [{"id": f"i{n}", "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": str(path)})}}]}
+
+    scripted = [rd(n, p) for n, p in enumerate([a, b, a, b, a, b], start=1)]
+    scripted.append({"role": "assistant",
+                     "content": "STATE: nothing changed after the repeats."})
+    fb.CONFIG["agent"]["idle_turn_nudge"] = 2
+    fb.CONFIG["agent"]["idle_turn_stop"] = 4
+    fb.CONFIG["agent"]["max_steps"] = 60
+    fb.CONFIG["agent"]["max_minutes"] = 20
+    out, calls, payloads = _scripted_run(scripted)
+    sent = json.dumps(payloads)
+    check("idle: the one-line nudge names the fact, not the model's words",
+          "produced nothing new" in sent, sent[-300:])
+    check("idle: the run ends with the reason and the count",
+          "No progress" in out and "nothing new arrived for 4 turn(s)" in out,
+          out[:300])
+    check("idle: the delivery says how to resume",
+          "Send 'continue'" in out, out[:300])
+    check("idle: it stops at the idle threshold, not the step ladder",
+          calls == 7, f"model calls: {calls}")
 
 
 # the restatement guard (macOS, 2026-09-24)
