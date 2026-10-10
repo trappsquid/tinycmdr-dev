@@ -94,6 +94,55 @@ written degrades to the old truncation instead of breaking the run.
             check(spilled == body, "and it is byte-for-byte what the tool produced")
             check("Nothing was dropped" in out and "Do NOT" in out,
                   "the pointer says how to read it and not to re-run the command")
+            check("find_tools" in out,
+                  "the pointer names find_tools for a hidden search_files (%s)" % out[:120])
+
+            # ---- the index is budgeted per render, and says what it left out --------------
+            # A-2026-10-10-01: every request re-bought the session's whole spill index -
+            # no row cap, and the header's "older lines drop off" sentence was static.
+            sp_dir = fb.BASE_DIR / "spill"
+            ix_rows = []
+            for i in range(1, 26):
+                f = sp_dir / ("probe-%02d.txt" % i)
+                f.write_text("spill %d\n" % i, encoding="utf-8")
+                ix_rows.append({"id": i, "tool": "shell", "path": "spill/" + f.name,
+                                "chars": 3000 + i, "at": time.time() - 60 * i,
+                                "session": "index-sess", "first": "spill %d" % i})
+            saved_rows = list(fb._SPILLS)
+            try:
+                fb._SPILLS[:] = ix_rows
+                block = fb.spill_index_block("index-sess")
+                check(len(block) < 2000,
+                      "a session with many spills gets a BOUNDED index (%d chars)"
+                      % len(block))
+                check("spill#25" in block, "the newest spill is listed")
+                check("spill#1 " not in block, "the oldest is left out")
+                check("older spill(s) are not listed" in block,
+                      "and the header says how many, not the old static line")
+            finally:
+                fb._SPILLS[:] = saved_rows
+
+            # ---- the inline excerpt is not carried into the next run twice ----------------
+            # A-2026-10-10-02: the carry stored the capped result verbatim, so every later
+            # request of the next run re-bought the excerpt the prompt had already shown.
+            saved_cap = fb.CONFIG["agent"]["tool_output_max_chars"]
+            fb.CONFIG["agent"]["tool_output_max_chars"] = 8000
+            try:
+                ex_body = "E" * 5000 + "\nERROR: the flange is loose\n" + "F" * 5000
+                capped = fb.cap_output("shell", ex_body, "command output")
+                check("name a cause or a failure" in capped,
+                      "a cause-naming line from the dropped middle rides inline (%s)"
+                      % capped[:120])
+                fb.record_tool_result({"session_key": "carry-excerpt-sess"}, "shell",
+                                      {"command": "x"}, capped)
+                carried = ((fb._carry_load("carry-excerpt-sess").get("entries")
+                            or [{}])[0].get("out") or "")
+                check("name a cause or a failure" not in carried,
+                      "...and the carry copy does NOT re-buy it (%s)" % carried[:120])
+                check("spill/" in carried and "Nothing was dropped" in carried,
+                      "...while the pointer is still carried (%s)" % carried[:160])
+            finally:
+                fb.CONFIG["agent"]["tool_output_max_chars"] = saved_cap
 
             # ---- a small result is untouched -----------------------------------------------
             check(fb.cap_output("shell", "one line", "command output") == "one line",

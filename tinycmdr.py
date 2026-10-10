@@ -3984,6 +3984,15 @@ def _spill_path(want, session=None):
     return ""
 
 
+# The index rides every request of the run, so it is BUDGETED like the carry's own index:
+# the newest rows within a char cap, newest first, with the count of what was left out
+# said per render. Without it a session with many spills re-bought its whole index every
+# turn, and the "older lines drop off this list" sentence was static - true of nothing
+# (A-2026-10-10-01; measured: the header + rows are ~110-160 chars per spill, unbounded).
+_SPILL_INDEX_ROWS = 12
+_SPILL_INDEX_CHARS = 2400
+
+
 def spill_index_block(session=None):
     """The index of THIS session's spills (newest last), or "" when there are none."""
     rows = _spill_rows(session)
@@ -3997,11 +4006,22 @@ def spill_index_block(session=None):
         lines.append("- spill#%d %s  %s  (%d chars, %s, starts: %s)"
                      % (e["id"], e["tool"], e["path"], e["chars"], when,
                         e["first"] or "(no first line)"))
-    return ("[HARNESS: results from this session that were too big for a tool result. "
+    kept, used = [], 0
+    for line in reversed(lines):
+        if kept and (len(kept) >= _SPILL_INDEX_ROWS
+                     or used + len(line) + 1 > _SPILL_INDEX_CHARS):
+            break
+        kept.insert(0, line)
+        used += len(line) + 1
+    dropped = len(lines) - len(kept)
+    head = ("[HARNESS: results from this session that were too big for a tool result. "
             "The FULL text is on disk - nothing was dropped - and this is only an "
             "index of it. Read one back by id with "
-            "`read_file {\"path\": \"spill#<id>\"}`; older lines drop off this list "
-            "but their files stay in spill/.]\n" + "\n".join(lines))
+            "`read_file {\"path\": \"spill#<id>\"}`"
+            + (("%d older spill(s) are not listed here; their files stay in spill/."
+                % dropped) if dropped else "")
+            + "]")
+    return head + "\n" + "\n".join(kept)
 
 
 # A line that names a cause, for the excerpt _spill_signal lifts out of a dropped middle.
@@ -4018,10 +4038,32 @@ _SPILL_SIGNAL_LINES = 12       # ... and the excerpt carries at most this many
 
 def _spill_signal_block(picked):
     """The excerpt exactly as _spill_signal returns it, so the caller's budget can bound
-    the WHOLE block - the `[HARNESS: ...]` header and footer included (A-105)."""
+    the WHOLE block - the `[HARNESS: ...]` header and footer included (A-105).
+
+    The closing `]` sits alone on its own line so the carry's strip (A-2026-10-10-02) can
+    cut the block without guessing where a line that merely ends in a bracket ends.
+    """
     return (f"[HARNESS: {len(picked)} line(s) from the dropped middle that name a cause or "
             f"a failure - the full text is still in the spill file:\n"
-            + "\n".join(picked) + "]\n")
+            + "\n".join(picked) + "\n]\n")
+
+
+# The inline excerpt as _spill_signal renders it, for the strip below. Lazy to the first
+# line that is exactly `]` - the close _spill_signal_block writes.
+_SPILL_EXCERPT_RX = re.compile(
+    r"\[HARNESS: \d+ line\(s\) from the dropped middle that name a cause or a failure"
+    r" - the full text is still in the spill file:\n.*?\n\]\n", re.S)
+
+
+def _strip_spill_excerpt(text):
+    """A capped result's inline excerpt, removed for the CARRY copy (A-2026-10-10-02).
+
+    The excerpt is a same-turn recovery aid: it rides the result the model is reading NOW,
+    and the spill pointer sits right above it. Stored into the carry verbatim, every later
+    request of the next run re-bought those exact lines - the excerpt paid inline, then
+    again per turn. The carry keeps the head, the tail and the pointer; the excerpt goes.
+    """
+    return _SPILL_EXCERPT_RX.sub("", str(text or ""))
 
 
 def _spill_signal(text, lo, hi, budget):
@@ -4116,7 +4158,8 @@ def cap_output(name, text, label="output", limit=None, session=None):
             + f"\n... [{label}: {len(text)} chars / {text.count(chr(10)) + 1} lines - the FULL "
               f"text was written to {rel}. Nothing was dropped: read it with "
               f"`read_file {{\"path\": \"{rel}\", \"offset\": N, \"limit\": M}}`, or search it "
-              f"with `search_files {{\"pattern\": \"...\", \"path\": \"{rel}\"}}`. Do NOT "
+              f"with `search_files {{\"pattern\": \"...\", \"path\": \"{rel}\"}}` "
+              f"(find_tools reveals it first if it is not in your tool list). Do NOT "
               f"re-run the command to see the middle.] ...{capped_note}\n"
             + _spill_signal(text, head, len(text) - tail, max(200, cap // 4))
             + text[-tail:])
@@ -16578,10 +16621,13 @@ def record_tool_result(ctx, name, args, out):
 def _carry_record_locked(key, name, args, out):
     """The body of record_tool_result, called with _CARRY_LOCK held."""
     st = _carry_load(key)
+    # The inline spill excerpt is a same-turn aid; the carry keeps the head, the tail and
+    # the pointer, not the excerpt again on every later request (A-2026-10-10-02).
+    stored = _strip_spill_excerpt(out)
     entry = {"tool": name, "args": _carry_args_brief(args or {}),
-             "out": out[:_CARRY_MAX_ENTRY], "at": int(time.time()),
+             "out": stored[:_CARRY_MAX_ENTRY], "at": int(time.time()),
              "run": int(st.get("run") or 0)}
-    if len(out) > _CARRY_MAX_ENTRY:
+    if len(stored) > _CARRY_MAX_ENTRY:
         entry["cut"] = True
     path = str((args or {}).get("path") or "")
     if path:
