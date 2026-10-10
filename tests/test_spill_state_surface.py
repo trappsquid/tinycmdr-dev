@@ -39,12 +39,14 @@ Proven on Windows by the harness's own analysis: a 30,045-char tool result lost 
 middle characters to truncate_middle, and re-issuing the call with `raw=true` lost the same
 middle (raw bypasses digestion, not the cap). These checks pin the replacement: the whole text
 lands on disk, the prompt gets both ends plus a pointer that works, and a spill that cannot be
-written degrades to the old truncation instead of breaking the run.
+written degrades to the old truncation instead of breaking the run. What lands at rest is
+the masked copy, in an owner-only folder (A-2026-10-10-07).
 """
     import json
     import os
     import re
     import shutil
+    import stat
     import sys
     import tempfile
     import time
@@ -96,6 +98,42 @@ written degrades to the old truncation instead of breaking the run.
                   "the pointer says how to read it and not to re-run the command")
             check("find_tools" in out,
                   "the pointer names find_tools for a hidden search_files (%s)" % out[:120])
+
+            # ---- a secret in a tool result is masked BEFORE it lands at rest --------------
+            # A-2026-10-10-07: cap_output spilled the raw text and the run loop's scrub
+            # came later, so a secret a tool result carried sat raw in spill/ on disk.
+            sec = "sk-spill-leak-0123456789"
+            prev_secrets = fb._SECRETS
+            fb._SECRETS = set(fb._SECRETS) | {sec}
+            try:
+                body2 = (sec + " head of the result " + "S" * 12000
+                         + " middle " + "T" * 12000 + " END")
+                out4 = fb.cap_output("shell", body2, "command output")
+                m2 = re.search(r"spill/([A-Za-z0-9_.-]+\.txt)", out4)
+                spilled2 = ((fb.BASE_DIR / "spill" / m2.group(1)).read_text(encoding="utf-8")
+                            if m2 else "")
+                check(sec not in spilled2 and "«redacted»" in spilled2,
+                      "the spilled file carries no secret")
+                check(sec not in out4, "and the prompt copy is masked too, head included")
+                row2 = (next((e for e in fb._spill_rows()
+                              if e.get("path") == "spill/" + m2.group(1)), None)
+                        if m2 else None)
+                check(row2 is None or sec not in (row2.get("first") or ""),
+                      "and the index row's first line carries no secret")
+            finally:
+                fb._SECRETS = prev_secrets
+
+            # ---- the folder itself is owner-only -----------------------------------------
+            if os.name != "nt":
+                sp = fb.BASE_DIR / "spill"
+                check(stat.S_IMODE(sp.stat().st_mode) == 0o700,
+                      "the spill dir is created 0700")
+                os.chmod(sp, 0o755)
+                fb._spill_dir()
+                check(stat.S_IMODE(sp.stat().st_mode) == 0o700,
+                      "an existing wide spill dir is tightened when touched")
+            else:
+                print("skip the spill dir mode checks (Windows has no POSIX mode bits)")
 
             # ---- the index is budgeted per render, and says what it left out --------------
             # A-2026-10-10-01: every request re-bought the session's whole spill index -

@@ -3857,8 +3857,18 @@ def _spill_rotate(keep):
         log.debug("spill rotation skipped: %s", e)
 
 def _spill_dir():
+    """The spill folder, owner-only. The text written here is masked by both writers
+    (cap_output, the delegate spill), but mkdir's mode is umask-blind and a folder an
+    older build made 0755 keeps what it has - a multi-user box could list the names
+    and sizes of what it wrote - so the mode is set at creation and tightened when
+    found wide (A-2026-10-10-07)."""
     d = BASE_DIR / "spill"
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        if stat.S_IMODE(d.stat().st_mode) & 0o077:
+            os.chmod(d, 0o700)
+    except OSError:
+        pass
     return d
 
 
@@ -4114,9 +4124,14 @@ def cap_output(name, text, label="output", limit=None, session=None):
     """Cap a tool result, spilling the whole text to disk first when it is over the limit.
 
     Returns the text unchanged when it fits, a head+tail window plus a pointer when it does
-    not, and plain truncation when the spill itself fails.
+    not, and plain truncation when the spill itself fails. Masked first: the copy that
+    lands on disk is the same one the model gets.
     """
-    text = str(text or "")
+    # scrub BEFORE anything is measured, hashed, written or returned (A-2026-10-10-07):
+    # the run loop's own scrub came after this function, so the raw text - a secret
+    # included - was the copy that sat in spill/ at rest. One masked text drives the
+    # digest, the file, the index row and the window, so all four agree.
+    text = scrub(str(text or ""))
     try:
         cap = (int(limit) if limit else
                mem_limit_chars("tool_output_max_chars", 10000,
@@ -13995,7 +14010,9 @@ def _spill_subagent_answer(answer, ctx, cap=2000):
     session, so the pointer names a file that exists. Nothing is written when the render
     will not trim - there is no pointer to back.
     """
-    text = str(answer or "")
+    # Masked before it is measured or written, like cap_output (A-2026-10-10-07):
+    # the file at rest is the same text the parent gets, secrets «redacted».
+    text = scrub(str(answer or ""))
     if len(_SUBAGENT_RESULT_RX.sub("", text).strip()) <= cap:
         return ""
     try:
