@@ -24849,12 +24849,22 @@ class CliDestination(Destination):
         self._row = None
 
 
-COPY_FILE = Path(tempfile.gettempdir()) / "tinycmdr-copy.txt"
+def copy_file_dir():
+    """The Ctrl-Y copy file's own directory: per-user, so another account cannot sit at
+    the file this one trusts (Windows' temp dir is already per-user, so the account name
+    is the tag there)."""
+    uid = getattr(os, "getuid", None)
+    tag = (str(uid()) if uid is not None
+           else re.sub(r"[^A-Za-z0-9_.-]", "_", os.environ.get("USERNAME") or "user"))
+    return Path(tempfile.gettempdir()) / ("tinycmdr-%s" % tag)
+
+
+COPY_FILE = copy_file_dir() / "tinycmdr-copy.txt"
 COPY_OSC_LIMIT = 100_000         # characters; a terminal will take a clipboard payload this big
 
 
 def copy_file_cleanup():
-    """Remove the Ctrl-Y copy file. Called when the app exits.
+    """Remove the Ctrl-Y copy file, and its per-user directory when it is empty.
 
     The file is a scratch door (the next copy overwrites it silently), and a copy of
     an answer carrying a secret must not sit at a predictable temp path for ever -
@@ -24863,6 +24873,11 @@ def copy_file_cleanup():
         COPY_FILE.unlink(missing_ok=True)
     except OSError as e:
         log.debug("could not remove %s: %s", COPY_FILE, e)
+        return
+    try:
+        COPY_FILE.parent.rmdir()     # empty now; anything else in there keeps the dir
+    except OSError:
+        pass
 
 
 def clipboard_commands():
@@ -25272,10 +25287,40 @@ class AppScreen(TuiScreen):
             return False
 
     def _copy_file(self, text):
-        """The copy that always lands, 0600, at a path the status line names."""
+        """The copy that always lands, 0600, at a path the status line names.
+
+        The landing is guarded because the path is predictable: the directory must be
+        ours (per-user, 0700 - another account can pre-place the file otherwise), the
+        mode is set at creation instead of chmod-after, and whatever sits at the path
+        must be a plain file - a planted symlink was followed, and the file it pointed
+        at took the copied text (A-2026-10-08-86).
+        """
         try:
-            COPY_FILE.write_text(text, encoding="utf-8")
-            os.chmod(COPY_FILE, 0o600)
+            d = COPY_FILE.parent
+            d.mkdir(mode=0o700, parents=True, exist_ok=True)
+            st = os.lstat(d)
+            if not stat.S_ISDIR(st.st_mode):
+                raise OSError("copy dir is not a directory: %s" % d)
+            if hasattr(os, "getuid"):
+                if st.st_uid != os.getuid():
+                    raise OSError("copy dir belongs to another account: %s" % d)
+                if stat.S_IMODE(st.st_mode) & 0o077:
+                    os.chmod(d, 0o700)       # ours, and only ours
+            if (os.path.lexists(COPY_FILE)
+                    and not stat.S_ISREG(os.lstat(COPY_FILE).st_mode)):
+                raise OSError("copy path is not a plain file: %s" % COPY_FILE)
+            fd = os.open(COPY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
+                         0o600)
+            try:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)     # an existing looser mode is not kept
+                fh = os.fdopen(fd, "w", encoding="utf-8")
+            except OSError:
+                os.close(fd)
+                raise
+            with fh:
+                fh.write(text)
             return True
         except OSError:
             log.debug("copy file failed: %s", COPY_FILE, exc_info=True)

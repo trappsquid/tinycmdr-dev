@@ -1160,6 +1160,30 @@ if HAVE_APP:
             else:
                 check("--app: the fallback file is the reader's own, 0600",
                       (_mode & 0o777) == 0o600, oct(_mode))
+            # the write must not be pointed at another file: a symlink planted at the
+            # path used to be followed by write-then-chmod, so the file it pointed at
+            # took the copied text (A-2026-10-08-86).
+            _victim = _copy_dir / "victim.txt"
+            _victim.write_text("the victim's own text", encoding="utf-8")
+            _plant = _copy_dir / "planted.txt"
+            try:
+                _plant.symlink_to(_victim)
+            except OSError as _sym:
+                # no symlink rights (an unprivileged Windows box): say so out loud,
+                # never a silent skip - the refusal needs a symlink to grade
+                check("--app: a planted symlink at the copy path is refused",
+                      False, "cannot grade: os.symlink refused (%s)" % _sym)
+            else:
+                _saved_cf86 = fb.COPY_FILE
+                fb.COPY_FILE = _plant
+                try:
+                    _refused = _cscr._copy_file("planted payload") is False
+                finally:
+                    fb.COPY_FILE = _saved_cf86
+                check("--app: a planted symlink at the copy path is refused, not written through",
+                      _refused
+                      and _victim.read_text(encoding="utf-8") == "the victim's own text",
+                      (str(_plant), _victim.read_text(encoding="utf-8")[:40]))
             check("--app: the host's clipboard tool is offered the same text",
                   _helper_calls and _helper_calls[-1] == len(_copies[3][1]), _helper_calls)
         finally:
@@ -1396,6 +1420,11 @@ if HAVE_APP:
                 _reprints.append(1)
 
             def write_line(self, line):
+                pass
+
+            def request_exit(self):
+                # _cli_app_worker's finally asks the screen to leave; without this the
+                # worker's own exit raises AttributeError in its daemon thread.
                 pass
 
         _saved_screen_cls = fb.AppScreen
