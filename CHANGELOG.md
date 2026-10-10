@@ -5,6 +5,13 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The console runs `/plan` and `/fork`:** both were advertised in `/tinycmdr help` and answered "not a command" while the chat lane ran them; the console speaks the chat lane's words now (tests/test_interaction_surface.py).
+- **A session key keeps its own file:** characters a file name cannot carry are percent-quoted, so `a2a-user:alice` and `a2a-user/alice` no longer share one session file, and a restart reloads each conversation under the key its file carries (tests/test_harness_surface.py).
+- **The Ctrl-Y copy file cannot be hijacked:** it lives in a per-user 0700 directory, is created with its 0600 mode instead of chmod-after, and a planted symlink at its path is refused rather than followed (tests/test_tui.py).
+
 ## [1.0.99] - 2026-10-09
 
 ### Changed
