@@ -2286,10 +2286,10 @@
     {
       "id": "archives-carry-only-their-platform-files",
       "title": "each archive carries only the files its own platform reads",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "b53619d",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The Windows task's respawner (tinycmdr-supervise.py, 12.4 KB) rode in the macOS and Linux packages where nothing names it, the doc-only brand image (assets/tinycmdr-helm.png, 120 KB) rode in all three where only the product tree's doc reads it, and field-notes.md - the host's own known-failure library, grown on the box - sat in SHIP one build away from riding into every download; PLATFORM_FILES gives the respawner to the Windows container, the helm moved to product-manifest.json's extra, field-notes.md joined FORBIDDEN_NAMES, and a fresh public build measures 129 KB / 128 KB / 123 KB smaller (linux / macos / win).",
       "gate": "test_contracts derives the respawner's platform from the kits' own text; the built archives were extracted and counted, check-package-assets / -page / -modes and smoke-install.sh all green on them, and the whole gate green"
@@ -2297,10 +2297,10 @@
     {
       "id": "batch-one-verb",
       "title": "one verb lands a batch, and the generator owns every published number",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "3366c26",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "maintenance/batch.sh renders the published numbers, runs the whole gate at --jobs 4, commits with its -m message and pushes, replacing five hand steps (render, chase the prose numbers, gate, commit, push) whose serial gate measured 346 s against ~100 s at -j4; measured-block.py --write now also rewrites the four prose numbers the gate grades, so nothing in the doc is fixed by hand.",
       "gate": "tests/test_measured_doc.py falsifies the writer on a doctored prose number; the whole gate green via batch.sh"
@@ -2308,10 +2308,10 @@
     {
       "id": "suites-merged-106-to-53",
       "title": "the gate runs 53 suite files, not 106, with every check conserved",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "877d0b0",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Same-surface suites run together in one file per group (36 files absorb 89 members): each member's body becomes a function and the runner snapshots env, cwd and sys.path around it, the globals()-discovery idiom is rewritten to a per-member namespace, reindentation is tokenizer-aware so embedded worker scripts keep their bytes, suites that can exit 77 (checkin, tui, webui_page, update_script) stay their own files so a host that cannot grade them still reads SKIP, and the two names something reads by path keep theirs (test_envelope.py - run_all refuses a tree without it; test_status.py - AGENTS.md, docs and the pre-push hook run it).",
       "gate": "per-member conservation: string literals, printed ok/FAIL counts and exit codes all equal the member's standalone run (36/36 groups), plus the whole gate green and CI"
@@ -2319,10 +2319,10 @@
     {
       "id": "wire-slice-six-findings",
       "title": "the wire and lane slice: six findings, one pass",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "cd8c69d",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Six findings from the whole-harness review: a server-announced SSE error (llama.cpp's `error:` event, vLLM's `data: {\"error\": ...}` chunk) was skipped until the [DONE] after it passed every terminal check and the partial text returned as the answer; the idle clock advanced on `:` keep-alive comments, so a wedged generation that kept pinging never tripped `stream_idle_seconds`; every stream failure was logged as a process-wide streaming downgrade though a prefill timeout, an idle gap or a mid-stream break leaves the endpoint eligible; the inline tool-call parser ran any reply that mentioned the markup, so a quoted example was dispatched as a real call and stripped; the deaf-listener restart spawned its replacement while the old process still held the folder lock, so the replacement aborted and the old process exited with nothing left to relaunch it; and a zombie worker's exit cleared the new worker's run from the busy set.",
       "gate": "each new check is RED on the pre-fix build (TINYCMDR_SRC): an error-only stream raised 'not a stream', both SSE error shapes returned 'partial answer', the pinging wedge read 'closed after 1 chunk(s) with no finish_reason', the fallback log carried 'rest of THIS process', the quoted example executed (a real tool message in the next payload), the zombie cleared the flag (set()), and the restart order read ['spawn', 'exit']; the whole gate green at --jobs 4 on the batch"
@@ -2330,10 +2330,10 @@
     {
       "id": "page-slice-six-findings",
       "title": "the page slice: six findings, one pass",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1147b99",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Six page findings from the whole-harness review: the A2UI validator accepted a surface that is not a tree (a cycle, a child listed twice) and the recursive renderer then threw RangeError out of the paint, leaving 'trouble' for ever - the validator refuses those shapes and a2uiNode carries a visited set and a node budget; a poll or an open reply that landed after a conversation switch painted the other conversation's lines; the cookie handover removed the token from localStorage only and kept sending it as a header, so a link-opened tab never used the cookie; a download was named from the header's ASCII fallback alone; an oversized upload went up anyway and its 413 read as 'Failed to fetch'; and a 403 from the login probe (the Host/Origin check) was read as cookie-authenticated.",
       "gate": "each new page check is RED on the pre-fix build (the page suite swaps the pre-fix module into the tree): the token rode every call (['test-token','test-token','test-token']), the upload carried it, the token note and the address note were empty, the download saved 'caf_.pdf', the oversized file was uploaded, the left conversation's transcript leaked, and a self-referencing card left the stage 'trouble' with the rest of the run unpainted; the validator's tree checks are RED via tc-falsify; post-fix the page suite, the a2 suite and the whole gate are green"
@@ -2341,10 +2341,10 @@
     {
       "id": "setup-and-doors-eleven",
       "title": "the setup wizard and the doors: eleven findings, one batch",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "f2286dc",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Eleven findings from the whole-harness review: the setup wizard echoed the model key, both chat tokens, the page token and the provider key; `/setup` and `config set` swapped the bare file sections into the live CONFIG (a file without llm.max_turns then died with KeyError); the wizard's write reverted anything another process changed while it was open; `update` applied older releases and flattened a development checkout's uncommitted edits silently; the Windows shim's update branch read %ERRORLEVEL% before the updater ran; update.ps1 and the shim's fetch ignored TLS 1.2; update.ps1 ignored TINYCMDR_UPDATE_URL; the restart helper matched its install by substring; a failed icacls printed \"locked\"; the Unix installer truncated .env in place; and update.sh stayed quiet about a moved requirements.txt.",
       "gate": "every new check is RED on the pre-fix build: tests/test_verbs.py (staged with TINYCMDR_TEST_APP) fails the secret-prompt, .env, concurrent-write, full-merge and update-guard checks (11 FAILs); tests/test_installer_windows.py fails its seven updater-path shape checks against the pre-fix scripts; tests/test_installer_unix.py fails the .env-replacement check against the pre-fix installer; tests/test_update_script.py fails the requirements hint against the pre-fix update.sh; all four suites and the whole gate are green on the batch"
@@ -2352,10 +2352,10 @@
     {
       "id": "mattermost-lane-thirteen-findings",
       "title": "the Mattermost lane: thirteen findings, one pass",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "b5f78bd",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Thirteen findings from the whole-harness review, all in the Mattermost lane: the confirm question renders through the same prompt as the ask_user door (numbered options, how to answer, /stop and the waiting window) and the terminal prompt numbers its options too; the ask tone gets its own blue bar; the post limit and the send_file note are counted in UTF-16 units; the transient retry's pause is capped backoff inside one per-message budget; an edit the server answers not-found re-opens the line and every ref the reporter holds follows the new post, while update(None) posts the Done line of a run whose opening status post never landed; the note and narration restatement folds bypass their rate-limit gaps; the newest open question takes the operator's message and the confirm acks it; the queued notice names the watchdog interval only when the watchdog is on; the dead Destination.max_lines is gone.",
       "gate": "each new check is RED on the pre-fix build (TINYCMDR_SRC): test_stall fails the UTF-16 ceiling (16,500 units), the send_file note (32,000), the retry pauses ([1.0, 1.0, 1.0]), the dead-edit re-open, the Done line, the newest-question and the 0-minute notice checks; test_checkin fails both restatement-in-the-gap checks; test_interaction_surface fails the numbered-options checks; all three suites and the whole gate are green on the batch"
