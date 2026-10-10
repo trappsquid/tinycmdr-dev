@@ -996,6 +996,141 @@ def test_a_flaky_server_cannot_hold_the_channel_for_a_fixed_second_per_chunk():
           sum(slept) <= fb.MM_POST_RETRY_BUDGET + 0.01, slept)
 
 
+def test_a_dead_post_id_reopens_the_live_line():
+    """A-268 (2026-10-06): once the server starts rejecting the live narration post
+    id, every later edit failed at debug and the line froze on its last words for
+    the rest of the run. An edit the server answers "not found" re-opens the line,
+    and the reporter's ref follows the post it was re-opened as."""
+    posted = []
+
+    def _create(post):
+        pid = "post-%d" % (len(posted) + 1)
+        posted.append((pid, post["message"]))
+        return {"id": pid}
+
+    class ResourceNotFound(RuntimeError):
+        pass
+
+    class _Posts:
+        @staticmethod
+        def create_post(post):
+            return _create(post)
+
+        @staticmethod
+        def update_post(post_id, payload):
+            raise ResourceNotFound("Unable to get the post.")
+
+    class _Door(fb.MattermostDispatcher):
+        def __init__(self):
+            (STAGE / "state.json").unlink(missing_ok=True)
+            super().__init__()
+            self.driver = type("D", (), {"posts": _Posts()})()
+
+    saved_color = fb.want_color
+    saved_gap = fb.CONFIG["agent"].get("checkin_stream_seconds")
+    fb.want_color = lambda c: None
+    fb.CONFIG["agent"]["checkin_stream_seconds"] = 0
+    try:
+        rep = fb.RunReporter(fb.MattermostDestination(_Door(), "chan-dead", None),
+                             "sess-dead")
+        rep.narration("working on the backup", new_turn=True)
+        rep.narration("working on the backup, unchanged", new_turn=False)
+        check("a dead edit re-opens the line with the current text",
+              len(posted) == 3
+              and posted[-1][1] == "💬 working on the backup, unchanged", posted)
+        check("...and the reporter's ref follows the new post",
+              rep.stream_ref.get(rep.src) == posted[-1][0],
+              (rep.stream_ref, posted))
+    finally:
+        fb.want_color = saved_color
+        if saved_gap is None:
+            fb.CONFIG["agent"].pop("checkin_stream_seconds", None)
+        else:
+            fb.CONFIG["agent"]["checkin_stream_seconds"] = saved_gap
+
+
+def test_a_transient_edit_failure_does_not_duplicate_the_line():
+    """The other half of A-268's discrimination: a blip (429/5xx) is not a dead
+    post - the line is left alone for the next tick's retry, never re-posted."""
+    posted = []
+
+    def _create(post):
+        pid = "post-%d" % (len(posted) + 1)
+        posted.append((pid, post["message"]))
+        return {"id": pid}
+
+    class _Posts:
+        @staticmethod
+        def create_post(post):
+            return _create(post)
+
+        @staticmethod
+        def update_post(post_id, payload):
+            raise RuntimeError("429 Too Many Requests")
+
+    class _Door(fb.MattermostDispatcher):
+        def __init__(self):
+            (STAGE / "state.json").unlink(missing_ok=True)
+            super().__init__()
+            self.driver = type("D", (), {"posts": _Posts()})()
+
+    saved_color = fb.want_color
+    saved_gap = fb.CONFIG["agent"].get("checkin_stream_seconds")
+    fb.want_color = lambda c: None
+    fb.CONFIG["agent"]["checkin_stream_seconds"] = 0
+    try:
+        rep = fb.RunReporter(fb.MattermostDestination(_Door(), "chan-blip", None),
+                             "sess-blip")
+        rep.narration("working on the backup", new_turn=True)
+        rep.narration("working on the backup, unchanged", new_turn=False)
+        check("a transient edit failure is not mistaken for a dead post",
+              len(posted) == 2 and rep.stream_ref.get(rep.src) == posted[-1][0],
+              (rep.stream_ref, posted))
+    finally:
+        fb.want_color = saved_color
+        if saved_gap is None:
+            fb.CONFIG["agent"].pop("checkin_stream_seconds", None)
+        else:
+            fb.CONFIG["agent"]["checkin_stream_seconds"] = saved_gap
+
+
+def test_a_failed_status_post_still_leaves_a_done_line():
+    """A-269 (2026-10-06): with the opening status post failing, status_ref stayed
+    None and finish() returned at once - no Done line, ever, even after the
+    endpoint recovered and the run completed cleanly."""
+    posted = []
+    calls = {"n": 0}
+
+    class _Posts:
+        @staticmethod
+        def create_post(post):
+            calls["n"] += 1
+            if calls["n"] <= 2:          # both attempts of the opening status line
+                raise RuntimeError("connection refused")
+            pid = "post-%d" % calls["n"]
+            posted.append((pid, post["message"]))
+            return {"id": pid}
+
+    class _Door(fb.MattermostDispatcher):
+        def __init__(self):
+            (STAGE / "state.json").unlink(missing_ok=True)
+            super().__init__()
+            self.driver = type("D", (), {"posts": _Posts()})()
+
+    saved_color = fb.want_color
+    fb.want_color = lambda c: None
+    try:
+        rep = fb.RunReporter(fb.MattermostDestination(_Door(), "chan-done", None),
+                             "sess-done")
+        check("the opening status post failed", rep.status_ref is None, rep.status_ref)
+        rep.finish()
+    finally:
+        fb.want_color = saved_color
+    check("the Done line still lands", any("Done" in t for _, t in posted), posted)
+    check("...and the reporter holds the post it landed as",
+          rep.status_ref == "post-3", (rep.status_ref, posted))
+
+
 def test_a_streamed_draft_belongs_to_the_run_that_streamed_it():
     """A-265 + A-269 (2026-10-06): `drop` parked the streamed draft under the CHANNEL
     and `_post` gave it to the next colourless post from ANYONE. Measured here with

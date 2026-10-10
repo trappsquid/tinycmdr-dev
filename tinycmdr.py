@@ -22796,7 +22796,11 @@ class RunReporter:
         self.reason_ref = {}       # the reasoning line, where the lane wants one
         self.last_reason = {}
         self.lock = threading.Lock()
-        if CONFIG["agent"].get("progress_updates", True):
+        # Whether a live status line was wanted at all: finish() reads this to tell
+        # "this run never had a line" (progress_updates off) from "the line's post
+        # is gone" - the second case still posts the Done line (measured 2026-10-06).
+        self.status_wanted = bool(CONFIG["agent"].get("progress_updates", True))
+        if self.status_wanted:
             self.status_ref = self.dest.line("status", label)
 
     # -- what the operator reads ------------------------------------------
@@ -22868,8 +22872,11 @@ class RunReporter:
                      self.session_key, self.note_repeats[src], text[:80])
             ref = self.note_ref.get(src)
             if ref:
-                self._redraw(ref, "note", f"💬 {text}", src)
-                return
+                new_ref = self._redraw(ref, "note", f"💬 {text}", src)
+                self.note_ref[src] = new_ref
+                if new_ref is not None:
+                    return
+                # the line is gone: the restatement is posted as a new line below
         else:
             self.note_repeats[src] = 0
         self.note_text[src] = text
@@ -22950,7 +22957,13 @@ class RunReporter:
                 self.stream_ref[src] = new_ref
                 self.stream_open[src] = body
         else:
-            self._redraw(ref, "narration", body, src)
+            # The redraw returns the ref that now names the line: the same id, or
+            # the fresh one a lane handed back when the server had thrown the post
+            # away - storing it is what stops the next tick editing a dead id
+            # (measured 2026-10-06: the live line froze on its last words).
+            new_ref = self._redraw(ref, "narration", body, src)
+            with self.lock:
+                self.stream_ref[src] = new_ref
 
     def narration_live(self, src=None):
         with self.lock:
@@ -22998,7 +23011,9 @@ class RunReporter:
             with self.lock:
                 self.reason_ref[src] = self._draw("reasoning", body, src)
         else:
-            self._redraw(ref, "reasoning", body, src)
+            new_ref = self._redraw(ref, "reasoning", body, src)
+            with self.lock:
+                self.reason_ref[src] = new_ref
 
     def narration_drop(self, src=None):
         """The streamed text WAS the final answer: the answer is posted as its
@@ -23128,7 +23143,14 @@ class RunReporter:
                 if cur and cur[1] is None:
                     self.card_last[src] = (cur[0], new_ref, cur[2], cur[3])
         else:
-            self._redraw(keep, kind, body, src)
+            new_ref = self._redraw(keep, kind, body, src)
+            if new_ref is not keep:
+                with self.lock:
+                    if self.tool_ref.get(src) == keep:
+                        self.tool_ref[src] = new_ref
+                    cur = self.card_last.get(src)
+                    if cur and cur[1] == keep:
+                        self.card_last[src] = (cur[0], new_ref, cur[2], cur[3])
 
     @staticmethod
     def _batch_text(lines):
@@ -23145,7 +23167,8 @@ class RunReporter:
         if isinstance(args, str) and args.startswith("ask_user:"):
             # the harness naming what it is waiting for is not a tool call
             if self.status_ref:
-                self.dest.update(self.status_ref, "status", str(args), src)
+                self.status_ref = self.dest.update(self.status_ref, "status",
+                                                   str(args), src)
             return
         if name == "generating":
             # A heartbeat ("13.4 tok/s"), not work: it must not count as a step.
@@ -23153,8 +23176,8 @@ class RunReporter:
             # callback - so a check-in read "step 780" on a run that had made ~65
             # tool calls. It shows the model's speed in the status line instead.
             if self.status_ref:
-                self.dest.update(self.status_ref, "status",
-                                 str(args or "generating"), src)
+                self.status_ref = self.dest.update(self.status_ref, "status",
+                                                   str(args or "generating"), src)
             return
         now = time.time()
         with self.lock:
@@ -23190,9 +23213,9 @@ class RunReporter:
             dup = (AGENT.live_usage.get(self.session_key) or {}
                    ).get("duplicates_blocked", 0)
             suffix = f" · {dup} duplicate blocked" if dup else ""
-            self.dest.update(edit, "status",
-                             f"{self.label} {steps} step(s), last: `{name}`{suffix}",
-                             src)
+            self.status_ref = self.dest.update(
+                edit, "status",
+                f"{self.label} {steps} step(s), last: `{name}`{suffix}", src)
 
     def ask(self, question, options=None, wait=300.0, label=None):
         """Ask the operator, wherever this run's destination can reach one."""
@@ -23290,7 +23313,8 @@ class RunReporter:
     def finish(self, ok=True):
         """The Done line, in place of the status line this run opened with."""
         ref = self.status_ref
-        if not ref:
+        if not ref and not self.status_wanted:
+            # progress_updates is off: this run never had a live line to close
             return
         if (AGENT.last_usage.get(self.session_key) or {}).get("infra_failed"):
             # An endpoint that could not be reached is a failure however cleanly
@@ -23321,9 +23345,12 @@ class RunReporter:
             # so: measured 2026-09-25, a 0-step run's green done line read as a
             # finished task while its reply only described work that never started.
             extra += " · no tool was used - nothing was read from this box"
-        self.dest.update(ref, "final" if ok else "error",
-                         f"{'✅' if ok else '⚠️'} Done — {steps} step(s) in "
-                         f"{elapsed}s · model `{model}`{extra}")
+        text = (f"{'✅' if ok else '⚠️'} Done — {steps} step(s) in "
+                f"{elapsed}s · model `{model}`{extra}")
+        # `update(None)` posts the line fresh on a lane that can, so a run whose
+        # opening status post never landed still ends with its Done line
+        # (measured 2026-10-06: the run finished in silence).
+        self.status_ref = self.dest.update(ref, "final" if ok else "error", text)
 
 
 class NowhereDestination(Destination):
@@ -31172,8 +31199,20 @@ class MattermostDestination(Destination):
                             draft_id=draft)
 
     def update(self, ref, kind, text, src="main"):
-        self.d._edit(ref, self.channel_id, text,
-                     color=want_color(self._color(kind)))
+        """Redraw a line; a post the server no longer has cannot be edited.
+
+        `None` posts the line fresh, which is what a caller with no live ref needs
+        (the Done line of a run whose status post never landed). A dead id is the
+        same case: the server 404s the edit, so the text is posted and the NEW id
+        returned, and the caller's ref names a live line again instead of freezing
+        on its last words for the rest of the run (measured 2026-10-06).
+        """
+        if ref is None:
+            return self.line(kind, text, src)
+        alive = self.d._edit(ref, self.channel_id, text,
+                             color=want_color(self._color(kind)))
+        if alive is False:
+            return self.line(kind, text, src)
         return ref
 
     def drop(self, ref):
@@ -31479,6 +31518,22 @@ class MattermostDispatcher:
         msg = str(err).lower()
         return "rootid" in msg or "root id" in msg or "invalid root" in msg
 
+    @staticmethod
+    def _is_dead_post(err):
+        """True when Mattermost says the POST itself is gone, not that the edit
+        failed transiently.
+
+        The driver raises its `ResourceNotFound` (a 404) with the API's message
+        ("Unable to get the post."); a 400 for a dead id carries the same wording.
+        Anything else is TRANSIENT: re-posting on it would duplicate the line,
+        while re-posting on a dead id is the recovery (measured 2026-10-06: the
+        live narration line froze on its last words for the rest of the run)."""
+        if type(err).__name__ == "ResourceNotFound":
+            return True
+        msg = str(err).lower()
+        return ("not found" in msg or "unable to get the post" in msg
+                or "invalid post" in msg)
+
     def _post(self, channel_id, root_id, text, color=None, touch=True, draft_id=None):
         """Post text (chunked); returns the new post's id, or None.
 
@@ -31504,10 +31559,13 @@ class MattermostDispatcher:
             draft_id = None      # a coloured line is not the answer replacing a draft
         chunks = list(self._chunks(text))
         if draft_id and chunks:
-            # Seamlessly transform the streamed draft in place: no tombstone, no dupe
-            self._edit(draft_id, channel_id, chunks[0], color=None)
-            post_id = draft_id
-            chunks = chunks[1:]
+            # Seamlessly transform the streamed draft in place: no tombstone, no dupe.
+            # A draft the server has already thrown away cannot be transformed - the
+            # text would land nowhere, so the chunk is posted fresh instead (the id
+            # stays dead, which is the server's own tombstone for that line).
+            if self._edit(draft_id, channel_id, chunks[0], color=None) is not False:
+                post_id = draft_id
+                chunks = chunks[1:]
         retry_budget = MM_POST_RETRY_BUDGET
         retries = 0
         for chunk in chunks:
@@ -31582,7 +31640,12 @@ class MattermostDispatcher:
 
         `color` keeps a post's bar when the body is rewritten - without it an edit
         would silently strip the bar off a line that is being updated every couple of
-        seconds (the working line, the streamed narration)."""
+        seconds (the working line, the streamed narration).
+
+        Returns False when the server says the post itself is GONE: the caller
+        re-opens the line instead of redrawing a dead id for the rest of the run
+        (measured 2026-10-06). Any other failure is swallowed as before - the next
+        tick retries the edit, and a re-post would duplicate the line."""
         self._touch(channel_id)   # a live status edit is progress too
         payload = {"id": post_id, "channel_id": channel_id, "message": text}
         if color:
@@ -31592,8 +31655,14 @@ class MattermostDispatcher:
             payload["props"] = {}
         try:
             self.driver.posts.update_post(post_id, payload)
+            return True
         except Exception as e:
+            if self._is_dead_post(e):
+                log.warning("mattermost: post %s is gone (%s) - re-opening the "
+                            "line", post_id, e)
+                return False
             log.debug("failed to edit post %s: %s", post_id, e)
+            return True
 
     # -- sending a file into the chat ---------------------------------------
     def send_file(self, channel_id, root_id, path, note=""):
