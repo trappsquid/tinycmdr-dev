@@ -651,6 +651,26 @@ check("...with the transcript left to take the width",
       _app_rail.RAIL_WIDTH == 26, _app_rail.RAIL_WIDTH)
 _app_rail.show_rail = True
 
+# --- the rail says what ↑↓ are RIGHT NOW -----------------------------------
+# The arrows are the composer's caret the moment it holds text (the binding is
+# filtered on `not self.input.text`), and the rail kept promising "scroll" anyway
+# (A-2026-10-06-303).
+_app_k = fb.AppScreen(colour=True, tier="truecolor")
+
+
+def _rail_plain():
+    return "".join(t for _, t in _app_k._sidebar_text().__pt_formatted_text__())
+
+
+_hint_empty = _rail_plain()
+_app_k.input.text = "a paste"
+_hint_typed = _rail_plain()
+check("the rail promises ↑↓ scroll while the composer is empty",
+      "\u2191\u2193 PgUp/PgDn  scroll" in _hint_empty, _hint_empty[-200:])
+check("...and says the arrows are the caret once it holds text",
+      "caret" in _hint_typed and "\u2191\u2193 PgUp/PgDn  scroll" not in _hint_typed,
+      _hint_typed[-200:])
+
 # --- round-4: no blank band around a table, and nothing trailing ----------
 _t5 = fb.TuiScreen(out=io.StringIO(), width=90, tier="truecolor")
 _t5._plain_fallback = True
@@ -672,6 +692,23 @@ check("the composer reports what is in it and names the keys",
 check("...and grows to show a long paste, to a ceiling",
       _app5._composer_rows() == fb.AppScreen.COMPOSER_MAX_ROWS
       and _app5._composer_rows() > 1, _app5._composer_rows())
+
+# --- the composer's estimate follows a RESIZE, not the width at build ------
+# `self.width` is set once in __init__ (and again on Ctrl-W), so a terminal resize
+# left the row estimate - and the box it reserves - on the old width for ever
+# (A-2026-10-06-301).
+_app_r = fb.AppScreen(colour=True, tier="truecolor")
+_app_r.input.text = "x" * 200
+_saved_pane_r = _app_r._pane_width
+try:
+    _app_r._pane_width = lambda: 40
+    _rows_narrow = _app_r._composer_rows()
+    _app_r._pane_width = lambda: 120
+    _rows_wide = _app_r._composer_rows()
+finally:
+    _app_r._pane_width = _saved_pane_r
+check("the composer's rows follow the live pane width, not the build-time one",
+      _rows_narrow > _rows_wide, (_rows_narrow, _rows_wide))
 
 # --- the run's key is a filename; the editing surface is not one (Windows
 # measured 2026-09-22: a PromptSession in the key slot crashed _save() with
@@ -1101,6 +1138,8 @@ if HAVE_APP:
                   [_c[1] for _c in _copies[:3]] == ["# Answer\n\nbody of the answer",
                                                     "-> hi (2 chars)", "`shell` echo hi"],
                   [_c[1] for _c in _copies[:3]])
+            check("--app: at the oldest item the status says so, instead of 1/N again",
+                  "(oldest)" in _copies[2][0], _copies[2][0])
             check("--app: Ctrl-B copies the whole transcript, in the order it was drawn",
                   _copies[3][1] == "`shell` echo hi\n\n-> hi (2 chars)\n\n# Answer\n\nbody of the answer",
                   _copies[3][1])
@@ -1325,6 +1364,15 @@ if HAVE_APP:
         check("--app: ...it asks the one exit, and the record is taken once",
               _exits2 == [1] and _crash_scr.take_crash() == "", (_exits2, _text[:60]))
 
+        # A bare ESC used to quit outright - no confirm, no stop of the run in flight,
+        # and the rail's KEYS never listed it (A-2026-10-06-294). Only the model
+        # picker's ESC binding (filter=picking) is left.
+        _esc_bindings = [b for b in _crash_scr.app.key_bindings.bindings
+                         if any("escape" in str(k).lower() for k in b.keys)]
+        check("--app: no app-level ESC-quit binding is left (the picker's remains)",
+              len(_esc_bindings) == 1,
+              [tuple(str(k) for k in b.keys) for b in _esc_bindings])
+
         # A failure out of Application.run() itself (a renderer or layout error, a
         # closed stdin) used to skip the reprint entirely: print_final_inline() sat
         # after the try/finally. It reports on the REAL stream and exits non-zero.
@@ -1354,6 +1402,12 @@ if HAVE_APP:
         _saved_worker = fb._cli_app_worker
         _saved_console_off = fb.log_console_off
         _saved_cli_here = dict(fb._CLI)
+        # A Ctrl-Y fallback file must not outlive the app: one copy of an answer
+        # carrying a secret sat at a predictable temp path for ever (A-2026-10-06-300).
+        _cf300 = Path(tempfile.mkdtemp(prefix="tinycmdr-copy300-")) / "tinycmdr-copy.txt"
+        _cf300.write_text("a copy with a secret", encoding="utf-8")
+        _saved_cf300 = fb.COPY_FILE
+        fb.COPY_FILE = _cf300
         fb.AppScreen = _DeadScreen
         fb._cli_app_worker = lambda: None
         fb.log_console_off = lambda: None
@@ -1370,12 +1424,28 @@ if HAVE_APP:
             fb.AppScreen = _saved_screen_cls
             fb._cli_app_worker = _saved_worker
             fb.log_console_off = _saved_console_off
+            fb.COPY_FILE = _saved_cf300
             fb._CLI.clear()
             fb._CLI.update(_saved_cli_here)
         check("--app: a failure out of screen.run() reports on the real stream, rc=1",
               _code == 1 and "BOOM run" in _stderr.getvalue(),
               (_code, _stderr.getvalue()[:100]))
         check("--app: ...and the last answer is still reprinted", _reprints == [1], _reprints)
+        check("--app: the copy-file fallback does not outlive the app",
+              not _cf300.exists(), _cf300)
+
+        # ...and the reprint is the session's answers, not only the last one: the
+        # alternate screen had already wiped every earlier answer, and `self._final`
+        # kept one (A-2026-10-06-302).
+        _rs = fb.AppScreen(colour=False, tier="truecolor")
+        _rs.card("final", "FIRSTREPRINT one")
+        _rs.card("final", "SECONDREPRINT two")
+        _rbuf = io.StringIO()
+        with contextlib.redirect_stdout(_rbuf):
+            _rs.print_final_inline()
+        check("--app: the exit reprint carries the session's answers, not only the last",
+              "FIRSTREPRINT" in _rbuf.getvalue() and "SECONDREPRINT" in _rbuf.getvalue(),
+              _rbuf.getvalue()[:160])
 
         # A kill mid-event-loop used to end the process with the alternate screen still
         # active: the terminal was left inside the app's frame with no way back. The

@@ -24780,6 +24780,18 @@ COPY_FILE = Path(tempfile.gettempdir()) / "tinycmdr-copy.txt"
 COPY_OSC_LIMIT = 100_000         # characters; a terminal will take a clipboard payload this big
 
 
+def copy_file_cleanup():
+    """Remove the Ctrl-Y copy file. Called when the app exits.
+
+    The file is a scratch door (the next copy overwrites it silently), and a copy of
+    an answer carrying a secret must not sit at a predictable temp path for ever -
+    one Ctrl-Y was all it took, and nothing ever cleaned it (A-2026-10-06-300)."""
+    try:
+        COPY_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log.debug("could not remove %s: %s", COPY_FILE, e)
+
+
 def clipboard_commands():
     """This host's own clipboard tool, best first - the door that needs no terminal support."""
     if sys.platform == "darwin":
@@ -24894,6 +24906,7 @@ class AppScreen(TuiScreen):
         self._top = 0              # first transcript line the pane shows
         self.autofollow = True
         self._final = ""           # the last answer, for the reprint on exit
+        self._finals = []          # its predecessors too: one reprint per answer drawn
         self._crash = ""           # a failure on the app's thread, for _run_cli_app
         self._exit_requested = False
         self.app = None
@@ -25019,6 +25032,8 @@ class AppScreen(TuiScreen):
         super().card(kind, text, foot)
         if kind == "final":
             self._final = str(text)
+            self._finals.append(str(text))
+            del self._finals[:-self.REPRINT_ANSWERS]
 
     def _drop_narration(self):
         """Drop the run's draft region: the pane repaints, so nothing is filed."""
@@ -25061,10 +25076,18 @@ class AppScreen(TuiScreen):
         super().answer_card(ref, answer)
 
     def print_final_inline(self):
-        """After the alternate screen is gone: the session's last answer, back in
-        the terminal's own scrollback, so nothing is lost on exit."""
-        if self._final.strip():
-            print(answer_block(self._final))
+        """After the alternate screen is gone: the session's answers, back in the
+        terminal's own scrollback, so nothing is lost on exit.
+
+        One answer was all that came back (`self._final`), so everything earlier in
+        the session - which lives only in the app and in the transcript file - was
+        unreachable from the terminal it ran in (A-2026-10-06-302). Bounded to the
+        last REPRINT_ANSWERS answers; the whole session is in the transcript.
+        """
+        views = self._finals or ([self._final] if self._final.strip() else [])
+        for text in views:
+            if str(text).strip():
+                print(answer_block(str(text)))
 
     # -- the model picker, inside this Application ---------------------------
     def _pick_text(self):
@@ -25128,7 +25151,13 @@ class AppScreen(TuiScreen):
             self._copy_at = max(0, self._copy_at - 1)
         raw, kind = items[self._copy_at][2], items[self._copy_at][3]
         label = (TUI_KINDS.get(kind) or (kind,))[0] or kind or "line"
-        self._copy(raw, "%s %d/%d" % (label, self._copy_at + 1, len(items)))
+        where = "%s %d/%d" % (label, self._copy_at + 1, len(items))
+        if self._copy_at == 0:
+            # The walk has reached the top of the transcript; pressing again does
+            # nothing, and saying `1/N` once more read as if something had (measured
+            # 2026-10-06: five presses, five times `1/1`) (A-2026-10-06-299).
+            where += " (oldest)"
+        self._copy(raw, where)
 
     def copy_transcript(self):
         """Ctrl-B: every copyable item, in the order it was drawn."""
@@ -25264,13 +25293,17 @@ class AppScreen(TuiScreen):
             log.debug("app exit failed", exc_info=True)
 
     COMPOSER_MAX_ROWS = 6            # a paste has to be reviewable, to a ceiling
+    REPRINT_ANSWERS = 5              # answers restored to the scrollback on exit
 
     def _composer_rows(self):
         """How many rows the composer needs: wrapped, capped."""
         text = self.input.text
         if not text:
             return 1
-        width = max(20, self.width - 12)
+        # The LIVE pane width, not the one captured at build: self.width is set once in
+        # __init__ (and again on Ctrl-W), so a terminal RESIZE kept the estimate on the
+        # old width for ever (A-2026-10-06-301).
+        width = max(20, self._pane_width() - 12)
         rows = 0
         for line in text.split("\n"):
             rows += max(1, (len(line) + width - 1) // width)
@@ -25378,7 +25411,14 @@ class AppScreen(TuiScreen):
                 value("reasoning: %s" % _level)
             title()
             title("KEYS")
-            value("\u2191\u2193 PgUp/PgDn  scroll")
+            # The arrows are the composer's CARET the moment it holds text (the binding
+            # is filtered on `not self.input.text`), so the rail says which of the two
+            # the keys are right now - it advertised `↑↓ scroll` unconditionally while
+            # a paste in the box made them do something else (A-2026-10-06-303).
+            if self.input.text:
+                value("PgUp/PgDn scroll  \u2191\u2193 caret")
+            else:
+                value("\u2191\u2193 PgUp/PgDn  scroll")
             value("Ctrl-Home/End  ends")
             value("Ctrl-Y  copy item")
             value("Ctrl-B  copy all")
@@ -25676,9 +25716,11 @@ class AppScreen(TuiScreen):
             self.autofollow = True
             self._invalidate()
 
-        @kb.add("escape", filter=not_picking)
-        def _(event):
-            self.request_exit()
+        # A bare ESC used to quit outright here: no confirm, no stop of the run in
+        # flight, and the rail's KEYS never mentioned it - while ESC is also the first
+        # byte of every Alt combination some terminals send (A-2026-10-06-294). Quitting
+        # is Ctrl-Q / Ctrl-D, and Ctrl-C stops the run; both are in the rail's KEYS.
+        # ESC still cancels the model picker (see the `picking` binding above).
 
         @kb.add("c-q")
         def _(event):
@@ -37601,10 +37643,11 @@ def _run_cli_app():
             except (ValueError, OSError, RuntimeError):
                 pass
         # The alternate screen is gone (smcup/rmcup restored the terminal): put the
-        # session's last answer back in the scrollback so nothing is lost on exit.
+        # session's answers back in the scrollback so nothing is lost on exit.
         # In the finally, so the crash paths get the reprint too - after the block, a
         # failure past screen.run() lost the answer.
         screen.print_final_inline()
+        copy_file_cleanup()
     crash = screen.take_crash()
     if crash:
         # On the REAL stream: while the app is up, stdout is _AppStdout, so a report
