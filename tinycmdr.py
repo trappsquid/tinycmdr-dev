@@ -5421,7 +5421,7 @@ _HINTS_SHOWN_GUARD = threading.Lock()
 
 
 def _hints_path(session_key):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_key or "default"))
+    safe = _session_stem(str(session_key or "default"))
     return SESSIONS_DIR / (safe + ".hints.json")
 
 
@@ -13383,7 +13383,7 @@ def session_search_hits(query, limit=25):
             mtime = f.stat().st_mtime
         except OSError:
             mtime = 0.0
-        hits.append((f.stem, m.get("role") or m.get("tool") or "entry",
+        hits.append((_session_key_from_stem(f.stem), m.get("role") or m.get("tool") or "entry",
                      re.sub(r"\s+", " ", c)[:200],
                      sum(w in c.lower() for w in words), mtime))
     hits.sort(key=lambda h: (-h[3], -h[4]))
@@ -14829,7 +14829,7 @@ def _ask_user_pending(session_key):
 
 def _question_path(session_key):
     """The sidecar an unanswered question is parked in, per session."""
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_key or ""))[:80] or "default"
+    safe = _session_stem(str(session_key or "default"))
     return SESSIONS_DIR / f"{safe}.question.json"
 
 
@@ -15965,13 +15965,13 @@ def event_log_on():
 
 
 def _event_path(session_key):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
+    safe = _session_stem(session_key or "unknown")
     return SESSIONS_DIR / f"{safe}.events.jsonl"
 
 
 def _event_rolled_path(session_key):
     """The one-predecessor roll target for a session's event log."""
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
+    safe = _session_stem(session_key or "unknown")
     return SESSIONS_DIR / f"{safe}.events.1.jsonl"
 
 
@@ -16169,7 +16169,7 @@ _CARRY_INDEX_HEAD = (
 
 
 def _carry_path(key):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key or "unknown")
+    safe = _session_stem(key or "unknown")
     return SESSIONS_DIR / f"{safe}.carry.json"
 
 
@@ -19167,8 +19167,40 @@ def _repair_tool_arguments(messages):
     return out
 
 
+# One mapping from a session key to the file stem that carries it, and back, because a
+# key must never be split across two files or folded onto another key's: the old one-way
+# sanitise turned both `a2a-user:alice` and `a2a-user/alice` into `a2a-user_alice`, so two
+# conversations shared one file and the reload - keying each file's stem - lost the
+# original name along with the content it held (A-2026-10-08-84).
+_SESSION_STEM_MAX = 120          # chars; one percent-quoted byte costs three
+
+
+def _session_stem(key):
+    """The stem every file of one conversation is named by: injective and reversible.
+
+    `_session_key_from_stem(_session_stem(key))` is `key` for every key whose stem fits a
+    file name; a legacy stem (letters, digits, `_.-` only) carries itself. A key too long
+    for a file name - its quote, plus a sidecar suffix - becomes a bounded head plus a
+    digest of the whole key: no collision, no unbounded name, and that stem carries a
+    handle, not the key.
+    """
+    key = str(key or "default")
+    raw = key.encode("utf-8", "surrogatepass")
+    quoted = urllib.parse.quote_from_bytes(raw, safe="")
+    if len(quoted) <= _SESSION_STEM_MAX:
+        return quoted
+    return (urllib.parse.quote_from_bytes(raw[:40], safe="")
+            + "-" + hashlib.sha1(raw).hexdigest()[:12])
+
+
+def _session_key_from_stem(stem):
+    """The key a session file's stem carries; a legacy name carries itself."""
+    return urllib.parse.unquote(str(stem))
+
+
 # Files that live in sessions/ BESIDE a conversation but are not one: the carry, the
-# hint list and the parked question, each written as <key>.<what>.json. Path.stem leaves
+# hint list and the parked question, each written as <stem>.<what>.json (the stem carries
+# the key: _session_stem). Path.stem leaves
 # "x.carry"/"x.hints" from them, so a plain glob("*.json") reads them as conversations of
 # their own. The reload excluded only the carry sidecar, and search_sessions had already
 # tripped on the same shape (A-2026-10-07-10: the hints list shows as
@@ -19214,17 +19246,18 @@ class Agent:
             # the glob handed every sidecar back as a session too. One predicate, because
             # the exclusion list was already incomplete once. search_sessions keeps
             # tolerating both file shapes on purpose - it SEARCHES a carry's args/out -
-            # so it is not routed here.
+            # so it is not routed here. The stem carries the key (percent-quoted:
+            # _session_stem), so the load decodes it back.
             if not _is_session_file(f):
                 continue
             try:
-                self.histories[f.stem] = json.loads(
+                self.histories[_session_key_from_stem(f.stem)] = json.loads(
                     f.read_text(encoding="utf-8"))
             except Exception:
                 log.warning("could not load session %s", f)
 
     def _session_path(self, key):
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+        safe = _session_stem(key)
         return SESSIONS_DIR / f"{safe}.json"
 
     def fork(self, session_key, new_key=None):
@@ -19236,7 +19269,7 @@ class Agent:
         src = self._session_path(session_key)
         if not src.exists():
             return ""
-        base = re.sub(r"[^A-Za-z0-9_.-]", "_", str(new_key or session_key))
+        base = _session_stem(str(new_key or session_key))
         stem, n = base, 1
         while (SESSIONS_DIR / f"{stem}.json").exists():
             n += 1
@@ -19672,8 +19705,7 @@ class Agent:
         transcript = ""
         if key:
             try:
-                tp = SESSIONS_DIR / (re.sub(r"[^A-Za-z0-9_.-]", "_", str(key))
-                                     + ".transcript.jsonl")
+                tp = SESSIONS_DIR / (_session_stem(str(key)) + ".transcript.jsonl")
                 if tp.exists():
                     transcript = ("[harness: the dropped messages were written to %s "
                                   "before they were removed - read_file or search_files "
@@ -19785,7 +19817,7 @@ class Agent:
             return
         try:
             _ensure_sessions_dir()
-            safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+            safe = _session_stem(key)
             path = SESSIONS_DIR / f"{safe}.transcript.jsonl"
             try:
                 if path.exists() and path.stat().st_size >= self._TRANSCRIPT_MAX_BYTES:
@@ -22290,7 +22322,7 @@ class Agent:
             self._session_path(session_key).unlink(missing_ok=True)
         except Exception:
             pass
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
+        safe = _session_stem(session_key or "unknown")
         for suffix in _CONVERSATION_FILE_SUFFIXES:
             # Everything the conversation owned, from the ONE list: /new used to drop
             # only the transcript and the page log, so the carry, the hints, the parked
@@ -26448,7 +26480,7 @@ def _web_forget_files(key):
     "forget a conversation" means the same thing whether the operator deleted it or the
     per-client bound pruned it (A-237) - and nothing a hand-written subset forgot
     (A-2026-10-08-118: the hints and the parked question stayed behind)."""
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+    safe = _session_stem(key)
     for suffix in _CONVERSATION_FILE_SUFFIXES:
         try:
             (SESSIONS_DIR / f"{safe}{suffix}").unlink(missing_ok=True)
@@ -26617,7 +26649,7 @@ def _finish_web_run(run, reporter, answer, failed=False):
     web_runlog_append(run.session_key, run.id, run.started, written)
 
 def _web_runlog_path(key):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+    safe = _session_stem(key)
     return SESSIONS_DIR / f"{safe}.web.jsonl"
 
 def web_runlog(key):
@@ -35641,7 +35673,7 @@ def tui_screen():
 def _cli_key():
     """Which conversation this console is in. 'cli' until /resume says otherwise.
 
-    Always a STRING: this becomes a filename (sessions/<key>.json). The prompt
+    Always a STRING: this names the session's files (`_session_stem`). The prompt
     tool's editing surface lives in _CLI["prompt"] and must never land here - it
     did, and sessions stopped saving (a Windows host measured 2026-09-22: "could not
     save session ... got 'PromptSession'", event log unwritten). The isinstance
@@ -35731,9 +35763,8 @@ def _cli_startup_session(argv=()):
 def _cli_session_rows():
     """Saved conversations, newest first: key, exchanges, when it was last used.
 
-    A session key IS a filename here (the agent writes sessions/<key>.json), so
-    this reads what is on disk rather than keeping a second list that could
-    disagree with it.
+    The file's stem carries the key (`_session_stem`), so this reads what is on disk
+    rather than keeping a second list that could disagree with it.
     """
     rows = []
     try:
@@ -35754,7 +35785,7 @@ def _cli_session_rows():
             continue        # a damaged session is not a reason to fail here
         if not isinstance(hist, list):
             continue
-        rows.append({"key": f.stem, "messages": len(hist),
+        rows.append({"key": _session_key_from_stem(f.stem), "messages": len(hist),
                      "state": _session_tail_state(hist),
                      "exchanges": sum(1 for m in hist if isinstance(m, dict)
                                       and m.get("role") == "user"),

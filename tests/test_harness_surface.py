@@ -516,6 +516,25 @@ produces on a real box.
                   "...byte for byte")
             again = A.fork(src_key, "fork-copy")
             check(again == "fork-copy-2", "a second fork of the same name is numbered", again)
+
+            # ---- one conversation, one file: the key -> stem mapping is injective ------
+            # `a2a-user:alice` and `a2a-user/alice` both sanitised to `a2a-user_alice`, and
+            # the reload keyed the survivor by the file's own stem - so a restart renamed
+            # the conversation and the second key's content displaced the first's
+            # (A-2026-10-08-84).
+            k1, k2 = "a2a-user:alice", "a2a-user/alice"
+            check(A._session_path(k1) != A._session_path(k2),
+                  "two keys that shared one file have a file each",
+                  (A._session_path(k1).name, A._session_path(k2).name))
+            A.histories[k1] = [{"role": "user", "content": "ALICE"}]
+            A.histories[k2] = [{"role": "user", "content": "BOB"}]
+            A._save(k1)
+            A._save(k2)
+            reloaded = fb.Agent()
+            check(reloaded.histories.get(k1) == [{"role": "user", "content": "ALICE"}]
+                  and reloaded.histories.get(k2) == [{"role": "user", "content": "BOB"}],
+                  "...and a reload carries both under their own keys",
+                  sorted(reloaded.histories))
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
