@@ -156,8 +156,12 @@ def make_peer(declare_lines=True, mode="fast", frame_spec=None):
                         "status": {"state": "TASK_STATE_WORKING", "timestamp": "t"},
                         "history": [msg]}
                 state["tasks"][tid] = task
-                if mode == "slow":
-                    deadline = time.time() + 20
+                # "slow": the reply comes after the second GetTask (the socket-timed-out
+                # shape). "held": nothing releases it but the test itself, so a check that
+                # must look at a LIVE run has no race at all.
+                wait_for = {"slow": 20, "held": 120}.get(mode)
+                if wait_for:
+                    deadline = time.time() + wait_for
                     while time.time() < deadline and not state["released"]:
                         time.sleep(0.05)
                 task = completed_task(tid, "the peer says: " + text)
@@ -408,7 +412,11 @@ def test_hub_egress_warning(hub):
 
 
 def test_hub_dispatch(hub, state):
-    """An order: registered immediately, streamed live, one run on the peer, done once."""
+    """An order: registered immediately, streamed live, one run on the peer, done once.
+
+    Against a HELD peer (nothing finishes the task but this test), so the live view is
+    observed with no race: release only after the live assertions.
+    """
     hub._legion_probe_card("coh")
     row = hub._legion_row("coh")
     check(row["state"] == "ready" and row["version"] == "9.9.9"
@@ -417,7 +425,9 @@ def test_hub_dispatch(hub, state):
     t0 = time.time()
     rid, err, code = hub.legion_send("coh", "check the disks")
     took = time.time() - t0
-    check(err is None and code == 200 and rid and took < 1.0,
+    # 2 s, not sub-second: the claim itself is dict work plus two small state writes and
+    # the write is what a Windows runner's real-time scanner slows down.
+    check(err is None and code == 200 and rid and took < 2.0,
           "legion_send registers and returns at once (no handler thread held)",
           (err, code, round(took, 3)))
     run = hub._web_active_run(hub.legion_key("coh"))
@@ -433,13 +443,16 @@ def test_hub_dispatch(hub, state):
     check(got is not None
           and any(l.get("kind") == "you"
                   and "check the disks" in (l.get("text") or "")
-                  for l in got["lines"]),
-          "the live view starts with the hub's own order line", got)
+                  for l in got["lines"])
+          and any(l.get("kind") == "tool" for l in got["lines"]),
+          "the live view starts with the hub's own order line and carries the "
+          "cohort's streaming lines", got)
+    check(all(a == "Bearer " + TOKEN for _m, a in state["calls"]),
+          "every relay call carried the bearer from token_env", state["calls"][:2])
+    state["released"] = True                  # let the peer finish the held run
     check(wait_record_done(hub, "coh", timeout=30),
           "the order finishes and the record says so", hub.legion_record("coh"))
     check(state["runs"] == 1, "the peer ran the order exactly once", state["runs"])
-    check(all(a == "Bearer " + TOKEN for _m, a in state["calls"]),
-          "every relay call carried the bearer from token_env", state["calls"][:2])
     tr = hub.web_transcript(hub.legion_key("coh"))
     lines = [l for r in tr["runs"] for l in (r.get("lines") or [])]
     check(any(l.get("kind") == "final"
@@ -539,7 +552,7 @@ def test_hub_unreachable(hub):
         t0 = time.time()
         rid, err, code = hub.legion_send("dead", "anyone home?")
         took = time.time() - t0
-        check(err is None and code == 200 and took < 1.0,
+        check(err is None and code == 200 and took < 2.0,
               "the order to a dead cohort still returns at once", (err, round(took, 3)))
         check(wait_record_done(hub, "dead", timeout=45),
               "and gives up by its own deadline", hub.legion_record("dead"))
@@ -610,7 +623,9 @@ def test_hub_no_cohorts(hub):
 def main():
     coh, _stage1 = stage_module("tinycmdr_legion_cohort", "cohort")
     hub, _stage2 = stage_module("tinycmdr_legion_hub", "hub")
-    srv, state = make_peer(declare_lines=True, mode="fast")
+    # "coh" is HELD (the dispatch test looks at a live run), "slow" answers after the
+    # second GetTask (the timed-out socket), "old" speaks no run-lines extension
+    srv, state = make_peer(declare_lines=True, mode="held")
     srv_slow, state_slow = make_peer(declare_lines=True, mode="slow")
     srv_old, _state_old = make_peer(declare_lines=False, mode="fast")
     try:
