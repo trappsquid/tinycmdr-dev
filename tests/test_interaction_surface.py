@@ -323,8 +323,7 @@ and no durable state is touched.
                     chan, key, q, opts, w),
                 "post": lambda q, opts, w, l: True,
                 "post_done": lambda text: None,
-                "close_question": lambda answered: fb.SCHEDULER.close_question(key,
-                                                                              answered)}
+                "close_question": lambda: fb.SCHEDULER.close_question(key)}
         try:
             join, box = in_thread(fb.tool_ask_user, {"question": "Restart prod or wait?"},
                                   {"session_key": key, "ask_door": door})

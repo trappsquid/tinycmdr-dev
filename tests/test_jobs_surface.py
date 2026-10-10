@@ -228,6 +228,74 @@ reaches a model, a chat server or the clock.
                              {"channel_id": "chan-2"})
     check("a job that has a channel gets no warning", "no channel" not in loud, loud)
     sched._stop.set()
+
+    # --------------------------------- `list` shows the destination and the outcome
+    # A job that reports to nowhere was invisible, and a job that has failed every
+    # night for a week read exactly like a healthy one (A-2026-10-06-289/-297).
+    sched = _scheduler("jobs-list.json")
+    sched.jobs["nightly"] = {"cron": "0 7 * * *", "task": "df -h",
+                             "channel_id": "chan-7", "model": None,
+                             "next": time.time() + 3600}
+    sched.jobs["orphan"] = {"cron": "0 8 * * *", "task": "say hi",
+                            "channel_id": None, "model": None,
+                            "next": time.time() + 3600}
+    sched._save()                      # the file must hold them: a fire saves by re-reading it
+    listed = sched.tool_action({"action": "list"}, {})
+    check("the job list names the channel an answer goes to",
+          "chan-7" in listed, listed)
+    check("...and says a job with no channel reports to the log only",
+          "log only" in listed, listed)
+    check("...and marks a job that has never run", "never ran" in listed, listed)
+    if time.strftime("%Z"):
+        check("...with the next run in the box's own zone",
+              time.strftime("%Z") in listed, listed)
+    sched.jobs["nightly"]["last"] = {"at": time.time() - 3600, "ok": False}
+    listed2 = sched.tool_action({"action": "list"}, {})
+    check("a failed run reads FAILED, not silence", "FAILED" in listed2, listed2)
+
+    # a fire records its outcome in jobs.json, where `list` reads it
+    saved_drive3, saved_report3 = fb.drive_run, fb.report
+    fb.drive_run = lambda key, text, rep, **kw: "done"
+    fb.report = lambda token, text: None
+    try:
+        _fire(sched, "nightly")
+    finally:
+        fb.drive_run, fb.report = saved_drive3, saved_report3
+    on_disk = json.loads((STAGE / "jobs-list.json").read_text(encoding="utf-8"))
+    check("a fire records its outcome where `list` reads it",
+          ((on_disk.get("nightly") or {}).get("last") or {}).get("ok") is True,
+          on_disk.get("nightly"))
+    sched._stop.set()
+
+    # ------------------------------------------ a missed run reaches the operator
+    # A job whose time passed while the bot was DOWN was skipped on the next start
+    # (right - no stampede) and said so only in the log. "Every morning at 09:00"
+    # that missed its window because the box rebooted simply did not happen, and the
+    # operator reading the channel had no way to know (A-2026-10-06-292).
+    sched = _scheduler("jobs-missed.json")
+    sched.jobs["nightly"] = {"cron": "0 7 * * *", "task": "df -h",
+                             "channel_id": "chan-7", "model": None,
+                             "next": time.time() - 7 * 3600}
+    sched._save()
+    sched._load()                      # the start-up load: skip the missed run
+    missed = []
+    saved_report4 = fb.report
+    fb.report = lambda token, text: missed.append((token, text))
+    got = fb.acquire_single_instance_lock()
+    try:
+        check("the missed-run notice is graded while the instance lock is held", got)
+        check("the next tick says the job's run was skipped",
+              sched._tick() is True and any(c == "chan-7" for c, _ in missed), missed)
+        check("...naming the job, the skip and the next run",
+              any("nightly" in t and "missed" in t and "Skipped" in t and "Next:" in t
+                  for _, t in missed), missed)
+        sched._tick()
+        check("...once, not again on every tick", len(missed) == 1, missed)
+    finally:
+        fb.report = saved_report4
+        fb._release_lock()
+        sched._stop.set()
+
     # ------------------------------------------- only the bot fires the folder's jobs
     # Every process that imports this module builds a Scheduler with a loop of its own,
     # and the single-instance lock is taken only by the service doors. A `--cli` session

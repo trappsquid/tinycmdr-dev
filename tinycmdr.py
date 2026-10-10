@@ -14035,6 +14035,10 @@ class Scheduler:
         # check-and-add below is one step, the same lock the loop already holds while
         # it decides what is due.
         self._running = set()
+        # Missed-run notices the start-up load recorded, posted by the first tick that
+        # holds the instance lock (a lane may not exist yet at import time). Bounded:
+        # a long outage cannot grow this without bound.
+        self._skipped = []
         self._load()
         try:
             import croniter  # noqa: F401
@@ -14085,11 +14089,21 @@ class Scheduler:
             if nxt <= now:
                 try:
                     job["next"] = self._next_run(job["cron"], now)
+                    overdue_min = max(0, int(now - nxt)) // 60
                     log.warning("job '%s' was overdue by ~%dm — skipped the "
                                 "missed run(s); next %s", name,
-                                max(0, int(now - nxt)) // 60,
+                                overdue_min,
                                 time.strftime("%Y-%m-%d %H:%M",
                                               time.localtime(job["next"])))
+                    # Tell the CHANNEL too, not just the log: "every morning at 09:00"
+                    # that missed its window because the box rebooted simply did not
+                    # happen, and the operator reading the channel had no way to know
+                    # (A-2026-10-06-292). Posted by the first tick (see _flush_skipped):
+                    # at load time the lane may not exist yet.
+                    if job.get("channel_id"):
+                        self._skipped.append((name, job["channel_id"], overdue_min,
+                                              job["next"]))
+                        del self._skipped[:-20]
                 except Exception as e:
                     job["next"] = now + 3600
                     log.warning("job '%s' has an unusable cron expression (%s)"
@@ -14165,8 +14179,23 @@ class Scheduler:
                 for name, j in sorted(self.jobs.items()):
                     task = j["task"]
                     shown = task if len(task) <= 80 else task[:77] + "..."
+                    # The destination, the last outcome and the next run's LOCAL time
+                    # zone: a job that has failed every night for a week read exactly
+                    # like a healthy one, a job that reports to nowhere was invisible,
+                    # and "next: 17:43" carried no zone on a box where a UTC cron bug
+                    # already bit once (A-2026-10-06-289/-297).
+                    where = j.get("channel_id") or "no channel — log only"
+                    last = j.get("last") or {}
+                    if last.get("at"):
+                        tail = ("last: %s %s" % (
+                            time.strftime("%m-%d %H:%M", time.localtime(last["at"])),
+                            "ok" if last.get("ok") else "FAILED"))
+                    else:
+                        tail = "never ran"
+                    nxt = time.strftime("%Y-%m-%d %H:%M %Z",
+                                        time.localtime(j["next"])).strip()
                     lines.append(f"- {name}: '{j['cron']}' — {shown}"
-                                 f" (next: {time.strftime('%Y-%m-%d %H:%M', time.localtime(j['next']))})")
+                                 f" (next: {nxt}; → {where}; {tail})")
                 return "\n".join(lines)
             if action == "add":
                 name = _job_name(args["name"])
@@ -14217,6 +14246,20 @@ class Scheduler:
                     return f"ERROR: no job named '{name}'."
                 return f"OK: job '{name}' removed."
             return f"ERROR: unknown action '{action}' (list|add|remove)."
+
+    def _flush_skipped(self):
+        """Post the missed-run notices the start-up load recorded (A-2026-10-06-292).
+
+        Posted from the tick, when the lane exists and only in the process that owns
+        the folder's instance lock; at load time (import) neither is guaranteed.
+        """
+        with self.lock:
+            pending, self._skipped = self._skipped, []
+        for name, channel, mins, nxt in pending:
+            report(channel,
+                   f"⏰ Scheduled job '{name}' missed a run — the bot was down for it "
+                   f"(overdue ~{mins} min). Skipped, not run late. Next: "
+                   f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(nxt))}.")
 
     def _loop(self):
         while not self._stop.is_set():
@@ -14273,6 +14316,8 @@ class Scheduler:
                         if isinstance(rec, dict) and rec.get("cron") == cron:
                             rec["next"] = nxt
                 self._save(_advance)
+        if self._skipped:
+            self._flush_skipped()
         for name, job in due:
             threading.Thread(target=self._fire, args=(name, job),
                              daemon=True).start()
@@ -14312,7 +14357,7 @@ class Scheduler:
                f"with its own judgment.)_")
         return row
 
-    def close_question(self, key, answered=False):
+    def close_question(self, key):
         row = self.pending_asks.pop(key, None)
         if self.dispatcher is not None:
             # ...and the row the listener reads, or a spent row sits in that dict for ever
@@ -14363,8 +14408,8 @@ class Scheduler:
                         SCHEDULER._open_in_channel(token, key, q, opts, w),
                     "post": lambda q, opts, w, l: True,
                     "post_done": lambda text: report(token, text),
-                    "close_question": lambda answered:
-                        SCHEDULER.close_question(key, answered)}
+                    "close_question": lambda:
+                        SCHEDULER.close_question(key)}
         else:
             dest, door = NowhereDestination(), None
         rep = RunReporter(dest, key, label="⏰ Working…")
@@ -14381,6 +14426,16 @@ class Scheduler:
             AGENT.model_overrides.pop(key, None)
         rep.finish(ok=not failed)
         report(token, f"⏰ **{name}**\n\n{answer}")
+        # The outcome lands in jobs.json, where `list` shows it: a job that has failed
+        # every night for a week must not read like a healthy one (A-2026-10-06-297).
+        def _record(jobs):
+            rec = jobs.get(name)
+            if isinstance(rec, dict):
+                rec["last"] = {"at": time.time(), "ok": not failed}
+        try:
+            self._save(_record)
+        except Exception:
+            log.debug("could not record the job's outcome", exc_info=True)
 
     dispatcher = None   # set by run_bot so scheduled jobs can report progress
     # sched-<name> -> the row a job is parked on. Only a job WITH a reporting channel
@@ -14629,7 +14684,7 @@ def ask_operator(session_key, question, ctx=None, options=None, timeout=None,
     closer = door.get("close_question")
     if callable(closer):
         try:
-            closer(answered)
+            closer()
         except Exception:
             pass
     if answered:
@@ -24714,9 +24769,8 @@ class CliDestination(Destination):
         """What happened to the question: answered, stopped, or timed out."""
         self.line("system", text)
 
-    def close_question(self, answered=False):
+    def close_question(self):
         """The question is over: nothing else typed at this prompt is its answer."""
-        del answered
         if (_CLI.get("ask") or {}).get("row") is self._row:
             _CLI["ask"] = None
         self._row = None
@@ -26805,7 +26859,7 @@ class WebRun:
 
 
 
-    def close_question(self, answered=False):
+    def close_question(self):
         with self.lock:
             self.asked = None
 
@@ -27107,7 +27161,7 @@ class WebDestination(Destination):
                 break
             if self.run.cancel.is_set() or time.time() >= deadline:
                 break
-        self.run.close_question(answered=bool(row.get("answer")))
+        self.run.close_question()
         self.wait_outcome = "answered" if answered else (
             "stopped" if self.run.cancel.is_set() else "timeout")
         if not answered:
@@ -31512,7 +31566,7 @@ class MattermostDispatcher:
                    self._ask_prompt(ch, question, row["options"], timeout))
         return row
 
-    def close_question(self, session_key, answered=False):
+    def close_question(self, session_key):
         """Called by ask_operator when the question is done, however it ended: the
         listener thread must stop treating the next message as an answer."""
         ch = self._session_channel.get(session_key)
@@ -31821,8 +31875,8 @@ class MattermostDispatcher:
                 "post": lambda q, opts, wait, label: self.door_post(
                     channel_id, q, opts, wait, label),
                 "post_done": lambda text: self._post(channel_id, None, text),
-                "close_question": lambda answered: self.close_question(
-                    session_key, answered)}
+                "close_question": lambda: self.close_question(
+                    session_key)}
 
     # -- attachments ----------------------------------------------------------
     def _process_attachments(self, post):
@@ -34324,11 +34378,9 @@ class TelegramDestination(Destination):
 
 
 
-    def close_question(self, answered=False):
+    def close_question(self):
 
         """The question is over: nothing else typed at this chat is its answer."""
-
-        del answered
 
         self._asking.pop("q", None)
 
