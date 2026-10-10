@@ -5,7 +5,7 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.98] - 2026-10-09
 
 ### Changed
 - **Leaner per-platform downloads:** each archive carries only the files its platform reads - the Windows task's respawner no longer rides in the macOS and Linux packages, the doc-only brand image moved to the product tree, and the host's own known-failure library can no longer ride into any package (tests/test_contracts.py, tests/test_maintenance_kit.py; the built archives measure 129 KB / 128 KB / 123 KB smaller on Linux / macOS / Windows).
