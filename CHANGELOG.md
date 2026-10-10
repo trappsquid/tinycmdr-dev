@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.101] - 2026-10-10
+
 ### Fixed
 - **The file log keeps what a short-lived door logged:** the queue is drained at exit, so a verb's or a scheduled run's last lines reach `tinycmdr.log` instead of dying with the listener thread (tests/test_log_config_surface.py).
 - **A runbook whose procedure is already a tool is never offered a mint:** the offer reads the tool registration, and a tool whose description names the runbook - or whose name or declared category shares a word with it - stands the offer down (tests/test_route_surface.py).
