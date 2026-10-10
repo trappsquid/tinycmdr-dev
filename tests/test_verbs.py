@@ -2041,6 +2041,22 @@ def _body():
     check("an unknown verb names the chat set", "unknown verb" in text and "update" in text, text)
     check("no arguments is the help", "tinycmdr <verb>" in fb.verb_from_chat(""), "none")
 
+    # The two lists drifting apart gave one command two answers: `/reasoning low` was
+    # handled by the chat lane while `/tinycmdr reasoning low` was refused as "needs a
+    # terminal on the host" (A-2026-10-06-274). The verbs that only read or write state
+    # belong to both lists; the line is drawn at "would this prompt, open a session, or
+    # take the host down" - `run` still refuses, by name.
+    for v in ("reasoning", "approvals", "failures"):
+        check(f"{v} is a chat verb (it reads/writes state and never prompts)",
+              v in fb._CHAT_VERB_SET, sorted(fb._CHAT_VERB_SET))
+    text = fb.verb_from_chat("approvals")
+    check("...and a state verb answers from chat",
+          "confirm gate allowlist" in text, text[:200])
+    text = fb.verb_from_chat("reasoning")
+    check("...reasoning answers from chat too", "reasoning:" in text, text[:200])
+    text = fb.verb_from_chat("run")
+    check("...while `run` still refuses, by name", "needs a terminal" in text, text[:200])
+
     # ---- update: the release artifact, never git --------------------------------
     # `update` was `git pull`; it now fetches the same verified package the one-line
     # installer does. Pointed at a dead host it must fail cleanly, and it must never go

@@ -643,13 +643,16 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     check("the same run bumped twice still counts once",
           _bump("run-3")["count"] == 3)
     _ctx = {"session_key": "mint-1"}
+    first = fb.mint_hint("shell", {}, _ctx, e2)
     check("the hint needs the SECOND run, not the third",
-          fb.mint_hint("shell", {}, _ctx, e2) != "")
-    _ctx2 = {"session_key": "mint-2"}
-    first = fb.mint_hint("shell", {}, _ctx2, e3)
-    check("the hint fires once the shape has run in 3 runs",
           "separate runs" in first and "toolsmith" in first, first[:160])
-    check("...and only once per run", fb.mint_hint("shell", {}, _ctx, e3) == "")
+    check("...and not a second time in that run", fb.mint_hint("shell", {}, _ctx, e2) == "")
+    _ctx2 = {"session_key": "mint-2"}          # a fresh session, as a restart gives
+    check("...once per SHAPE, not per session: the census remembers the hint",
+          fb.mint_hint("shell", {}, _ctx2, _bump("run-4")) == "")
+    check("...and the census on disk carries the mark, so a restart does not re-nag",
+          bool((_json.loads(_proc.read_text(encoding="utf-8")).get(_sig) or {}).get("minted")),
+          _sig)
     check("the hint logs itself", True)
 
     class _Rep:

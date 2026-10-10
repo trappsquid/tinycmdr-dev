@@ -7172,6 +7172,27 @@ def _census_save(data):
         log.warning("procedure census not saved: %s", e)
 
 
+def _census_mark(sig, field, value):
+    """Write one field of one census entry, under the census lock.
+
+    `mint_hint` fires while a tool call's result is being built, after the census
+    bump has already saved its own copy - so the mark that stops the next hint has
+    to reach the FILE here. `minted` was read by the guard and written by nothing,
+    so the in-memory run flag was the only suppression and a restart re-fired the
+    hint on the next run (A-2026-10-06-287)."""
+    if not sig:
+        return
+    try:
+        with _PROC_LOCK:
+            data = _census_load()
+            ent = data.get(sig)
+            if isinstance(ent, dict):
+                ent[field] = value
+                _census_save(data)
+    except Exception:
+        log.debug("census mark failed", exc_info=True)
+
+
 def procedure_census_bump(name, args, session_key=None):
     """Count this shape across RUNS (not calls) and hand the entry back.
 
@@ -7213,10 +7234,13 @@ def procedure_census_bump(name, args, session_key=None):
 
 
 def mint_hint(name, args, ctx, ent):
-    """One line, at most once per run, when this exact shape has been run before.
+    """One line, once per SHAPE for ever, when this shape has run before.
 
     Same shape as route_hint (bounded, logged, silent when it cannot help), different
     question: route_hint says WHICH TOOL answers a miss, this says the shape is a routine.
+    The in-memory run flag stops a repeat inside a session; the census's `minted` marker
+    stops it across restarts (A-2026-10-06-287 - it was read by the guard and written by
+    nothing, so a restart re-fired the line on the very next run).
     """
     if not CONFIG["agent"].get("mint_hint", True):
         return ""
@@ -7228,6 +7252,7 @@ def mint_hint(name, args, ctx, ent):
     if st.get("mint_hint_used"):
         return ""
     st["mint_hint_used"] = 1
+    _census_mark(ent.get("sig"), "minted", time.strftime("%Y-%m-%d %H:%M"))
     log.info("[%s] mint hint: this shape has now run in %d separate runs (%s)",
              key or "-", ent["count"], ent["sig"][:60])
     return ("\n[HARNESS: you have now used this same set of commands in %d separate runs "
@@ -24429,6 +24454,7 @@ class CliDestination(Destination):
         self._open = False       # a line printed without its newline yet
         self._pulsed = set()     # drafts already reduced to one dim pulse
         self._hold = {}          # ref -> (text, when) while a line's opening is held
+        self._drawn = {}         # ref -> raw chars of the draft actually written as text
         self.glyphs = tui_glyphs()
         self.ellipsis = "..." if tui_ascii_only() else "\u2026"
 
@@ -24532,6 +24558,7 @@ class CliDestination(Destination):
             elif self._bare(held_text).strip():
                 self._write(self._paint("  " + self.ellipsis + "  " + self._bare(held_text),
                                         self.TONES["narration"]))
+                self._drawn[ref] = len(self._body_of(held_text))
                 self._open = True
         self._hold.clear()
 
@@ -24548,6 +24575,10 @@ class CliDestination(Destination):
                                    self.TONES.get(kind, "0")))
         ref = ("cli", len(self._refs))
         self._refs[ref] = str(text)
+        if kind == "narration" and str(text).strip():
+            # A narration line is drawn on sight (it is the first chunk of what may
+            # become the answer); remember how much of it the terminal holds.
+            self._drawn[ref] = len(self._body_of(str(text)))
         return ref
 
     def update(self, ref, kind, text, src="main"):
@@ -24577,6 +24608,7 @@ class CliDestination(Destination):
                     self._write(self._paint(
                         "  " + self.ellipsis + "  " + self._bare(text),
                         self.TONES["narration"]))
+                    self._drawn[ref] = len(self._body_of(text))
                     self._open = True
                 return ref
             tail = text[len(shown):]
@@ -24585,6 +24617,7 @@ class CliDestination(Destination):
                     self._pulse(ref, text)
                 else:
                     self._write(self._paint(self._bare(tail), self.TONES["narration"]))
+                    self._drawn[ref] = len(self._body_of(text))
                     self._open = True
                 self._refs[ref] = text
             return ref
@@ -24612,7 +24645,16 @@ class CliDestination(Destination):
         appeared three times: a dim pipe-flattened line, a mangled card ending
         `acr…`, and the rendered card.
         A screen cannot unprint the dim draft; the card is unconditional instead,
-        and the plain path uses what is recorded here to stay single-print."""
+        and the plain path uses what is recorded here to stay single-print.
+
+        What is recorded is the DRAWN PREFIX, not the draft's current text: the
+        draft streams in pieces and a long body turns into one `drafting answer`
+        pulse partway through, so the current text can be longer than anything the
+        terminal holds. Recording the current text made the loop reprint the whole
+        answer below a draft that already carried its head (measured 2026-10-06,
+        a 700-char answer: the words twice), and recording a text the compare
+        happened to match while the draft was drawn only partway made it print
+        nothing and LOSE the tail (the same shape, 201-400 chars flat)."""
         if ref in self._hold:                 # never decided: the run ended first
             held_text = self._refs.get(ref, "")
             self._hold.pop(ref, None)
@@ -24621,15 +24663,22 @@ class CliDestination(Destination):
             elif self._bare(held_text).strip():
                 self._write(self._paint("  " + self.ellipsis + "  " + self._bare(held_text),
                                         self.TONES["narration"]))
+                self._drawn[ref] = len(self._body_of(held_text))
                 self._open = True
         self._close()
         body = self._refs.get(ref, "")
         if body.startswith("\U0001F4AC "):
             body = body[2:]
+        drawn = body[:self._drawn.pop(ref, 0)]
+        # A capped draw ends `…`: the ellipsis is the cap's marker, not the text, so
+        # it comes off before the answer is compared (the drawn part is a prefix by
+        # construction).
+        if drawn.endswith("\u2026") or drawn.endswith("..."):
+            drawn = drawn.rstrip(".").rstrip("\u2026").rstrip()
         self._pulsed.discard(ref)
         if self.on_drop:
             try:
-                self.on_drop(body)
+                self.on_drop(drawn)
             except Exception:
                 pass
 
@@ -32581,11 +32630,17 @@ class MattermostDispatcher:
                        "`bg <task>` run in background · `pause [reason|off]` "
                        "hold new tasks\n"
                        "`model [name|list]` show/list/switch model · "
+                       "`/reasoning <level|status>` effort for this conversation\n"
+                       "`/plan on|off|apply` read-only planning · `/fork [name]` "
+                       "branch the conversation\n"
                        "`restart [force]` restart the bot · `version` · `help`\n"
+                       "Management verbs run here too, as `%s update|doctor|health|"
+                       "proc|config|logs|clean|approvals|failures` — `update` checks "
+                       "for a new release and applies it.\n"
                        "The same word everywhere: `%s status` in a shell or a "
                        "session, `%s status` here.\n"
                        "Everything else is a task — just tell me what you "
-                       "need." % (CMDR, CMDR, CMDR, CMDR))
+                       "need." % (CMDR, CMDR, CMDR, CMDR, CMDR))
             return
         if cmdr_legacy_prefix(stripped):
             # `/cmdr` existed for one day; a near-miss deserves a pointer, not a shrug.
@@ -35196,7 +35251,7 @@ def run_telegram():
 # This is the console: `tinycmdr` with no verb, or `--cli`. No second build cuts
 # it, so every change lands here and nowhere else (2026-09-21).
 _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
-        "leave": False, "stream": "", "streamed": "", "streamed_answer": "",
+        "leave": False, "streamed_answer": "",
         # "ask": the question a run is parked on (None when none is open), and
         # "reader": is a reader thread the one owner of stdin (see _cli_reader)?
         # "app": the AppScreen when --app owns the terminal (None otherwise).
@@ -36781,6 +36836,19 @@ def _cli_command(text):
         f = envelope_facts()
         print("  envelope   %s" % f["envelope"])
         print("  prompt     %s" % f["overhead"])
+        # The two facts a terminal `/status` could not answer, while status_text (chat)
+        # and _verb_status (a shell) both could: is a question parked on this session,
+        # and are the lanes up (A-2026-10-06-278). Same sources, so they cannot drift.
+        _pend = _ask_user_pending(_cli_key())
+        _ask_lim = (f"on, wait {int(float(CONFIG['agent'].get('ask_user_wait_seconds') or 120))}s"
+                    if CONFIG["agent"].get("ask_user") else "off (agent.ask_user)")
+        print("  ask_user   %s" % (_ask_lim
+                                   + (f" · WAITING on: {_pend['question'][:90]}"
+                                      if _pend else "")))
+        _lanes = lanes_snapshot()
+        if _lanes:
+            print("  lanes      %s" % ", ".join("%s=%s" % (n, i["state"])
+                                                for n, i in _lanes.items()))
         strays = strays_in_config()
         if strays:
             print("  ignored    %s (in config.json, never sent)" % ", ".join(strays))
@@ -37144,61 +37212,10 @@ def run_cli(once=None, app=False):
         print(dim("  --app needs a real terminal with prompt_toolkit; "
                   "drawing inline cards instead"))
 
-    def narration(txt):
-        """interim_cb: the prose that arrived WITH tool calls, nothing streamed."""
-        line = " ".join(str(txt).split())
-        if line:
-            print(green("  %s" % line[:400]))
-
-    def narration_stream(txt, final=False, first=False):
-        """narration_cb: what the model is saying, as it says it.
-
-        The callback hands over everything written so far, not the delta, up to
-        twice a second, so only the new tail is printed. What it prints may turn
-        out to be the final answer: narration_drop() then remembers the text and
-        the answer is not printed a second time when the run returns.
-        """
-        text = str(txt or "")
-        if first:
-            _CLI["stream"] = ""
-        shown = _CLI.get("stream") or ""
-        if not text.startswith(shown):
-            shown = ""                  # the model rewrote its line: start again
-        fresh = text[len(shown):]
-        if fresh:
-            print(green("  " + fresh) if not shown else green(fresh),
-                  end="", flush=True)
-            _CLI["stream"] = text
-        if final:
-            print()
-            _CLI["streamed"] = text
-
-    def narration_drop():
-        """That streamed text WAS the answer, which is printed once, below."""
-        _CLI["streamed_answer"] = _CLI.get("streamed") or ""
-
-    def progress(name, args):
-        if name == "generating":
-            return                      # the stream's own status, not a tool call
-        short = args if isinstance(args, str) else json.dumps(args)
-        print(amber("  -> %s %s" % (name, short.replace(chr(10), " ")[:160])))
-
-    def progress_done(name, args, output, elapsed):
-        if not output:
-            return
-        first = " ".join(str(output).split())[:120]
-        print(dim("     %s in %.1fs: %s" % (name, elapsed or 0.0, first)))
-
-    def say(text):
-        """A line from the harness itself (not the model): a run that continued past its
-        budget, for instance. The console has no chat to post into, so it prints -
-        through the screen when there is one, or the line lands on top of the
-        toolbar."""
-        try:
-            cli_out(amber("  %s" % text))
-        except Exception:
-            pass
-
+    # The run's callbacks are the reporter's own (see _cli_new_reporter): the
+    # destination draws the streamed draft and records what it drew, so a second
+    # callback set here would be a second drawing of the same text. The locals
+    # that used to live here did exactly that and nothing called them (A-2026-10-06-275).
     _CLI["inbox"] = queue.Queue()
     _CLI["steer"] = queue.Queue()
     _CLI["leave"] = False
@@ -37317,6 +37334,34 @@ def _cli_steer_queue():
             return out
 
 
+def _flat_prefix_end(text, n):
+    """The raw index just past the n-th character of `text`'s collapsed form.
+
+    A streamed draft reaches a terminal whitespace-collapsed
+    (`scrub(" ".join(text.split()))`), so the plain path's "what is already on
+    screen" count lives in that space; this maps it back onto the answer's own
+    whitespace so only the unseen tail is printed. None when the text collapses
+    to fewer than n characters - the draft held words the answer does not, so the
+    answer must be printed whole.
+    """
+    flat = 0
+    in_space = False
+    for i, ch in enumerate(text):
+        if ch.isspace():
+            if flat:
+                in_space = True          # a run of whitespace is the one space kept
+            continue
+        if in_space:
+            flat += 1
+            if flat >= n:
+                return i
+            in_space = False
+        flat += 1
+        if flat >= n:
+            return i + 1
+    return None
+
+
 def _cli_console_loop():
     """The console's one loop: read a line, run it, draw the answer.
 
@@ -37391,6 +37436,15 @@ def _cli_console_loop():
                         body = answer[len(shown):]  # only after the streamed text
                     elif shown and shown.startswith(answer.strip()):
                         body = ""                   # already on screen in full
+                    elif shown and scrub(" ".join(answer.split())).startswith(shown):
+                        # The draft was drawn whitespace-collapsed, so a markdown
+                        # answer never prefix-matches it raw - the head printed again
+                        # below the draft line (measured 2026-10-06). Cut the answer
+                        # where its collapsed read reaches the draft's end: the words
+                        # already on screen are not printed again.
+                        off = _flat_prefix_end(answer, len(shown))
+                        if off is not None:
+                            body = answer[off:]
                     if body.strip():
                         print(answer_block(body))
             _cli_usage_line()
@@ -41132,13 +41186,21 @@ def _verb_run(rest):
     return 0
 
 
-# The verbs that make sense from a chat message. The rest need a terminal: `run` opens a
-# session, `setup` and `token set` prompt, `restart` has its own fast path that must work
-# while a run owns the channel. `help` is NOT here on purpose: the chat lane answers
-# `/tinycmdr help` with its own list of commands (the "**Commands**" block), which names the
-# chat verbs a host-side help page cannot, and a suite pins it.
+# The verbs that make sense from a chat message. The line is drawn where a verb would
+# PROMPT, open a session, or take the host down: `run` opens a session, `setup` and
+# `token set` read stdin, `restart` has its own fast path that must work while a run
+# owns the channel, `quit` takes the install down, and `web` prints a link carrying the
+# page token (a secret goes to a terminal, not a channel's history). The verbs that
+# only read or write state work from chat exactly as they do in a shell: `reasoning`,
+# `approvals` and `failures` were listed in neither set (A-2026-10-06-274), so
+# `/tinycmdr reasoning low` was refused as "needs a terminal on the host" while the
+# same lane answered `/reasoning low` - one command, two answers. `help` is NOT here
+# on purpose: the chat lane answers `/tinycmdr help` with its own list of commands (the
+# "**Commands**" block), which names the chat verbs a host-side help page cannot, and a
+# suite pins it.
 _CHAT_VERB_SET = frozenset(("status", "doctor", "health", "version", "proc",
-                            "config", "model", "logs", "clean", "update"))
+                            "config", "model", "logs", "clean", "update",
+                            "reasoning", "approvals", "failures"))
 
 
 def verb_from_chat(argv_line):

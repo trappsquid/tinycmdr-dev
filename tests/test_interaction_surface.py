@@ -1581,6 +1581,10 @@ What must hold, and what this pins:
         check("/tinycmdr help answers with the command list",
               "**Commands**" in text and "/tinycmdr help" in text, text[:200])
         check("/tinycmdr help queued nothing", not d2.queues.get("c1"), d2.queues)
+        # The commands the lane implements but the help never listed: /plan, /fork and
+        # /reasoning, and - the one an operator most needs - `update` (A-2026-10-06-273).
+        for _c in ("/plan", "/fork", "/reasoning", "/tinycmdr update"):
+            check("the chat help lists %s" % _c, _c in text, text[:400])
 
         d3, posted3 = make_dispatcher()
         d3._handle("c1", "alice", "/tinycmdr wibble", "m3", "m3", True)

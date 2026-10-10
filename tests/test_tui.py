@@ -766,6 +766,66 @@ check("...no mid-word truncation glyph inside the answer", "acr\u2026" not in ra
 check("...and no flattened copy of the answer is anywhere on the screen",
       "| Field | Value |" not in raw11 and "capacity | 8GB x4" not in raw11)
 
+# --- a long streamed answer reaches the PLAIN terminal exactly once ---------
+# Reproduced before the fix (A-2026-10-06-275): the draft handed on drop was the
+# CAPPED, whitespace-collapsed body, so the plain loop's prefix compare either
+# failed - the whole answer printed again below the dim draft line (a 700-char
+# answer: the words twice) - or matched a draft that had only been drawn partway
+# (the `drafting answer` pulse takes over past ~200 chars) and printed nothing,
+# losing the tail. The destination records the drawn PREFIX now, and the loop cuts
+# the answer in the collapsed space the draft was drawn in.
+_saved_stdout_275 = sys.stdout
+_saved_cli_275 = dict(fb._CLI)
+_saved_drive_275 = fb.drive_run
+for _name, _answer in (("long", "NARROWBOAT " + "z" * 660 + " end-of-the-long-answer."),
+                       ("mid", "BURRITO " + "y" * 260 + " end-of-the-mid-answer.")):
+    _buf = io.StringIO()
+    _got = ""
+    try:
+        fb._CLI.clear()
+        fb._CLI.update({"colour": False, "stop": None, "inbox": fb.queue.Queue(),
+                        "steer": fb.queue.Queue(), "leave": False, "reader": False,
+                        "ask": None, "app": None, "screen": None,
+                        "streamed_answer": ""})
+
+        def _fake_stream(key, text, reporter, _answer=_answer, **kw):
+            _flat = fb.scrub(" ".join(_answer.split()))
+            _n = len(_flat)
+            _step = max(1, _n // 8)
+            _done = 0
+            while _done < _n:
+                _done = min(_n, _done + _step)
+                reporter.narration(_flat[:_done], final=(_done >= _n))
+            reporter.narration_drop()
+            return _answer
+
+        fb.drive_run = _fake_stream
+        sys.stdout = _buf
+        fb._CLI["inbox"].put("write it down")
+        _loop275 = threading.Thread(target=fb._cli_console_loop, daemon=True)
+        _loop275.start()
+        _tail = _answer.strip()[-11:]
+        _deadline = time.time() + 8
+        while time.time() < _deadline and _tail not in _buf.getvalue():
+            time.sleep(0.02)
+        time.sleep(0.1)
+        fb._CLI["leave"] = True
+        fb._CLI["inbox"].put(None)
+        _loop275.join(2)
+        _got = _buf.getvalue()
+    finally:
+        # stdout comes back BEFORE the check prints, or the line lands in the buffer
+        # this block is holding (and the suite's report never shows it).
+        sys.stdout = _saved_stdout_275
+        fb.drive_run = _saved_drive_275
+        fb._CLI.clear()
+        fb._CLI.update(_saved_cli_275)
+    _marker = _answer.split()[0]
+    check("the %s streamed answer reaches the plain terminal exactly once, tail "
+          "included" % _name,
+          _got.count(_marker) == 1 and _tail in _got,
+          (_got.count(_marker), _tail in _got, _got[-200:]))
+
 # --- a structured draft never streams its own pipes ---------------------
 scr12 = fb.TuiScreen(out=io.StringIO(), width=90)
 dest12 = fb.CliDestination(colour=False, out=io.StringIO(), screen=scr12)

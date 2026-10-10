@@ -302,6 +302,30 @@ looks at what the request body actually carried.
                       f"the static number is what the wire carries ({fb.fmt_tokens(static)})")
                 check(not hidden_n or ("%d hidden" % hidden_n) in text,
                       "hidden tools are named separately instead of being added in")
+
+            # ---- /status answers the two questions only the OTHER surfaces did ---
+            # A parked ask_user question and the lane state lived in status_text (chat)
+            # and _verb_status (a shell); `/status` in a session answered neither
+            # (A-2026-10-06-278).
+            _saved_lanes = fb.lanes_snapshot
+            _sk278 = fb._cli_key()
+            fb._ASK_PENDING[_sk278] = {"question": "Which port should the job use?",
+                                       "options": [], "opened": 0, "ev": None}
+            fb.lanes_snapshot = lambda: {"mattermost": {"state": "ok"}}
+            try:
+                buf2 = io.StringIO()
+                with contextlib.redirect_stdout(buf2):
+                    fb._cli_command("/status")
+                st2 = buf2.getvalue()
+            finally:
+                fb.lanes_snapshot = _saved_lanes
+                fb._ASK_PENDING.pop(_sk278, None)
+            check("WAITING on: Which port should the job use?" in st2,
+                  "the session /status names the parked question it waits on -- "
+                  + st2[-300:])
+            check("mattermost=ok" in st2,
+                  "...and the lane state, so 'is it up' has an answer here too -- "
+                  + st2[-300:])
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
