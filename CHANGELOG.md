@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A script cannot carry a declined command past the tier:** a script-shaped write's content is read as commands (the confirm tier, the target-aware delete rule and the never tier), and an interpreter pointed at a file this run just wrote is read back the same way, so `write_file run.sh` + `bash run.sh` no longer walks a recursive delete past the confirm gate (tests/test_guard_battery.py).
+- **The mint guidance points at the live route:** `create_tool` validates and loads a tool on the spot, so the prompt line, the mint hint and the report-time invitation name it first (`toolsmith action=new` writes the file, live at the next start), and an unknown tool whose drop-in file is on disk says the file is there instead of denying it (tests/test_tool_load_surface.py, tests/test_route_surface.py).
+- **The offer branches read the registry before the order branch fires:** a repeated order whose runbooks are all covered by a loaded tool is not offered a mint - the stand-down the runbook branch keeps now sits above the order and census branches (tests/test_route_surface.py).
+- **A lone generic probe is not a routine:** a census shape reduced to a single `ps`, `grep`, `df`, `du`, `date`, `find`, `awk` or `sed` no longer earns the mint hint, while two verbs still fingerprint (tests/test_route_surface.py).
+- **A run that read a runbook is not asked to save what the runbook already holds:** the remember offer stands down when the run's calls walked a procedure durable on disk (tests/test_route_surface.py).
 
 ## [1.1.0] - 2026-10-10
 
