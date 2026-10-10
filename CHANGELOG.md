@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.101] - 2026-10-10
+## [1.1.0] - 2026-10-10
 
 ### Fixed
 - **The file log keeps what a short-lived door logged:** the queue is drained at exit, so a verb's or a scheduled run's last lines reach `tinycmdr.log` instead of dying with the listener thread (tests/test_log_config_surface.py).
@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The timeout notice matches what the run will do:** with `ask_timeout_continues` false (the default) the door says it is stopping rather than acting on an assumption, and "applying my own judgment" is drawn only when the configuration continues (tests/test_interaction_surface.py).
 - **An infra failure mid-run no longer claims nothing was changed:** with any tool call completed the answer names the count and says what stands; with none it keeps the old sentence (tests/test_checkin.py).
 - **The process tool's job state survives a batch:** the save writes through one unique temp per call, so `status` and `output` racing in one batch no longer lose a save to `ENOENT` (tests/test_process_surface.py).
+- **The process tool's save survives a Windows batch:** the state save takes one writer at a time, so two `os.replace` calls racing onto the job file cannot collide with `WinError 5` (tests/test_process_surface.py).
 
 ## [1.0.100] - 2026-10-09
 
