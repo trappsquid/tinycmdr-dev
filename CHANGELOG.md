@@ -5,6 +5,25 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Chat help and the chat verbs agree with the lane:** `/help` lists `/plan`, `/fork`, `/reasoning` and the management verbs (`update` named), and `/tinycmdr reasoning|approvals|failures` run from a channel instead of being refused while the same lane answers `/reasoning` (tests/test_interaction_surface.py, tests/test_verbs.py).
+- **A streamed answer reaches a plain terminal once:** the console records the part of the draft actually drawn, so a long answer is not reprinted below its own tail and a flat 201-400-char answer no longer loses its end (tests/test_tui.py).
+- **A session's `/status` names the parked question and the lane state** (tests/test_safety_surface.py).
+- **The mint hint is remembered across restarts:** the census's `minted` marker is written when the line fires, so one shape is hinted once (tests/test_route_surface.py).
+- **`schedule list` names where a job reports, how its last run went and the zone of its next run** (tests/test_jobs_surface.py).
+- **A run missed while the bot was down is announced in the job's channel**, not only in the log (tests/test_jobs_surface.py).
+- **The dead `answered` argument is gone from every `close_question`** (tests/test_interaction_surface.py).
+- **A trimmed sub-agent answer is kept:** it is spilled before the child's session is thrown away, and the trim names that file (tests/test_agent_surface.py).
+- **The sub-agent field caps say what they dropped**, so "8 of 30" cannot read as "8" (tests/test_agent_surface.py).
+- **ESC no longer quits `--app`:** quitting stays Ctrl-Q/Ctrl-D and stopping stays Ctrl-C, both in the rail's KEYS (tests/test_tui.py).
+- **The copy walk says when it is at the oldest item** (tests/test_tui.py).
+- **The Ctrl-Y copy file is removed when the app exits** (tests/test_tui.py).
+- **The composer's row estimate follows a resize** (tests/test_tui.py).
+- **Leaving `--app` returns the session's answers to the scrollback**, not only the last one (tests/test_tui.py).
+- **The rail says what the arrows do while the composer holds text** (tests/test_tui.py).
+
 ## [1.0.98] - 2026-10-09
 
 ### Changed
