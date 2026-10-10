@@ -2374,10 +2374,10 @@
     {
       "id": "finding-remainder-three",
       "title": "the last three open code findings: the console verbs and two temp-path hazards",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "e9e69dc",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The last three open code findings, each verified against the code first and each landed with a check that fails on the pre-fix build: the console runs `/plan` and `/fork` (both were advertised in `/tinycmdr help` and answered \"not a command\" while the chat lane ran them, and the console now speaks the chat lane's words); a session key that carries a character a file name cannot (a colon, a slash) is percent-quoted, so two such keys no longer fold onto one session file and a restart reloads each conversation under the key its file carries - the reload used to rename the survivor and lose the other's content with the name; and the Ctrl-Y copy file lives in a per-user 0700 directory, is created 0600 in one step instead of write-then-chmod, and refuses a path that is not a plain file, so a symlink planted at the predictable temp path cannot hand the copied text to the file it points at. tests/test_interaction_surface.py, tests/test_harness_surface.py and tests/test_tui.py carry the checks.",
       "gate": "every new check RED on the pre-fix build (test_interaction_surface's console probe, test_harness_surface's collision reload, test_tui's planted symlink); the whole gate is green at -j4 per slice, 0 skipped"
