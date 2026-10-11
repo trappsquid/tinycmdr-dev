@@ -1007,6 +1007,14 @@ capability is told so instead of being guessed at.
         shutil.rmtree(_skmove, ignore_errors=True)
     check("a skill edited between two builds is logged as a prefix move",
           any("STATIC prompt moved" in m for m in _move_log), _move_log)
+    # soul.md is the fourth mover - it is baked into the same f-string and re-read only at
+    # process start, so a re-persona + restart re-prefills with nothing naming the cause
+    # (A-2026-10-11-02).
+    check("...and the notice names soul.md among the causes it can be",
+          any("soul.md" in m for m in _move_log), _move_log)
+    check("the static-prompt docstring names soul.md among the movers",
+          "soul.md" in (fb.build_system_prompt.__doc__ or ""),
+          (fb.build_system_prompt.__doc__ or "")[-260:])
 
     # Always-runbooks announce a cut and name what the budget skipped: a rule that quietly
     # loses its tail reads as a complete rule.

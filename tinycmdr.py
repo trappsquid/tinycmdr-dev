@@ -18194,11 +18194,12 @@ def build_system_prompt(subagent=False):
 
     Anything that can change between two calls (notes) lives in
     volatile_context() instead — see the note there on why that matters for
-    prefix caching. Three things can still move this text between two runs of a SESSION, and
+    prefix caching. Four things can still move this text between two runs of a SESSION, and
     the endpoint's prefix cache is per conversation, so each one costs a full re-prefill (22.6 s
     on a 6.5k prompt; the same edit at 120k is priced at ~400 s, measured 2026-09-27):
-    a drop-in tool built mid-run, a SKILL.md added or edited under skills/, and an
-    AGENTS.md/CLAUDE.md edited between runs. Both disk-fed blocks are rebuilt on every call -
+    a drop-in tool built mid-run, a SKILL.md added or edited under skills/, an
+    AGENTS.md/CLAUDE.md edited between runs, and a soul.md edited between runs - it is baked
+    into the same f-string and re-read only at process start. Both disk-fed blocks are rebuilt on every call -
     that is cheap (measured 2026-10-07: 2.9 ms with 40 runbooks, against one model call) and it
     is what keeps a new runbook visible without a restart - and a move is LOGGED, so an
     operator sees the re-prefill instead of only a slow request (run 22, A-2026-10-07-55).
@@ -18345,8 +18346,8 @@ def _note_prompt_move(text):
     if prev is None or prev == text:
         return
     log.info("the STATIC prompt moved between two builds of this session (%+d chars): a "
-             "skill, a repo-rules file or a new drop-in tool changed, so the endpoint "
-             "re-prefills the whole conversation on the next call",
+             "skill, a repo-rules file, a soul.md or a new drop-in tool changed, so the "
+             "endpoint re-prefills the whole conversation on the next call",
              len(text) - len(prev))
 
 
