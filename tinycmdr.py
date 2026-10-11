@@ -27801,12 +27801,12 @@ def _web_stall_tick(warn_m=None, kill_m=None, now=None):
 
 def _web_stall_loop():
     """The web lane's watchdog thread: the chat lane's shape, for the other door."""
-    warn_m = _web_stall_minutes("warn")
-    kill_m = _web_stall_minutes("abandon")
     while True:
         time.sleep(30)
         try:
-            _web_stall_tick(warn_m, kill_m)
+            # The tick re-reads CONFIG each pass - no cached thresholds
+            # (A-2026-10-10-95, the chat loop's twin).
+            _web_stall_tick()
         except Exception:
             log.exception("web stall watchdog tick failed")
 
@@ -34356,12 +34356,13 @@ class MattermostDispatcher:
         it is alive. Warn visibly, then abandon the run and hand the channel to
         a fresh worker so the backlog behind it gets served.
         """
-        warn_m = self._stall_warn_minutes()
-        kill_m = self._stall_abandon_minutes()
         while True:
             time.sleep(30)
             try:
-                self._stall_tick(warn_m, kill_m)
+                # No cached thresholds: the tick re-reads CONFIG every pass, so an
+                # operator shortening stall_*_minutes during a live wedged run (the
+                # exact moment one reaches for it) applies here (A-2026-10-10-95).
+                self._stall_tick()
             except Exception:
                 log.exception("stall watchdog tick failed")
 

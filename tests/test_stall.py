@@ -469,6 +469,46 @@ def test_stop_after_the_run_was_already_flagged_does_not_say_nothing_is_running(
           any("Nothing is running" in t for _, t in d.posted), d.posted)
 
 
+def test_stall_thresholds_are_read_live():
+    """Both watchdog loops cached the warn/abandon minutes at thread start, so a live
+    config edit to stall_*_minutes never applied until a restart - while the tick itself
+    supports reading CONFIG on every pass (A-2026-10-10-95)."""
+    d = _dispatcher()
+    seen = []
+
+    def _tick(*a, **k):
+        seen.append((a, k))
+        raise KeyboardInterrupt
+
+    saved_sleep = fb.time.sleep
+    saved_tick = d._stall_tick
+    fb.time.sleep = lambda s: None
+    d._stall_tick = _tick
+    try:
+        d._stall_loop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        fb.time.sleep = saved_sleep
+        d._stall_tick = saved_tick
+    check("chat watchdog: the tick reads the thresholds live (no cached args)",
+          bool(seen) and seen[0] == ((), {}), seen)
+
+    seen = []
+    saved_web = fb._web_stall_tick
+    fb.time.sleep = lambda s: None
+    fb._web_stall_tick = _tick
+    try:
+        fb._web_stall_loop()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        fb.time.sleep = saved_sleep
+        fb._web_stall_tick = saved_web
+    check("web watchdog: the tick reads the thresholds live (no cached args)",
+          bool(seen) and seen[0] == ((), {}), seen)
+
+
 def test_watchdog_abandon_clears_the_busy_flag():
     """The abandoned run must stop counting as busy, or the next plain message is
     steered into a run that will never read it and the next /new queues behind a
