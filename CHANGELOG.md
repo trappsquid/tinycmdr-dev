@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A secret field shows what was typed or pasted:** `tinycmdr setup`'s Mattermost-token question, `token set` and the search and model wizards read their secrets through getpass, which echoes nothing - a blind field on a console - and the Windows installer's redirected branch could lose a fed value through `Read-Host -AsSecureString`; every door now reads through one masked reader, one `*` per character with a working backspace (tests/test_verbs.py, tests/test_installer_windows.py).
+- **The README's links resolve on an install:** the shipped README's relative docs links 404'd on an installed box, so they are absolute GitHub links and the LICENSE now ships with the package (tests/test_contracts.py).
+- **A drop-in tool's manifest timeout is bounded:** a `.tool.json` carries its own timeout and it was taken verbatim, so a manufactured manifest parked one call for a day; a manifest timeout is refused at load outside 1-600 seconds (tests/test_tool_load_surface.py).
+- **The write-and-run gate covers Python's spellings:** the gate that blocks the agent from writing a shell script and running it never read `.py`, `python -c` or a python delete - the script gate now grades the python shapes with the shell's target rule (tests/test_guard_battery.py).
+- **The supervisor's logs are bounded:** `supervisor.log` and `bot-stdout.log` grew without limit; each rotates at 5 MB with one predecessor (tests/test_process_surface.py).
+- **The Telegram lane answers the chat lane's commands:** `/status`, `/model`, `/reasoning`, `/plan`, `/fork`, `/undo`, `/retry`, `/save`, `/bg`, `/pause`, `/restart [force]`, `/version` and the `/tinycmdr` management verbs were handed to the model as tasks - `/restart` got an answer about restarting while the bot kept running - so the lane runs them through the same helpers the Mattermost lane uses, refuses an unknown `/word` locally, and a message carrying a photo, document or voice note is downloaded into the run (image content when vision is on) instead of "I can only read text here" (tests/test_telegram.py).
+- **The updater's fetch is bounded, and a damaged VERSION is named:** `update.sh` fetched with neither a connect timeout nor retries while `install.sh` had both, and an unreadable installed VERSION made the never-downgrade guard skip itself silently - the guard compares as 0.0.0 and says so, in both updaters (tests/test_update_script.py, tests/test_installer_windows.py).
 
 ## [1.1.4] - 2026-10-11
 
