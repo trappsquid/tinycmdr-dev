@@ -7,18 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **A cohort is connected from the page:** the legion rail's ADD COHORT writes a box this hub commands into `agent.a2a_remotes` by URL and page token — the card is probed before anything is written, the token lands in `.env` under the swept `_TOKEN` name and the running hub resolves it with no restart, and the new channel opens (tests/test_webui.py, tests/test_webui_page.py).
-
-### Fixed
-- **A long task is not ended by its own wording:** the completion-announcement guard is a single advisory reminder now (`0` disables it) instead of a demand that blocked continuation and a force two announcements later, and what ends a genuinely stuck run is the new idle-turn counter — a turn whose every tool call repeated a known result or was refused — so no model's phrasing can end a task early, and every harness stop names its reason and how to resume (tests/test_stall.py).
-- **A task is not cut off by the turn cap:** `llm.max_turns` is a per-segment checkpoint like `max_steps` and `max_minutes` now — a continuation refills it, the segment count bounds the total, and when the segments are spent the wrap ladder asks for the report instead of the bare "Hit the turn limit" exit it used to hit first for one-call-per-turn models (tests/test_stall.py).
-- **The page's LAN answer completes:** the installers open the port themselves when the run has the rights (root's `socketfilterfw`/`ufw`/`firewalld`, an elevated PowerShell's `New-NetFirewallRule`), offer the one UAC or sudo prompt they cannot otherwise get, keep the exact command in "still to do" when it stays closed, and the "reachable from other machines?" question is asked only at a terminal and defaults to the bind the config already has — so a scripted or Enter-through re-run no longer rewrites a kept `0.0.0.0` back to loopback (tests/test_installer_unix.py, tests/test_installer_windows.py).
-
 ## [1.1.2] - 2026-10-10
 
 ### Added
 - **One page commands several boxes (the legion):** `agent.a2a_remotes` gives the page a rail section and a tab per cohort — orders relay server-to-server over A2A and a cohort's run streams back line by line through the card-declared run-lines extension, with `web.a2a_policy: "read_only"` to bound what an arriving peer may run on that box (tests/test_legion.py, tests/test_webui_page.py, tests/test_webui.py).
+- **A cohort is connected from the page:** the legion rail's ADD COHORT writes a box this hub commands into `agent.a2a_remotes` by URL and page token — the card is probed before anything is written, the token lands in `.env` under the swept `_TOKEN` name and the running hub resolves it with no restart, and the new channel opens (tests/test_webui.py, tests/test_webui_page.py).
 
 ### Fixed
 - **The secret sweep's floors are one number:** the environment and `llm.api_key` arms accept the config arm's 6-char floor, so a hand-set short page token or endpoint key is masked instead of reaching the transcript, the log and the chat (tests/test_safety_surface.py).
@@ -31,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Windows installer stops at path boundaries and real names:** the process sweep matches at a path boundary (a sibling install's bot is safe), the python.org fallback downloads a name that exists (WOW64 included), bracketed install paths work, a keep-existing re-run's closing words match what it did, TLS 1.2 is set before the fetches, `FB_NOPAUSE` is restored, the transcript scrub covers the web token, and the generated launchers get CRLF (tests/test_installer_windows.py, tests/test_verbs.py).
 - **The updaters agree with the update verb:** both refuse a downgrade, write each file beside and rename it, point a dependency change at the venv's own python, and name the next step when a fetch or checksum fails; the launcher no longer leaks its temp updater, the install.sh footer stops hardcoding `~/tinycmdr`, and the build gate checks the win container's `$required` rather than the staged tree (tests/test_update_script.py).
 - **The install docs match the installers:** the Mac guide names the real `.env` path and the key's home, lists the prompts a reader actually sees, and notes uv's cache; the README qualifies `--install-python` to macOS (tests/test_wording.py).
+- **A long task is not ended by its own wording:** the completion-announcement guard is a single advisory reminder now (`0` disables it) instead of a demand that blocked continuation and a force two announcements later, and what ends a genuinely stuck run is the new idle-turn counter — a turn whose every tool call repeated a known result or was refused — so no model's phrasing can end a task early, and every harness stop names its reason and how to resume (tests/test_stall.py).
+- **A task is not cut off by the turn cap:** `llm.max_turns` is a per-segment checkpoint like `max_steps` and `max_minutes` now — a continuation refills it, the segment count bounds the total, and when the segments are spent the wrap ladder asks for the report instead of the bare "Hit the turn limit" exit it used to hit first for one-call-per-turn models (tests/test_stall.py).
+- **The page's LAN answer completes:** the installers open the port themselves when the run has the rights (root's `socketfilterfw`/`ufw`/`firewalld`, an elevated PowerShell's `New-NetFirewallRule`), offer the one UAC or sudo prompt they cannot otherwise get, keep the exact command in "still to do" when it stays closed, and the "reachable from other machines?" question is asked only at a terminal and defaults to the bind the config already has — so a scripted or Enter-through re-run no longer rewrites a kept `0.0.0.0` back to loopback (tests/test_installer_unix.py, tests/test_installer_windows.py).
 
 ## [1.1.1] - 2026-10-10
 
