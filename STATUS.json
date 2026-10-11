@@ -2710,6 +2710,17 @@
       },
       "detail": "Choosing \"reachable from other machines\" only printed a firewall command: nothing was ever opened (the Windows installer runs unelevated by design, and a launchd agent cannot answer macOS's allow prompt), and on Windows the question was not gated on a terminal at all - a scripted re-run read EOF, its \"n\" default answered for the user, and a kept 0.0.0.0 bind was rewritten to loopback. The installers now open the port when the run has the rights (root, an elevated shell), offer the one UAC or sudo prompt when it does not, and carry the exact command into \"still to do\" otherwise; the question runs only at a terminal and defaults to the bind the config already has.",
       "gate": "RED on the pre-fix build: 10 checks in tests/test_installer_unix.py (the all-Enter re-run reset web.host to 127.0.0.1 on both platforms) and 6 in tests/test_installer_windows.py; green on the batch. The elevated branches (root, UAC) are pinned by shape - a suite cannot become root - and the ps1 was parsed on a real Windows host (PowerShell 5.1, 0 errors), its exact New-NetFirewallRule command dry-run against the real module (-WhatIf: all parameters valid, no rule created)."
+    },
+    {
+      "id": "setup-completes-the-lan-answer",
+      "title": "the setup wizard completes the LAN answer, and proves it",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "f8b91c0",
+        "expect": "untagged"
+      },
+      "detail": "`tinycmdr setup` answered \"reachable from other machines?\" with advice only: nothing was opened, nothing was checked, and where the probes found no firewall it said nothing at all; the link it printed read the config on disk, so answering LAN still showed a loopback link. The wizard now completes the answer the way the installers do - the run itself with root or an elevated shell, one sudo or UAC offer at a terminal, the exact command otherwise - judges the result against the tool's own state (Defender's rule, ALF's app list, ufw's status, firewalld's query-port) and prints it - opened, nothing to open, or still closed with the command - and the link and summary name the address the answer chose.",
+      "gate": "RED on the pre-fix build: 12 checks in tests/test_verbs.py and 2 in tests/test_model_surface.py (_firewall_complete did not exist, the summary printed http://0.0.0.0:8790, and no firewall state was printed); green on the batch"
     }
   ]
 }

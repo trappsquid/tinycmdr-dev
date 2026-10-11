@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The setup wizard's LAN answer completes:** saying yes to "reachable from other machines" opens the port the way the installers do - the run itself with root or an elevated shell, one sudo or UAC offer at a terminal, the exact command otherwise - judges the result against the tool's own state (Defender's rule, ALF's app list, ufw's status, firewalld's query-port) and prints it, and the link and summary name the address the answer chose instead of the config's stale bind (tests/test_verbs.py, tests/test_model_surface.py).
+
 ## [1.1.2] - 2026-10-10
 
 ### Added
