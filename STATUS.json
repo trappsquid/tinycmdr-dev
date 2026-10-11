@@ -2732,6 +2732,17 @@
       },
       "detail": "`tinycmdr --web` beside a running instance refused with \"already running\" without ever looking at the page, `tinycmdr web` and doctor printed or implied a URL they had not probed, `setup` saved answers a running service would never read, and every installer finished on a page URL it had not checked while the firewall offer built its rule from the flag default instead of the port the config keeps; the doors now probe /api/health first, name the port and address the box actually serves, read a redo's kept port before printing or firewalling, and the Windows elevated firewall run reports its outcome from a log.",
       "gate": "RED on the pre-fix build: the dark-page verb and reason checks in tests/test_webui.py, the --web announce/refuse checks in tests/test_lane_surface.py, the restart offer in tests/test_model_surface.py, and 6 + 8 checks across the two installer suites run in a worktree at the pre-fix revision; green on the batch"
+    },
+    {
+      "id": "masked-secret-entry",
+      "title": "a secret field shows what was typed or pasted",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "e4ad176",
+        "expect": "untagged"
+      },
+      "detail": "`tinycmdr setup`'s Mattermost-token question showed NOTHING as the value was typed or pasted - getpass echoes no character - and a fresh Windows install's bot-token prompt read the same way, so the field looked dead; the Windows installer's redirected branch also still went through Read-Host -AsSecureString, blank in some hosts and dropping a fed value (it returned the ReadKey branch's text under -NonInteractive). Every secret door now reads through one masked engine - the setup wizard, token set, the search and model wizards: one * per character for typing or a paste, backspace rubs the entry out, a pipe keeps the plain line read - and the installer's redirected branch reads the line off stdin.",
+      "gate": "RED on the pre-fix build: the masked engine did not exist and the pty run showed the prompt with no stars following it (2 checks in tests/test_verbs.py); the ps1's code held Read-Host -AsSecureString and the piped probe under pwsh returned the fallback's text with Read-Host errors instead of the fed value (3 checks in tests/test_installer_windows.py); green on the batch, with the ps1 parsed and the piped round trip graded on a real pwsh"
     }
   ]
 }

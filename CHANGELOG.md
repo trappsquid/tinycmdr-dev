@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A secret field shows what was typed or pasted:** `tinycmdr setup`'s Mattermost-token question, `token set` and the search and model wizards read their secrets through getpass, which echoes nothing - a blind field on a console - and the Windows installer's redirected branch could lose a fed value through `Read-Host -AsSecureString`; every door now reads through one masked reader, one `*` per character with a working backspace (tests/test_verbs.py, tests/test_installer_windows.py).
+
 ## [1.1.4] - 2026-10-11
 
 ### Fixed
