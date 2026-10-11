@@ -830,9 +830,13 @@ def main():
         try:
             _probe = os.path.join(_probe_dir, "readsecret.ps1")
             with open(_probe, "w", encoding="utf-8") as fh:
+                # Hex by hand: [Convert]::ToHexString is .NET 5+, and the Windows gate
+                # runs Windows PowerShell 5.1, where the probe died on the method itself
+                # (measured 2026-10-11: "does not contain a method named 'ToHexString'").
                 fh.write(_fn + "\n$v = Read-Secret 'secret: '\n"
-                         "Write-Output ('VAL=' + [Convert]::ToHexString("
-                         "[Text.Encoding]::UTF8.GetBytes($v)))\n")
+                         "$b = [Text.Encoding]::UTF8.GetBytes($v)\n"
+                         "Write-Output ('VAL=' + (($b | ForEach-Object "
+                         "{ $_.ToString('X2') }) -join ''))\n")
             r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-File", _probe],
                                input="tok123\n", capture_output=True, text=True,
                                timeout=60)
