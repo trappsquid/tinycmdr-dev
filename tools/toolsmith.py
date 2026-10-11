@@ -52,7 +52,8 @@ SCHEMA = {
                         "description": "One line the model reads when it chooses tools."},
         "args": {"type": "string",
                  "description": "Argument spec for new/wrap: 'path:str=., top:int=5, raw:bool'. "
-                                "A default after '=' makes the argument optional."},
+                                "A default after '=' makes the argument optional. Commas "
+                                "separate arguments, so a default cannot contain one."},
         "script": {"type": "string", "description": "wrap: path to the existing script."},
         "command": {"description": "wrap: argv list (or one shell string) that runs the script."},
         "mutates": {"type": "boolean", "description": "true if the tool changes local state."},
@@ -160,18 +161,29 @@ def _app_path():
 
 
 def _parse_args(spec):
-    """'path:str=., top:int=5' -> (properties, required)."""
+    """'path:str=., top:int=5' -> (properties, required).
+
+    Commas separate arguments, so a default cannot CONTAIN one: `path:str=a,b` reads as
+    `path` defaulting to `a` plus a second argument `b` nobody meant (A-2026-10-11-06).
+    Guessing the other way would break a legal spelling (`path,tag` IS two arguments), so
+    the split stays - and the ambiguous shape is NAMED on stderr instead of guessed at.
+    """
     props, required = {}, []
+    prev_defaulted = False
     for chunk in str(spec or "").split(","):
         chunk = chunk.strip()
         if not chunk:
             continue
         if ":" not in chunk:
+            if prev_defaulted:
+                print("note: %r read as its own argument - commas separate arguments, so a "
+                      "default cannot contain one" % chunk, file=sys.stderr)
             name, kind, default = chunk, "str", None
         else:
             name, kind = chunk.split(":", 1)
             kind, _, default = kind.partition("=")
             default = default.strip() or None
+        prev_defaulted = default is not None
         name = name.strip()
         kind = kind.strip().lower() or "str"
         if not name:

@@ -101,6 +101,24 @@ write verifier both use, so "OK" is the loader's verdict and not this tool's opi
               dir=str(work))
     check("an argument with no default becomes required",
           "required" in (work / "needs_arg.py").read_text(encoding="utf-8"), out[:200])
+    # A default containing a comma splits (A-2026-10-11-06): `path:str=a,b` reads as `path`
+    # defaulting to `a` plus a required `b`. Guessing the other way would break the legal
+    # `path,tag`, so the split stays and the ambiguous shape is named on stderr.
+    import contextlib as _contextlib
+    import io as _io
+    _stderr = _io.StringIO()
+    with _contextlib.redirect_stderr(_stderr):
+        run(action="new", name="commas", description="x", args="path:str=a,b")
+    _commas = (work / "commas.py").read_text(encoding="utf-8")
+    check("a comma in a default is called out, not guessed at",
+          "commas separate arguments" in _stderr.getvalue(), _stderr.getvalue()[:200])
+    check("...and the split still yields the two arguments the comma made",
+          "'b'" in _commas and "required" in _commas, _commas[:300])
+    _stderr = _io.StringIO()
+    with _contextlib.redirect_stderr(_stderr):
+        run(action="new", name="twobare", description="x", args="path,tag")
+    check("two bare arguments stay two arguments, with no note",
+          _stderr.getvalue() == "", _stderr.getvalue()[:200])
     check("the scaffold is valid PYTHON, not JSON dressed as python",
           ": true" not in text and ": false" not in text and ": null" not in text, text[:300])
     mod = {}
