@@ -1417,49 +1417,57 @@ def case_lan_reachability(sb, pkg, bindir, user, py):
     else:
         print("SKIP the macOS firewall-text half: not a Mac")
 
-    # the closing page line carries a REAL address when this box has one - a placeholder
-    # in the middle of an install report is not a URL (reported 2026-10-10)
-    _tail = out[out.rfind("=== done"):]
-    if plan_lan_ips():
-        check("the macOS closing page line names a real address and the box's own port",
-              re.search(r"http://\d+\.\d+\.\d+\.\d+:%d" % port_m, _tail) is not None,
-              _tail[-300:])
-    else:
-        check("the macOS closing page line falls back to the placeholder with no address",
-              ("<this-host>:%d" % port_m) in _tail, _tail[-300:])
-
     # -- the page is PROBED after the agent loads ---------------------------------
     # Nothing ever LOOKED at the page a fresh install claims to serve: the closing line
     # printed a URL either way (reported 2026-10-10). Two sandbox runs: a curl stub
     # (this bindir only) that answers, and the real curl against a free port - and
     # `sleep` is a no-op stub here, so the dark run's 15 attempts are instant.
-    okbin = sb / "lan-curl-ok"
-    shutil.copytree(bindir, okbin)
-    (okbin / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    (okbin / "curl").chmod(0o755)
-    mac_up = sb / "lan-mac-up"
-    stage_kept_install(mac_up, port_m)
-    got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
-               "--no-path", "--python", py, "--label", "com.tinycmdr.lanup",
-               "--install-dir", mac_up],
-              sandbox_home_env(sb, okbin, log, user, {"TINYCMDR_PYTHON": py}), pkg)
-    out = got.stdout + got.stderr
-    check("a page that answers: the install reports it, naming the running port",
-          got.returncode == 0
-          and ("answering now on http://127.0.0.1:%d" % port_m) in out,
-          out[-400:])
+    # Darwin only: on any other host this installer refuses without --no-launchd (it is
+    # a macOS artifact), so there is no agent load and no probe to grade - the macOS CI
+    # job runs this half for real.
+    if on_mac:
+        # the closing page line carries a REAL address when this box has one - a
+        # placeholder in the middle of an install report is not a URL
+        _tail = out[out.rfind("=== done"):]
+        if plan_lan_ips():
+            check("the macOS closing page line names a real address and the box's own port",
+                  re.search(r"http://\d+\.\d+\.\d+\.\d+:%d" % port_m, _tail) is not None,
+                  _tail[-300:])
+        else:
+            check("the macOS closing page line falls back to the placeholder with no address",
+                  ("<this-host>:%d" % port_m) in _tail, _tail[-300:])
 
-    mac_down = sb / "lan-mac-down"
-    stage_kept_install(mac_down, port_m)
-    got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
-               "--no-path", "--python", py, "--label", "com.tinycmdr.landown",
-               "--install-dir", mac_down],
-              sandbox_home_env(sb, bindir, log, user, {"TINYCMDR_PYTHON": py}), pkg)
-    out = got.stdout + got.stderr
-    check("a page that does not answer: the install SAYS so and names the log",
-          got.returncode == 0
-          and ("NOT answering on http://127.0.0.1:%d" % port_m) in out
-          and "tinycmdr.log" in out, out[-500:])
+        okbin = sb / "lan-curl-ok"
+        shutil.copytree(bindir, okbin)
+        (okbin / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (okbin / "curl").chmod(0o755)
+        mac_up = sb / "lan-mac-up"
+        stage_kept_install(mac_up, port_m)
+        got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
+                   "--no-path", "--python", py, "--label", "com.tinycmdr.lanup",
+                   "--install-dir", mac_up],
+                  sandbox_home_env(sb, okbin, log, user, {"TINYCMDR_PYTHON": py}), pkg)
+        out = got.stdout + got.stderr
+        check("a page that answers: the install reports it, naming the running port",
+              got.returncode == 0
+              and ("answering now on http://127.0.0.1:%d" % port_m) in out,
+              out[-400:])
+
+        mac_down = sb / "lan-mac-down"
+        stage_kept_install(mac_down, port_m)
+        got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
+                   "--no-path", "--python", py, "--label", "com.tinycmdr.landown",
+                   "--install-dir", mac_down],
+                  sandbox_home_env(sb, bindir, log, user, {"TINYCMDR_PYTHON": py}), pkg)
+        out = got.stdout + got.stderr
+        check("a page that does not answer: the install SAYS so and names the log",
+              got.returncode == 0
+              and ("NOT answering on http://127.0.0.1:%d" % port_m) in out
+              and "tinycmdr.log" in out, out[-500:])
+    else:
+        print("SKIP the macOS page-probe half: this host is not a Mac (the installer "
+              "refuses without --no-launchd here, so there is no start path to probe); "
+              "the macos CI job grades it")
     return lin
 
 
