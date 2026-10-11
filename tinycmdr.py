@@ -27783,7 +27783,8 @@ def _web_stall_tick(warn_m=None, kill_m=None, now=None):
             run.cancel.set()
             run.add("system",
                     "⚠️ No output for %d min — that run is wedged, so I'm abandoning it "
-                    "and freeing this conversation. (`/tinycmdr status` for state.)"
+                    "and freeing this conversation. A command it had already started may "
+                    "still finish on its own. (`/tinycmdr status` for state.)"
                     % int(quiet / 60))
             _finish_web_run(run, getattr(run, "reporter", None) or _QuietReporter(), "",
                             failed=True)
@@ -34386,7 +34387,9 @@ class MattermostDispatcher:
                            f"⚠️ No output for {int(quiet / 60)} min — "
                            f"that run is wedged, so I'm abandoning it "
                            f"and picking up whatever you queued "
-                           f"behind it. (`/tinycmdr status` for state.)")
+                           f"behind it. A command it had already started "
+                           f"may still finish on its own. "
+                           f"(`/tinycmdr status` for state.)")
                 with self.workers_lock:
                     self.active.pop(channel_id, None)
                     # The run is written off, so it must stop counting as "busy": while

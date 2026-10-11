@@ -509,6 +509,31 @@ def test_stall_thresholds_are_read_live():
           bool(seen) and seen[0] == ((), {}), seen)
 
 
+def test_abandon_notice_names_the_still_running_command():
+    """An abandoned run's ALREADY-STARTED batch still runs to completion (bounded by the
+    batch timeout; the entry check covers queued calls). The notice read as if everything
+    stopped, which is not true for one batch in flight (A-2026-10-10-96)."""
+    d = _dispatcher()
+    ch = "chan-abandon-notice"
+    d.queues.setdefault(ch, fb.queue.Queue())
+    with d.workers_lock:
+        d._spawn_worker(ch, d.queues[ch])
+    d.running.add(ch)
+    d.active[ch]["last"] = fb.now_mono() - 25 * 60
+    d._stall_tick()
+    notices = [t for _, t in d.posted if "abandoning" in t]
+    check("the abandon notice says a command already started may still finish",
+          bool(notices) and "may still finish" in notices[-1], d.posted[-2:])
+    # The web lane's twin lands in the run's own lines; a wedged WEB_RUNS entry cannot be
+    # driven from a suite, so the sentence is pinned where it lives - the same reason the
+    # stop guard above is pinned.
+    src = (SRC).read_text(encoding="utf-8", errors="replace")
+    i = src.find("def _web_stall_tick")
+    body = src[i:i + 4200] if i > 0 else ""
+    check("...and the web lane's abandon notice carries the same sentence",
+          i > 0 and "still finish on its own" in body, body[:120])
+
+
 def test_watchdog_abandon_clears_the_busy_flag():
     """The abandoned run must stop counting as busy, or the next plain message is
     steered into a run that will never read it and the next /new queues behind a
