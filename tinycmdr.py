@@ -4632,7 +4632,29 @@ _GUARD_INTERPRETERS = {
     "dash": (("-c",), True), "ksh": (("-c",), True),
     "cmd": (("/c", "/k"), False), "cmd.exe": (("/c", "/k"), False),
     "powershell": (("-c", "-command"), False), "pwsh": (("-c", "-command"), False),
+    # The python family runs a file (`python run.py`) or a string (`python -c "..."`), the
+    # same two shapes as a shell - and it was the measured write-and-run's language
+    # (A-2026-10-10-99). Versioned names (`python3.12`) and the Windows launcher are the
+    # same door; _guard_interpreter below is the one lookup.
+    "python": (("-c",), False), "py": (("-c",), False),
 }
+_GUARD_INTERPRETER_RX = re.compile(r"^python(?:\d+(?:\.\d+)?)?w?$")
+
+
+def _guard_interpreter(word):
+    """The run-the-rest switches for an interpreter word, or None.
+
+    One place for the lookup so `python3.12`/`pythonw` reach the same door as `python`
+    without a second spelling list.
+    """
+    w = _guard_verb(word)
+    if w in _GUARD_INTERPRETERS:
+        return _GUARD_INTERPRETERS[w]
+    if _GUARD_INTERPRETER_RX.match(w):
+        return (("-c",), False)
+    return None
+
+
 # PowerShell's spawners: the first word after their own switches is the program they start.
 _GUARD_SPAWNERS = ("start-process", "start", "saps")
 # The shell's own words. `;` splits them off the command, so `then rm -rf /etc` reaches a
@@ -4722,8 +4744,8 @@ def _guard_unwrap(toks):
             out.pop(0)
             _guard_skip_wrapper_args(out, _GUARD_WRAPPERS[word])
             continue
-        if word in _GUARD_INTERPRETERS:
-            runs, bundles = _GUARD_INTERPRETERS[word]
+        if _guard_interpreter(word) is not None:
+            runs, bundles = _guard_interpreter(word)
             rest = out[1:]
             if _guard_skip_wrapper_args(rest, (), runs, bundles):
                 payload = " ".join(rest).strip()
@@ -9050,6 +9072,66 @@ def _delete_effect(path, cap=20000):
         return ""
 
 
+_PY_DELETE_RX = re.compile(
+    r"(?i)\b(shutil\.rmtree|os\.remove|os\.unlink|os\.rmdir|os\.removedirs)"
+    r"\s*\(\s*([^)\n]*)")
+_PY_METHOD_RX = re.compile(r"(?i)([^\s;=]{1,120}?)\.\s*(?:unlink|rmdir)\s*\(\s*\)")
+
+
+def _py_target(raw):
+    """The literal path a python delete call names, or "" when it is an expression."""
+    t = str(raw or "").strip()
+    m = re.match(r"^Path\s*\(\s*([fur]?['\"].*?['\"])", t)
+    if m:
+        t = m.group(1)
+    m = re.match(r"^[fur]?(['\"])(.*?)\1", t, re.S)
+    return m.group(2) if m else ""
+
+
+def _py_delete_calls(line):
+    """[(verb, raw target)] for the python delete spellings on one line.
+
+    The shapes the measured write-and-run used and their neighbours: `shutil.rmtree(p)`
+    (recursive), `os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`, and the Path methods
+    `Path(p).unlink()` / `p.rmdir()`.
+    """
+    found = []
+    for m in _PY_DELETE_RX.finditer(str(line or "")):
+        found.append((m.group(1).lower(), m.group(2)))
+    for m in _PY_METHOD_RX.finditer(str(line or "")):
+        recv = m.group(1).strip()
+        if recv:
+            found.append(("path.x", _py_target(recv)))
+    return found
+
+
+def _python_delete_risk(text):
+    """('block'|'confirm', why) for a python delete spelling in TEXT, else None.
+
+    The script gate reads a written script's content as commands, and the shell rules know
+    verbs - so a declined recursive delete re-spelled in Python ran unread (the measured
+    write-and-run, A-2026-10-10-99). The target rule mirrors destructive_risk's: a whole
+    tree is the absolute tier, a recursive delete asks, and a single-target delete asks
+    only when it would destroy real content outside scratch - deleting a path that does
+    not exist asks nothing, and an expression target is ordinary work the way `rm $VAR` is.
+    """
+    for raw in _guard_join_continuations(str(text or "")).splitlines():
+        for verb, arg in _py_delete_calls(raw):
+            target = _py_target(arg)
+            if "rmtree" in verb or verb.endswith("removedirs"):
+                if target and _broad_root(target):
+                    return ("block", "a recursive delete of %s" % target)
+                return ("confirm", "a recursive delete (%s)"
+                        % (target or "a python expression"))
+            if target and _is_scratch(target):
+                continue
+            if target:
+                effect = _delete_effect(target)
+                if effect:
+                    return ("confirm", "a delete of %s (%s)" % (target, effect))
+    return None
+
+
 def destructive_risk(command, _depth=0):
     """('block'|'confirm', why) for a recursive delete aimed at a TREE, else None.
 
@@ -9065,16 +9147,19 @@ def destructive_risk(command, _depth=0):
     if _depth > 3:
         return None
     for segment in _SEGMENT_RX.split(_guard_join_continuations(command)):
+        # Python's delete spellings ride the same rule (A-2026-10-10-99); the shell verb
+        # reads below cannot see them, and the write-and-run proved that gap.
+        pyrisk = _python_delete_risk(segment)
+        if pyrisk:
+            return pyrisk
         argv = _shlex_words(segment)
         if not argv:
             continue
         argv, payload = _guard_unwrap(argv)
         if payload is not None:
-            # an interpreter asked to run a string (`sh -c 'rm -rf /'`, `cmd /c "rm -rf /"`)
-            # hides the command one level in - the string IS the command, so the same rule
-            # reads it, and `cmd`'s SLASH switch is the shared rule's business now (a
-            # manifest tool's command is wrapped in exactly that on Windows, and the flag
-            # used to be read as the verb because only dashes were stripped).
+            # an interpreter asked to run a string (`sh -c 'rm -rf /'`, `cmd /c "rm -rf /"`,
+            # `python -c "shutil.rmtree('/')"`) hides the command one level in - the string
+            # IS the command, so the same rule reads it
             sub = destructive_risk(payload, _depth + 1)
             if sub:
                 return sub
@@ -9405,7 +9490,11 @@ def confirm_gate(text, subject, ctx):
 # content tier carries the Windows shapes, not the POSIX deletes). The directory was gone.
 # Both halves below read a written script as what it is: commands.
 
-_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".ksh", ".command", ".ps1", ".bat", ".cmd")
+_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".ksh", ".command", ".ps1", ".bat", ".cmd",
+                    # python is the measured write-and-run's language: a .py file's bare
+                    # words are code the same way a script's are commands
+                    # (A-2026-10-10-99).
+                    ".py")
 _SCRIPT_SCAN_BYTES = 65536      # a file past this is read as its first 64 KB
 _WRAPPER_NEW_GRACE = 2.0        # filesystem timestamp granularity (FAT is 2s)
 
@@ -9527,7 +9616,7 @@ def _wrapped_script_file(command):
         if payload is not None:
             words = _shlex_words(payload)
             cand = words[0] if len(words) == 1 else None
-        elif argv and _guard_verb(argv[0]) in _GUARD_INTERPRETERS:
+        elif argv and _guard_interpreter(argv[0]) is not None:
             rest = [w for w in argv[1:] if not w.startswith("-") and w != "--"]
             cand = rest[0] if rest else None
         if not cand:

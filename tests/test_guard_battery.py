@@ -820,6 +820,70 @@ def test_a_written_script_cannot_carry_a_declined_command():
           out.startswith("BLOCKED") and not never.exists(), out[:160])
 
 
+def test_a_written_python_file_is_read_the_same_way():
+    """Python was the hole in that belt (A-2026-10-10-99): a declined recursive delete
+    re-spelled as `shutil.rmtree` ran unread - `.py` was in neither half of the script
+    gate and the shell rules read verbs - so the write and the `python run.py` run both
+    answered nothing and the tree was gone (measured 2026-10-11 in scratch). The measured
+    shape is graded here both ways: the write, the run of the file, and the `-c` string.
+    """
+    import tempfile
+    work = Path(tempfile.mkdtemp(prefix="tc-guards-py-"))
+    target = work / "decoy"
+    target.mkdir()
+    (target / "data.txt").write_text("x", encoding="utf-8")
+    tgt = target.as_posix()
+    script = work / "run_rm.py"
+    content = "import shutil\nshutil.rmtree(%r)\n" % tgt
+    ctx_none = {"session_key": "py-belt"}                 # a lane with no door
+    ctx_yes = {"session_key": "py-belt", "confirm_cb": lambda subject: True}
+
+    out = fb.tool_write_file({"path": str(script), "content": content}, ctx_none)
+    check("write_file: a python recursive delete is declined before it lands",
+          out.startswith("DECLINED") and not script.exists(), out[:160])
+    # The run-time half: a file the write gate never saw is read back when python is
+    # pointed at it. `sys.executable` is an interpreter this host really has AND a
+    # name the gate's family knows (python / python3.12 / python.exe all fold in);
+    # the approved-run half below executes for real.
+    py = sys.executable
+    late = work / "late_rm.py"
+    late.write_text(content, encoding="utf-8")
+    out = fb.tool_shell({"command": '"%s" %s' % (py, late)}, ctx_none)
+    check("shell: python of a file written this run is declined on the file's content",
+          out.startswith("DECLINED") and str(late) in out, out[:160])
+    check("...and the target is still there", target.exists())
+    out = fb.tool_shell({"command": '"%s" %s' % (py, late)}, ctx_yes)
+    check("...and an approved run goes through",
+          not out.startswith("DECLINED") and not target.exists(), out[:120])
+
+    # the string form: `python -c` is the same door, and a whole root is the never tier
+    out = fb.tool_shell({"command": '"%s" -c "import shutil; shutil.rmtree(\'/\')"' % py},
+                        ctx_none)
+    check("shell: python -c rmtree of / is refused, not asked", out.startswith("BLOCKED"),
+          out[:160])
+    target.mkdir(exist_ok=True)
+    out = fb.tool_shell({"command": '"%s" -c \'import shutil; shutil.rmtree(%r)\''
+                                  % (py, tgt)}, ctx_none)
+    check("shell: python -c rmtree of a tree is declined", out.startswith("DECLINED"),
+          out[:120])
+
+    # a comment is prose here too, and an ordinary write is not noise
+    noted = work / "noted.py"
+    out = fb.tool_write_file({"path": str(noted),
+                              "content": "# shutil.rmtree(%r)\nprint('ok')\n" % tgt},
+                             ctx_none)
+    check("write_file: a rmtree in a python COMMENT does not ask", out.startswith("OK"),
+          out[:160])
+    plain = work / "plain.py"
+    out = fb.tool_write_file({"path": str(plain),
+                              "content": "import os\nos.remove(%r)\n"
+                                         % str(work / "missing.txt")},
+                             ctx_none)
+    check("write_file: deleting a path that does not exist asks nothing",
+          out.startswith("OK"), out[:160])
+    shutil.rmtree(work, ignore_errors=True)
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
