@@ -56,7 +56,8 @@ answer left empty so only the search section is doing anything.
     import tempfile
     from pathlib import Path
 
-    SRC = Path(__file__).resolve().parent.parent / "tinycmdr.py"
+    SRC = (Path(__file__).resolve().parent.parent
+           / os.environ.get("TINYCMDR_SRC", "tinycmdr.py"))
     PASSES, FAILS = [], []
 
 
@@ -86,20 +87,24 @@ answer left empty so only the search section is doing anything.
         return dirpath
 
 
-    def drive(dirpath, answer, page=("", "", "", ""), extra=()):
+    def drive(dirpath, answer, page=("", "", "", ""), extra=(), patch=None):
         """Run the wizard with every answer empty but the page's and the last one.
 
     Prompt order: local/cloud, url, model, Mattermost?, Telegram?, page-serve,
     page-LAN (only when serving), page-port (only when serving), page-token (only
     when serving), the web-search menu. `page` carries the four page answers; `answer`
     is the menu's, and `extra` carries what choosing "4" (add your own provider) asks
-    after it (kind, url, label, and a key where its kind asks for one).
+    after it (kind, url, label, and a key where its kind asks for one). `patch` is
+    applied to the module before it runs - a `run_capture`/`is_elevated` fake, so no
+    test run ever touches a real firewall.
     """
         spec = importlib.util.spec_from_file_location("setup_" + dirpath.name,
                                                       dirpath / "tinycmdr.py")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
+        if patch:
+            patch(mod)
         mod.__dict__["_ANSWERS"] = ["", "", "", "", ""] + list(page) + [answer] + list(extra)
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(mod.__dict__["_ANSWERS"]) + "\n")
@@ -182,10 +187,14 @@ answer left empty so only the search section is doing anything.
             # The page is the default door and the one secret this project mints for you.
             # An install that predates it has no TINYCMDR_WEB_TOKEN, and the wizard is where
             # a person says whether other machines may reach it.
+            def _quiet(mod):
+                mod.is_elevated = lambda: True
+                mod.run_capture = lambda *a, **k: (1, "", "", False)
+
             d = stage(work / "page-lan", False)
             # an earlier wizard in THIS process minted a token and left it in os.environ
             os.environ.pop("TINYCMDR_WEB_TOKEN", None)
-            rc, out, written, mod = drive(d, "", page=("y", "y", "", ""))
+            rc, out, written, mod = drive(d, "", page=("y", "y", "", ""), patch=_quiet)
             web = written.get("web") or {}
             check(rc == 0 and web.get("host") == "0.0.0.0",
                   "answering yes puts the page on the network (web.host 0.0.0.0)", web)
@@ -197,8 +206,12 @@ answer left empty so only the search section is doing anything.
                   "and never into config.json", json.dumps(web))
             check("page link" in out and ("#token=" + tok) in out,
                   "the wizard prints the link to open", out[-300:])
-            check("Page         : http://0.0.0.0:8790" in out,
-                  "the summary reports the bind", out[-400:])
+            _summary = (out[out.find("Page         :"):].splitlines() or [""])[0]
+            check("Page         : http://" in _summary and "0.0.0.0" not in _summary,
+                  "the summary names an address a browser can open, not the 0.0.0.0 bind",
+                  _summary)
+            check("firewall    :" in out,
+                  "the LAN answer is completed - the firewall state is printed", out[-700:])
 
             d = stage(work / "page-keep", False)
             rc, out, written, mod = drive(d, "", page=("", "", "", ""))
@@ -228,7 +241,8 @@ answer left empty so only the search section is doing anything.
                 "web": {"enabled": True, "token": "stale-config-token"},
             }), encoding="utf-8")
             os.environ.pop("TINYCMDR_WEB_TOKEN", None)
-            rc, out, written, mod = drive(d, "", page=("y", "y", "", "my-own-LAN-token-4242"))
+            rc, out, written, mod = drive(d, "", page=("y", "y", "", "my-own-LAN-token-4242"),
+                                          patch=_quiet)
             env = (d / ".env").read_text(encoding="utf-8") if (d / ".env").exists() else ""
             check(rc == 0 and "TINYCMDR_WEB_TOKEN=my-own-LAN-token-4242" in env,
                   "a token typed at the prompt is saved to .env", env[-160:])
@@ -390,7 +404,8 @@ probe as a bearer, and lands in .env; a 401 is named as a KEY refusal.
     import threading
     from pathlib import Path
 
-    SRC = Path(__file__).resolve().parent.parent / "tinycmdr.py"
+    SRC = (Path(__file__).resolve().parent.parent
+           / os.environ.get("TINYCMDR_SRC", "tinycmdr.py"))
     PASSES, FAILS = [], []
 
 

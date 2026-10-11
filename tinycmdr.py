@@ -32951,6 +32951,162 @@ def _firewall_note(port):
     return lines
 
 
+def _firewall_complete(port, ask=True):
+    """Complete the LAN answer - open `port`, or say exactly what is left - and judge
+    the RESULT, never the attempt.
+
+    The installers complete this at install time (the run itself with the rights, one
+    sudo/UAC offer without them, the exact command in "still to do" otherwise); `setup`
+    is the other door that can be told "reachable from other machines", and it used to
+    print advice only - nothing attempted, nothing checked, and nothing at all where the
+    probes found no firewall (measured 2026-10-10). Returns printable lines for the
+    caller to style; every branch ends in a state: open, off, or still closed.
+    """
+    port = int(port) if port else web_port_effective()
+
+    def _offer(question):
+        return input("   %s [y/N]: " % question).strip().lower() in ("y", "yes")
+
+    def _closed():
+        return (["firewall    : still closed - the page will not answer from other "
+                 "machines until this runs:"] + _firewall_note(port))
+
+    if os.name == "nt":
+        rule = ("Remove-NetFirewallRule -DisplayName 'tinycmdr page' -ErrorAction "
+                "SilentlyContinue; New-NetFirewallRule -DisplayName 'tinycmdr page' "
+                "-Direction Inbound -Protocol TCP -LocalPort %d -Action Allow" % port)
+        probe = ("if (Get-NetFirewallRule -DisplayName 'tinycmdr page' "
+                 "-ErrorAction SilentlyContinue) { 'present' } else { 'absent' }")
+
+        def _ps(command):
+            try:
+                return run_capture(["powershell", "-NoProfile", "-NonInteractive",
+                                    "-Command", command], 60)[1] or ""
+            except Exception:                                    # noqa: BLE001
+                return ""
+
+        if "present" in _ps(probe):
+            return ["firewall    : port %d open already (rule 'tinycmdr page')" % port]
+        if is_elevated():
+            _ps(rule)
+        elif ask and _offer("Open the port now (one Administrator prompt)?"):
+            # One UAC prompt; the elevated child runs the same rule text the
+            # "still closed" lines print - they cannot drift apart.
+            _ps("Start-Process -FilePath powershell.exe -Verb RunAs -Wait -ArgumentList "
+                "@('-NoProfile','-NonInteractive','-Command',\"%s\")" % rule)
+        else:
+            return _closed()
+        if "present" in _ps(probe):
+            return ["firewall    : opened port %d (rule 'tinycmdr page')" % port]
+        return _closed()
+
+    if sys.platform == "darwin":
+        alf = "/usr/libexec/ApplicationFirewall/socketfilterfw"
+
+        def _alf_out(*args):
+            try:
+                return run_capture([alf] + list(args), 20)[1] or ""
+            except Exception:                                    # noqa: BLE001
+                return ""
+
+        if "enabled" not in _alf_out("--getglobalstate").lower():
+            return ["firewall    : off - the macOS firewall is not blocking the port"]
+        py = str(Path(sys.executable))
+
+        def _listed_allowed():
+            # ALF's app list is the state that outlives this run, and the one the
+            # installer's allow leaves behind. --getappblocked cannot judge it:
+            # it answers "permitted" for an app that is not IN the list either
+            # (measured 2026-10-10), so the entry itself is what is read.
+            lines = _alf_out("--listapps").splitlines()
+            for i, line in enumerate(lines):
+                if ":" in line and line.split(":", 1)[1].strip() == py:
+                    return "(Allow incoming connections)" in " ".join(lines[i + 1:i + 3])
+            return False
+
+        if _listed_allowed():
+            return ["firewall    : %s is allowed already (the firewall is ON)" % py]
+        if is_elevated():
+            run_capture([alf, "--add", py], 60)
+            run_capture([alf, "--unblockapp", py], 60)
+        elif ask and _offer("Open the macOS firewall for the page now (asks for your "
+                            "password)?"):
+            run_capture(["sudo", alf, "--add", py], 60)
+            run_capture(["sudo", alf, "--unblockapp", py], 60)
+        else:
+            return _closed()
+        if _listed_allowed():
+            return ["firewall    : allowed %s (the firewall is ON)" % py]
+        return _closed()
+
+    # Linux: ufw and firewalld, the installer's own detection (a non-root run cannot
+    # ask ufw itself, so ufw.conf's ENABLED line stands in).
+    def _sh(command):
+        try:
+            rc, out, _err, _to = run_capture(["sh", "-c", command], 10)
+        except Exception:                                        # noqa: BLE001
+            return False, ""
+        return rc == 0, out or ""
+
+    ufw_on = False
+    found, _ = _sh("command -v ufw")
+    if found:
+        _found, status = _sh("ufw status 2>/dev/null")
+        if "Status: active" in status:
+            ufw_on = True
+        else:
+            ufw_on = _sh("grep -qi '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null")[0]
+    fwd_on = False
+    found, _ = _sh("command -v firewall-cmd")
+    if found:
+        _found, state = _sh("firewall-cmd --state 2>/dev/null")
+        if "running" in state.lower():
+            fwd_on = True
+        else:
+            fwd_on = _sh("systemctl is-active --quiet firewalld 2>/dev/null")[0]
+    if not ufw_on and not fwd_on:
+        return ["firewall    : no active firewall found (ufw, firewalld) - nothing "
+                "here blocks the port"]
+    # firewalld alone answers without root, so "already open" is judged before any offer.
+    if fwd_on and not ufw_on and _sh("firewall-cmd --query-port=%d/tcp"
+                                     % port)[1].strip().lower() == "yes":
+        return ["firewall    : firewalld already has %d/tcp open" % port]
+    granted = is_elevated() or (ask and _offer("Open the port now (one sudo prompt)?"))
+    if not granted:
+        return (["firewall    : not opened by this run - if the page does not answer "
+                 "from another machine, this is why:"] + _firewall_note(port))
+
+    def _priv(args):
+        try:
+            return run_capture((args if is_elevated() else ["sudo"] + args), 60)
+        except Exception:                                        # noqa: BLE001
+            return (1, "", "", False)
+
+    lines = []
+    if ufw_on:
+        _priv(["ufw", "allow", "%d/tcp" % port])
+        status = _priv(["ufw", "status"])[1] or ""
+        if "%d/tcp" % port in status:
+            lines.append("firewall    : ufw allowed %d/tcp" % port)
+        else:
+            lines.append("firewall    : ufw did not open %d/tcp - run: sudo ufw allow "
+                         "%d/tcp" % (port, port))
+    if fwd_on:
+        _priv(["firewall-cmd", "--permanent", "--add-port=%d/tcp" % port])
+        _priv(["firewall-cmd", "--reload"])
+        query = _priv(["firewall-cmd", "--query-port=%d/tcp" % port])[1] or ""
+        if query.strip().lower() == "yes":
+            lines.append("firewall    : firewalld opened %d/tcp" % port)
+        else:
+            lines.append("firewall    : firewalld did not open %d/tcp - run: sudo "
+                         "firewall-cmd --permanent --add-port=%d/tcp && sudo "
+                         "firewall-cmd --reload" % (port, port))
+    if any("did not" in line for line in lines):
+        lines.append("or skip the firewall with a tunnel: ssh -N -L %d:127.0.0.1:%d "
+                     "<user>@<box>" % (port, port))
+    return lines
+
+
 _WEB_CSS_CACHE = {}          # {"stamp": (css stat, theme stat), "text": themed css}
 
 
@@ -33080,15 +33236,21 @@ def _browser_possible():
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def _web_base_urls(port):
+def _web_base_urls(port, host=None):
     """The addresses to print, most useful first.
 
     A LAN-bound server's link must be the one the OPERATOR's browser can open: a
     0.0.0.0 bind serves the box's LAN address, so that address leads and loopback
     follows for a browser on the box itself. A loopback bind has one address.
+
+    `host` overrides the config for a caller that is ABOUT to write it: the setup
+    wizard asked the LAN question in this run, and reading the bind on disk printed
+    a loopback link under "that link works from your network" (measured 2026-10-10).
     """
-    web = CONFIG.get("web") or {}
-    host = str(web.get("host") or "127.0.0.1").strip()
+    if host is None:
+        web = CONFIG.get("web") or {}
+        host = web.get("host")
+    host = str(host or "127.0.0.1").strip()
     if host in ("0.0.0.0", "::"):
         out = []
         ip = _web_lan_ip()
@@ -38135,12 +38297,12 @@ def _run_setup_interactive(rest=None):
             _web_token_mint(announce=True)
         tok = _web_token()
         if tok:
-            urls = _web_base_urls(page_port)
+            urls = _web_base_urls(page_port, web.get("host"))
             print(dim("   page link : %s#token=%s" % (urls[0][0], tok)))
             if web.get("host") in ("0.0.0.0", "::"):
                 print(dim("   that link works from your network; the token rides in "
                           "cleartext there, so use a network you trust"))
-                for _line in _firewall_note(page_port):
+                for _line in _firewall_complete(page_port):
                     print(dim("   " + _line))
     else:
         print(dim("   the page will not start; `tinycmdr --web` can still serve it for "
@@ -38233,9 +38395,9 @@ def _run_setup_interactive(rest=None):
         "Telegram     : %s" % ("configured" if tg.get("allowed_users") else "(disabled)"),
         "TG Users     : %s" % (", ".join(str(x) for x in (tg.get("allowed_users") or [])) or "(none)"),
         "---",
-        "Page         : %s" % ("http://%s:%s (token in .env)"
-                               % (web.get("host") or "127.0.0.1", web_port_effective())
-                               if web.get("enabled", True) else "(disabled)"),
+        ("Page         : %s (token in .env)"
+         % _web_base_urls(web_port_effective(), web.get("host"))[0][0]
+         if web.get("enabled", True) else "Page         : (disabled)"),
         "Web search   : %s (%s)"
         % (", ".join(e["label"] for e in _search_providers()[0]) or "no provider",
            "off-LAN providers allowed" if search.get("allow_cloud_egress")

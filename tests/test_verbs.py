@@ -467,6 +467,156 @@ def _body():
             fb.sys.platform, fb.os.name, fb.run_capture = (_real_platform, _real_osname,
                                                            _real_capture)
 
+        # ---- the completion: the port is opened, or the state is named ------------
+        # `setup` is the door that can be told "reachable from other machines" long
+        # after install; the answer completes there the way the installers complete it
+        # (the run itself with the rights, one sudo/UAC offer without them, the exact
+        # command otherwise), and every branch ends judged against what the OS tools
+        # report - measured 2026-10-10: setup printed advice only, checked nothing, and
+        # said nothing at all where the probes found no firewall.
+        _real_elev, _real_exe, _real_stdin = fb.is_elevated, fb.sys.executable, fb.sys.stdin
+        _real_platform, _real_osname, _real_capture = (fb.sys.platform, fb.os.name,
+                                                       fb.run_capture)
+
+        try:
+            _complete = getattr(fb, "_firewall_complete", None)
+            _call = _complete if callable(_complete) else (lambda *a, **k: [])
+            check("the wizard can complete the LAN answer", callable(_complete))
+
+            fb.os.name = "posix"
+            fb.sys.platform = "darwin"
+            fb.sys.executable = "/opt/probe/venv/bin/python"
+            _runs, _alf = [], {"listed": False}
+
+            def _mac(argv, *a, **k):
+                cmd = " ".join(argv)
+                _runs.append(cmd)
+                if "--getglobalstate" in cmd:
+                    return (0, "Firewall is enabled. (State = 1)", "", False)
+                if "--listapps" in cmd:
+                    if _alf["listed"]:
+                        return (0, "1 : %s\n             (Allow incoming connections)"
+                                % fb.sys.executable, "", False)
+                    return (0, "", "", False)
+                if "--add" in cmd or "--unblockapp" in cmd:
+                    _alf["listed"] = True
+                return (0, "", "", False)
+
+            fb.run_capture = _mac
+            fb.is_elevated = lambda: True
+            fb.sys.stdin = FakeTTY("")
+            mac = _call(8790) or ["(no lines)"]
+            check("macOS: a run with the rights allows the interpreter, judged by ALF's list",
+                  "allowed" in mac[0] and "the firewall is ON" in mac[0]
+                  and any("--add" in r and "sudo" not in r for r in _runs)
+                  and sum("--listapps" in r for r in _runs) == 2, (mac, _runs))
+
+            _alf["listed"], _runs[:] = True, []
+            mac = _call(8790) or ["(no lines)"]
+            check("...an interpreter ALF already allows is not touched again",
+                  "allowed already" in mac[0] and not any("--add" in r for r in _runs), mac)
+
+            _alf["listed"], _runs[:] = False, []
+            fb.is_elevated = lambda: False
+            fb.sys.stdin = FakeTTY("y\n")
+            mac = _call(8790) or ["(no lines)"]
+            check("...a terminal without the rights gets one sudo offer, and it runs",
+                  any(r.startswith("sudo") and "--add" in r for r in _runs)
+                  and any(r.startswith("sudo") and "--unblockapp" in r for r in _runs)
+                  and "allowed" in mac[0], (mac, _runs))
+
+            _alf["listed"], _runs[:] = False, []
+            fb.sys.stdin = FakeTTY("n\n")
+            mac = _call(8790) or ["(no lines)"]
+            check("...a declined offer names the state and keeps the exact commands",
+                  "still closed" in mac[0] and "socketfilterfw --add" in " ".join(mac)
+                  and not any("--add" in r for r in _runs), mac)
+
+            fb.run_capture = lambda *a, **k: (0, "Firewall is disabled. (State = 0)", "", False)
+            mac = _call(8790) or ["(no lines)"]
+            check("macOS: a firewall that is off is said to be off", "off" in mac[0], mac)
+
+            fb.sys.platform = "linux"
+            _ufw = {"allowed": False}
+
+            def _linux(argv, *a, **k):
+                cmd = " ".join(argv)
+                _runs.append(cmd)
+                if "command -v ufw" in cmd:
+                    return (0, "/usr/sbin/ufw", "", False)
+                if "command -v firewall-cmd" in cmd:
+                    return (1, "", "", False)
+                if "ufw status" in cmd:
+                    return (0, "Status: active\n8790/tcp ALLOW Anywhere\n" if _ufw["allowed"]
+                            else "Status: active\n", "", False)
+                if "ufw allow" in cmd:
+                    _ufw["allowed"] = True
+                return (0, "", "", False)
+
+            fb.run_capture = _linux
+            fb.is_elevated = lambda: True
+            _runs[:] = []
+            lin = _call(8790) or ["(no lines)"]
+            check("Linux: a root run opens ufw and proves it from ufw's own status",
+                  "ufw allowed 8790/tcp" in lin[0]
+                  and any(r == "ufw allow 8790/tcp" for r in _runs)
+                  and any(r == "ufw status" for r in _runs), (lin, _runs))
+
+            _ufw["allowed"], _runs[:] = False, []
+            fb.is_elevated = lambda: False
+            fb.sys.stdin = FakeTTY("y\n")
+            lin = _call(8790) or ["(no lines)"]
+            check("...a non-root run is offered the one sudo prompt",
+                  "ufw allowed" in lin[0]
+                  and any(r == "sudo ufw allow 8790/tcp" for r in _runs), (lin, _runs))
+
+            _ufw["allowed"], _runs[:] = False, []
+            fb.sys.stdin = FakeTTY("n\n")
+            lin = _call(8790) or ["(no lines)"]
+            check("...and declining prints the exact command instead of silence",
+                  "not opened" in lin[0] and "sudo ufw allow 8790/tcp" in " ".join(lin)
+                  and not any("ufw allow" in r for r in _runs), lin)
+
+            fb.run_capture = lambda *a, **k: (1, "", "", False)
+            lin = _call(8790) or ["(no lines)"]
+            check("Linux: no active firewall is said, not silently skipped",
+                  "no active firewall" in lin[0], lin)
+
+            fb.os.name = "nt"
+            _ntp = {"present": False}
+
+            def _win(argv, *a, **k):
+                cmd = " ".join(argv)
+                _runs.append(cmd)
+                if "New-NetFirewallRule" in cmd:
+                    if "Start-Process" not in cmd:
+                        _ntp["present"] = True
+                    return (0, "", "", False)
+                if "Get-NetFirewallRule" in cmd:
+                    return (0, "present" if _ntp["present"] else "absent", "", False)
+                return (0, "", "", False)
+
+            fb.run_capture = _win
+            fb.is_elevated = lambda: True
+            _runs[:] = []
+            nt = _call(8790) or ["(no lines)"]
+            check("Windows: an elevated run creates the rule and re-reads it",
+                  "opened port 8790" in nt[0]
+                  and any("New-NetFirewallRule" in r for r in _runs), (nt, _runs))
+
+            _ntp["present"], _runs[:] = False, []
+            fb.is_elevated = lambda: False
+            fb.sys.stdin = FakeTTY("y\n")
+            nt = _call(8790) or ["(no lines)"]
+            check("...and one UAC prompt runs the same rule text the warning prints",
+                  any("Start-Process" in r and "-Verb RunAs" in r
+                      and "New-NetFirewallRule" in r for r in _runs), _runs)
+        finally:
+            fb.is_elevated, fb.sys.executable = _real_elev, _real_exe
+            fb.sys.stdin = _real_stdin
+            fb.sys.platform, fb.os.name, fb.run_capture = (_real_platform, _real_osname,
+                                                           _real_capture)
+
         # ---- a stdin that REPORTS a tty and cannot answer -------------------------
         # The Windows NUL device is a character device, so sys.stdin.isatty() is True for a
         # service, a scheduled task or `< NUL`: the wizard took its interactive branch and the
