@@ -398,7 +398,7 @@ jctl() {
         journalctl -u "$SERVICE_NAME" "$@"
     fi
 }
-if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" != 0 ]; then
+if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" != 0 ] && [ "$NO_SERVICE" != 1 ]; then
     if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$RUN_UID" ]; then
         export XDG_RUNTIME_DIR="/run/user/$RUN_UID"
     fi
@@ -406,7 +406,8 @@ if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" != 0 ]; then
         die "a user install needs your own systemd session (no bus at \
      ${XDG_RUNTIME_DIR:-unset}/bus). Log in on the box and try again, or enable
      lingering from root:  sudo loginctl enable-linger $RUN_USER
-     For the system install instead:  sudo bash $SELF --mode system"
+     For the system install instead:  sudo bash $SELF --mode system
+     For files only, no service:      bash $SELF --mode user --no-service"
     fi
 fi
 

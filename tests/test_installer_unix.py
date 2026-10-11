@@ -1044,6 +1044,20 @@ def case_linux_without_systemd(sb, pkg, bindir, user, py):
     check("a files-only install works without systemctl",
           got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-400:]}{got.stderr[-300:]}")
+    # ...and with no session BUS either: make_bus() leaves a socket here, so the run
+    # above never met the gate. A container has no bus, and the files-only door used to
+    # die there before --no-service was ever read (end-to-end in an ubuntu container,
+    # 2026-10-11).
+    env_nobus = dict(env)
+    env_nobus["XDG_RUNTIME_DIR"] = str(sb / "run-nobus")
+    inst2 = sb / "lin-nobus"
+    fake_venv(inst2, py)
+    got0 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                "--no-deps", "--no-sudoers", "--no-service", "--no-web",
+                "--install-dir", inst2], env_nobus, pkg)
+    check("...and with no session bus, --no-service still installs the files",
+          got0.returncode == 0 and (inst2 / "tinycmdr.py").exists(),
+          f"rc={got0.returncode}; out={got0.stdout[-300:]}{got0.stderr[-300:]}")
     got2 = None
     if any((pathlib.Path(p) / "systemctl").exists()
            for p in os.environ.get("PATH", "").split(os.pathsep) if p):
