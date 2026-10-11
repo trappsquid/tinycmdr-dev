@@ -18104,22 +18104,25 @@ def _context_files(cwd=None):
         except OSError:
             break
     far_to_near = list(reversed(chain))
-    out = []
-    for i, p in enumerate(far_to_near):
+    # ONE read per file: the containment pass below used to re-read every nearer file
+    # for every farther one (O(n²) blocking reads on the request path, A-2026-10-11-03);
+    # the raw and the stripped text are both kept from this single pass.
+    files = []
+    for p in far_to_near:
         try:
-            text = p.read_text(encoding="utf-8", errors="replace").strip()
+            raw = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        text = raw.strip()
         if not text:
             continue
+        files.append((p, raw, text))
+    out = []
+    for i, (p, raw, text) in enumerate(files):
         paras = [x.strip() for x in text.split("\n\n") if x.strip()]
         contained = False
-        for nearer in far_to_near[i + 1:]:
-            try:
-                near = nearer.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            if paras and all(par in near for par in paras):
+        for _np, near_raw, _nt in files[i + 1:]:
+            if paras and all(par in near_raw for par in paras):
                 contained = True
                 break
         if not contained:

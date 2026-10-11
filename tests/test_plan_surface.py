@@ -434,6 +434,28 @@ farther file contained in a nearer one dropped, the block bounded.
                   "dropped", paths)
             check("root CLAUDE" not in "\n".join(t for _, t in rows),
                   "a shadowed CLAUDE.md is not read", rows)
+            # ONE read per file: the containment pass used to re-read every nearer file
+            # for every farther one - O(n^2) blocking reads on the request-assembly path
+            # (A-2026-10-11-03).
+            import pathlib as _pathlib
+            _real_read_text = _pathlib.Path.read_text
+            _ctx_reads = []
+            # _context_files resolves its cwd, and on macOS /var is a symlink to
+            # /private/var - the counter must compare in the resolved form.
+            _tree_r = str(tree.resolve())
+
+            def _counting_read(self, *a, **k):
+                if str(self).startswith(_tree_r):
+                    _ctx_reads.append(str(self))
+                return _real_read_text(self, *a, **k)
+
+            _pathlib.Path.read_text = _counting_read
+            try:
+                fb._context_files(deep)
+            finally:
+                _pathlib.Path.read_text = _real_read_text
+            check(len(_ctx_reads) == 3,
+                  "each context file is read once, not once per farther file", _ctx_reads)
 
             block = fb.context_files_block(deep)
             check(named(block, deep / "AGENTS.md") and "package rule" in block
