@@ -2736,10 +2736,10 @@
     {
       "id": "masked-secret-entry",
       "title": "a secret field shows what was typed or pasted",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "e4ad176",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "`tinycmdr setup`'s Mattermost-token question showed NOTHING as the value was typed or pasted - getpass echoes no character - and a fresh Windows install's bot-token prompt read the same way, so the field looked dead; the Windows installer's redirected branch also still went through Read-Host -AsSecureString, blank in some hosts and dropping a fed value (it returned the ReadKey branch's text under -NonInteractive). Every secret door now reads through one masked engine - the setup wizard, token set, the search and model wizards: one * per character for typing or a paste, backspace rubs the entry out, a pipe keeps the plain line read - and the installer's redirected branch reads the line off stdin.",
       "gate": "RED on the pre-fix build: the masked engine did not exist and the pty run showed the prompt with no stars following it (2 checks in tests/test_verbs.py); the ps1's code held Read-Host -AsSecureString and the piped probe under pwsh returned the fallback's text with Read-Host errors instead of the fed value (3 checks in tests/test_installer_windows.py); green on the batch, with the ps1 parsed and the piped round trip graded on a real pwsh"
@@ -2747,10 +2747,10 @@
     {
       "id": "prompt-surface-and-guard-batch",
       "title": "the prompt surface, the load path and the guards",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "272ba42",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Across the prompt surface, the tool load path and the guards: `soul.md` is named among the things that move the static prompt; a drop-in manifest's `timeout` is refused at load outside 1-600 seconds; `_context_files` reads each file once instead of re-reading the chain per file; the toolsmith's check probe no longer writes host files into the tree it checks; a comma in a scaffolded arg default is named on stderr; the README's relative links are absolute and the LICENSE ships; in-batch duplicate calls key on the call signature; both stall watchdogs read the config live; the abandon notice says a started command may still finish; both supervisor logs rotate at 5 MB with one predecessor; and the write-and-run gate covers the python spellings, not only shell.",
       "gate": "RED on the pre-fix build: each fix's suite checks run against the pre-fix revision (tests/test_tool_load_surface.py, tests/test_agent_surface.py, tests/test_plan_surface.py, tests/test_stall.py, tests/test_process_surface.py, tests/test_guard_battery.py, tests/test_contracts.py); green on the batch"
@@ -2758,10 +2758,10 @@
     {
       "id": "telegram-lane-parity",
       "title": "the Telegram lane answers the chat lane's commands and reads files",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "fd7dc3a",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A `/restart` typed into a Telegram chat was handed to the model as a task - it answered \"the operator is requesting a restart\" while the bot kept running - because the lane knew five verbs against the Mattermost lane's seventeen. It answers the same words now (`/status`, `/model`, `/reasoning`, `/plan`, `/fork`, `/undo`, `/retry`, `/save`, `/bg`, `/pause`, `/restart [force]`, `/version`, the `/tinycmdr` management verbs) through the same helpers the chat lane uses, refuses an unknown `/word` locally, and a message carrying a photo, document or voice note is downloaded into the run - image content when vision is on - where the lane used to answer that it could only read text.",
       "gate": "RED on the pre-fix build: 19 checks in tests/test_telegram.py (the command surface, the `/restart` regression, media intake, the vision path) run against the pre-fix build; green on the batch (154 checks) - the suite moved into the must Windows tier"
@@ -2769,10 +2769,10 @@
     {
       "id": "updater-fetch-bounds-and-damaged-version",
       "title": "the updater's fetch is bounded, and a damaged VERSION is named",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "7938369",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "`update.sh`'s fetch carried neither a connect timeout nor retries while `install.sh` has both, so a black-holed route hung `tinycmdr update` with no clock; both fetches carry the same bounds now (wget's own timeout and try count on the fallback). And when the installed VERSION could not be read, the never-downgrade guard skipped itself silently - on the one tree the updater exists to repair; it compares as 0.0.0 and says so, in `update.sh` and its `.ps1` twin.",
       "gate": "RED on the pre-fix build: the fetch flags observed through a PATH wrapper and the damaged-VERSION message in tests/test_update_script.py against the pre-fix script; the `.ps1` twin graded in tests/test_installer_windows.py; green on the batch"
@@ -2780,10 +2780,10 @@
     {
       "id": "quoted-command-runs-on-windows",
       "title": "a command whose interpreter path is quoted runs on Windows",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "09e0004",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "PowerShell reads a line that STARTS with a quoted string as an expression - the path became a string and the token after it an operator - so `\"C:\\...\\python.exe\" script.py` never ran and the Windows shell answered exit 1 with a ParserError. The harness now puts PowerShell's call operator in front of exactly that shape and leaves every other line byte-identical.",
       "gate": "RED on the pre-fix build: the translation helper is absent and its check fails in tests/test_guard_battery.py; reproduced end-to-end under pwsh with the Windows shell wrapper - exit 1 and nothing deleted before the fix, exit 0 and the target gone after; green on the batch"
