@@ -67,13 +67,15 @@ streams that box's work line by line, exactly like a local run:
 
 The hub relays server-to-server over the agent-to-agent protocol; `token_env` names a variable in
 the hub's `.env` holding that cohort's page token — copy the cohort's `TINYCMDR_WEB_TOKEN` value
-into the hub's `.env` under the name you chose (never into `config.json`), and the browser only
-ever names a configured cohort: it never sees a cohort token. Keep one token per box, so a lost or
-retired one rotates alone (`tinycmdr token set TINYCMDR_WEB_TOKEN` on that box, then the hub's
-`.env`). `a2a_policy: "read_only"` lets a cohort answer with reads while refusing every write and
-command that arrives over A2A; its own page keeps full tools. Address cohorts on a private network
-(the LAN, or a Tailscale/WireGuard overlay) — this one link is plain HTTP with a bearer token, and
-a public address is warned about at startup.
+into the hub's `.env` under the name you chose (never into `config.json`), and orders and channels
+only ever name a configured cohort. The rail's **ADD COHORT** does that setup for you — a name, the
+cohort's URL and its page token, probed before anything is written — and the `config.json` block
+above is the same thing by hand. Keep one token per box, so a lost or retired one rotates alone
+(`tinycmdr token set TINYCMDR_WEB_TOKEN` on that box, then the hub's `.env`). `a2a_policy:
+"read_only"` lets a cohort answer with reads while refusing every write and command that arrives
+over A2A; its own page keeps full tools. Address cohorts on a private network (the LAN, or a
+Tailscale/WireGuard overlay) — this one link is plain HTTP with a bearer token, and a public
+address is warned about at startup.
 
 ## Install
 

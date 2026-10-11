@@ -136,10 +136,20 @@ function freshDom() {
   globalThis.document.body = new El('body');
 }
 
+function findById(n, id) {
+  // what a browser's getElementById really does: the nodes the page CREATES are in
+  // the document too (the ADD COHORT dialog below lives under document.body), so
+  // this searches the tree, not just the markup's static ids
+  if (!n) { return null; }
+  if (n.id === id) { return n; }
+  for (const k of (n.children || [])) { const hit = findById(k, id); if (hit) { return hit; } }
+  return null;
+}
+
 globalThis.document = {
   addEventListener: () => {},
   title: '',
-  getElementById: (id) => byId[id] || null,
+  getElementById: (id) => byId[id] || findById(globalThis.document.body, id),
   createElement: (tag) => new El(tag),
   createTextNode: (t) => { const e = new El('#text'); e._text = String(t); return e; },
   body: new El('body'),
@@ -177,6 +187,7 @@ const loginCalls = [];
 const uploads = [];
 let healthFetches = 0;
 let legionFetches = 0;
+const legionAdds = [];                 // every add-remote POST body the page sent
 // Does a node or any descendant carry this class? (`dot`/`work`/`bad`/`tabdot` sit
 // on children of the rail rows and the tabs, and the report serializes the parent.)
 function deepHas(n, cls) {
@@ -419,12 +430,32 @@ function fetchShim(url, opts) {
         return jres({ run_id: r.id, remote: body.remote });
       }
       if (body.op === 'tab-open') {
+        scenario.legion_tabs = scenario.legion_tabs || [];
         if (scenario.legion_tabs.indexOf(body.remote) < 0) { scenario.legion_tabs.push(body.remote); }
         return jres({ tabs: scenario.legion_tabs.slice() });
       }
       if (body.op === 'tab-close') {
-        scenario.legion_tabs = scenario.legion_tabs.filter((n) => n !== body.remote);
+        scenario.legion_tabs = (scenario.legion_tabs || []).filter((n) => n !== body.remote);
         return jres({ tabs: scenario.legion_tabs.slice() });
+      }
+      if (body.op === 'add-remote') {
+        legionAdds.push({ name: body.remote, url: body.url, token: body.token });
+        if (scenario.legion_add_error) {
+          // the hub refused it: the page must show the words and change nothing
+          return Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve(
+            { error: scenario.legion_add_error }) });
+        }
+        const row = { name: body.remote,
+                      numeral: (scenario.legion_cohorts || []).length + 2,
+                      host: String(body.url || '').replace(/^https?:\/\//, ''),
+                      state: 'ready', error: '', version: '9.9.9', lines: true,
+                      task: null };
+        scenario.legion_cohorts = (scenario.legion_cohorts || []).concat([row]);
+        return jres({ cohorts: scenario.legion_cohorts,
+                      tabs: scenario.legion_tabs || [],
+                      praetorium: { host: 'harness', version: 'harness' },
+                      added: { ok: true, name: body.remote, lines: true,
+                               card: { name: 'tinycmdr', version: '9.9.9' } } });
       }
       return jres({ error: 'unknown op' });
     }
@@ -585,8 +616,9 @@ async function main() {
       }
       for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
     } else if (step.kind === 'input') {
-      // type into a field and fire its handler (the rail's search box)
-      const el = byId[step.id];
+      // type into a field and fire its handler (the rail's search box, or a field
+      // inside a dialog the page drew - both looked up the way a browser would)
+      const el = byId[step.id] || globalThis.document.getElementById(step.id);
       if (!el) { errors.push('input step: no element #' + step.id); }
       else {
         el.value = step.text;
@@ -595,7 +627,7 @@ async function main() {
       }
     } else if (step.kind === 'click') {
       // click an element by id: either wiring works (`onclick=`, or addEventListener)
-      const el = byId[step.id];
+      const el = byId[step.id] || globalThis.document.getElementById(step.id);
       if (!el) {
         errors.push('click step: no element #' + step.id);
       } else if (typeof el.onclick === 'function') {
@@ -680,6 +712,9 @@ async function main() {
     legionHidden: !!(byId.legion || {}).hidden,
     legionStat: byId.legionstat ? byId.legionstat.textContent : '',
     legionFetches: legionFetches,
+    legionAdds: legionAdds,
+    addcohort: (globalThis.document.body.children || [])
+      .filter((c) => c.id === 'addcohort').map((c) => c.textContent),
     cohorts: (byId.cohorts ? byId.cohorts.children : []).map((c) => ({
       cls: c.className, text: c.textContent, title: c.title || '',
       dot: deepHas(c, 'dot'), work: deepHas(c, 'work'), bad: deepHas(c, 'bad'),

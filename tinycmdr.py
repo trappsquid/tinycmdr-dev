@@ -28107,6 +28107,7 @@ _LEGION_LINES_UNSUPPORTED = set()      # cohorts that answered the extension bac
 _LEGION_EGRESS_WARNED = set()          # entries the off-LAN warning has been said for
 _LEGION_REATTACH_AT = {}               # name -> monotonic time of the last restart-repair look
 _LEGION_PROBING = False                # one census pass at a time
+_LEGION_NAME_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")  # a cohort name (ADD COHORT)
 
 
 def legion_cohorts():
@@ -28252,6 +28253,27 @@ def _legion_egress_check(name, url):
                 "public one.", name, url)
 
 
+def _legion_probe_values(url, token):
+    """(card, error, lines) for one cohort address - the ONE card read the census
+    probe and ADD COHORT both pay. True = the card declares the run-lines extension,
+    False = it was read and does not, None = it could not be read (unknown; a lines
+    read is still tried)."""
+    try:
+        timeout = min(float((CONFIG.get("agent") or {}).get("a2a_timeout") or 120),
+                      5.0)
+    except (TypeError, ValueError):
+        timeout = 5.0
+    card, cerr = a2a_fetch_card(url, token, max(1.0, timeout))
+    lines_ok = None
+    if isinstance(card, dict):
+        lines_ok = False
+        for ext in ((card.get("capabilities") or {}).get("extensions") or []):
+            if isinstance(ext, dict) and ext.get("uri") == A2A_RUN_LINES_URI:
+                lines_ok = True
+                break
+    return card, cerr, lines_ok
+
+
 def _legion_probe_card(name):
     """Refresh one cohort's card cache. Never raises; returns the fresh entry."""
     url, token, err = a2a_remote_target(name)
@@ -28260,21 +28282,7 @@ def _legion_probe_card(name):
         entry = {"ok": False, "card": None, "error": err, "at": now, "lines": False}
     else:
         _legion_egress_check(name, url)
-        try:
-            timeout = min(float((CONFIG.get("agent") or {}).get("a2a_timeout") or 120),
-                          5.0)
-        except (TypeError, ValueError):
-            timeout = 5.0
-        card, cerr = a2a_fetch_card(url, token, max(1.0, timeout))
-        # True = the card declares the run-lines extension, False = it was read and
-        # does not, None = the card could not be read (unknown; a read is still tried).
-        lines_ok = None
-        if isinstance(card, dict):
-            lines_ok = False
-            for ext in ((card.get("capabilities") or {}).get("extensions") or []):
-                if isinstance(ext, dict) and ext.get("uri") == A2A_RUN_LINES_URI:
-                    lines_ok = True
-                    break
+        card, cerr, lines_ok = _legion_probe_values(url, token)
         entry = {"ok": isinstance(card, dict), "card": card, "error": cerr,
                  "at": now, "lines": lines_ok}
     _LEGION_CARDS[name] = entry
@@ -28659,6 +28667,73 @@ class LegionRun:
         with self.lock:
             self.done = True
             self.status = "done"
+
+
+def legion_add_remote(name, url, token):
+    """(payload, status) for ADD COHORT: write a box the operator runs into this
+    hub's own config, by URL + token - the values they would otherwise edit in by
+    hand. Nothing is written until the card is read, so a name, URL or token that
+    cannot work is refused before it touches disk."""
+    name = str(name or "").strip()
+    url = str(url or "").strip().rstrip("/")
+    token = str(token or "")
+    if not _LEGION_NAME_RX.fullmatch(name):
+        return {"error": "a cohort name is 1-32 characters of letters, digits, - "
+                         "or _ (starting with a letter or digit)"}, 400
+    if name.lower() == "praetorium":
+        return {"error": "praetorium is this hub's own channel - pick another "
+                         "name"}, 400
+    if name in legion_cohorts():
+        return {"error": "a cohort named %r is already configured "
+                         "(agent.a2a_remotes)" % name}, 400
+    if not url.startswith(("http://", "https://")) \
+            or not urllib.parse.urlsplit(url).netloc:
+        return {"error": "an http:// or https:// address is required"}, 400
+    if not token.strip():
+        return {"error": "a token is required - the cohort's page token (the "
+                         "TINYCMDR_WEB_TOKEN in its .env)"}, 400
+    token_env = "TINYCMDR_COHORT_%s_TOKEN" % name.upper()
+    try:
+        token, _note = secret_check(token_env, token)
+    except ValueError as problem:
+        return {"error": str(problem)}, 400
+    card, cerr, lines = _legion_probe_values(url, token)
+    if not isinstance(card, dict):
+        return {"error": "no AgentCard at %s (%s)" % (url, cerr or "no answer")}, 502
+    # .env first, config second: a token with no entry is inert, while an entry
+    # with no token is a cohort the rail shows and every order fails on. The name
+    # ends in _TOKEN on purpose: _SECRET_NAME_RX sweeps it, so the value is masked
+    # anywhere it could be echoed.
+    try:
+        _env_set(token_env, token)
+    except Exception as e:                                       # noqa: BLE001
+        return {"error": "could not write %s: %s" % (ENV_FILE.name, e)}, 500
+    os.environ[token_env] = token    # .env is read once, at import
+    raw, err = _config_raw()
+    if err:
+        return {"error": err}, 500
+    if not isinstance(raw, dict):
+        return {"error": "config.json holds something that is not an object"}, 500
+    agent = raw.setdefault("agent", {})
+    if not isinstance(agent, dict):
+        return {"error": "config.json's agent section is not an object"}, 500
+    remotes = agent.setdefault("a2a_remotes", {})
+    if not isinstance(remotes, dict):
+        return {"error": "config.json's agent.a2a_remotes is not an object"}, 500
+    remotes[name] = {"url": url, "token_env": token_env}
+    err = _config_write_raw(raw)
+    if err:
+        return {"error": err}, 500
+    err = _config_take_effect()
+    if err:
+        return {"error": err}, 500
+    _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "",
+                           "at": now_mono(), "lines": lines}
+    _legion_egress_check(name, url)
+    log.info("legion: ADD COHORT wrote agent.a2a_remotes.%s -> %s (its token in %s)",
+             name, url, ENV_FILE.name)
+    return {"ok": True, "name": name, "lines": lines,
+            "card": {"name": card.get("name"), "version": card.get("version")}}, 200
 
 
 def legion_send(name, text, client=""):
@@ -29250,7 +29325,7 @@ let runId=null, gen=0, timer=null, fails=0, localSeq=0, sessionKey=null,
 // cohorts and tabs the hub last reported, and what this browser has SEEN of each
 // cohort's last task (the tab badge clears when its channel is opened).
 let legion={on:false,cohorts:[],tabs:[],praetorium:{},seen:{},timer:null,
-            active:'praetorium'};
+            dialog:null,active:'praetorium'};
 try{
  legion.active=localStorage.fb_legion_active||'praetorium';
  legion.seen=JSON.parse(localStorage.fb_legion_seen||'{}')||{};
@@ -29592,12 +29667,13 @@ function renderRail(){
  emptyLast.hidden=!(sessions||[]).some(function(s){return s.exchanges;});
 }
 // ------------------------------------------------------------------- the legion
-// The hub's view of the other boxes. The browser only ever names a cohort the hub
-// was CONFIGURED with (never a URL), so this page cannot aim the relay anywhere the
-// operator did not already write into the hub's config. A cohort channel's lines
-// come from /api/legion/lines - the same reconcile() the local transcript uses, so
-// a cohort run draws exactly like a local one, tool lines included when that box
-// speaks the run-lines extension.
+// The hub's view of the other boxes. An order or a tab only ever names a cohort the
+// hub was CONFIGURED with (never a URL), so a channel cannot aim the relay anywhere
+// on its own - and ADD COHORT is the operator's own write into that config, from
+// the authenticated page: one box they run, by URL + token. A cohort channel's
+// lines come from /api/legion/lines - the same reconcile() the local transcript
+// uses, so a cohort run draws exactly like a local one, tool lines included when
+// that box speaks the run-lines extension.
 const NUMERALS=['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 const SHIELD_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>';
 function legionOf(name){return legion.cohorts.filter(function(c){return c.name===name;})[0]||null;}
@@ -29611,11 +29687,15 @@ function dotFor(state){
  return d;
 }
 function renderLegion(){
- legionEl.hidden=!legion.on;campaignsEl.hidden=!legion.on;
- if(!legion.on)return;
+ // The rail is ALWAYS drawn: with no cohorts it holds the praetorium row and the
+ // ADD COHORT invitation - the one place a cohort is connected from - and only the
+ // channel tab strip hides until there is a cohort to switch to.
+ campaignsEl.hidden=!legion.on;legionEl.hidden=false;
+ const n=legion.cohorts.length;
  const onCampaign=legion.cohorts.filter(function(c){return c.state==='working';}).length;
- legionStatEl.textContent=legion.cohorts.length+(legion.cohorts.length===1?' cohort':' cohorts')
-  +(onCampaign?' \u00b7 '+onCampaign+' on campaign':'');
+ legionStatEl.textContent=n
+  ?n+(n===1?' cohort':' cohorts')+(onCampaign?' \u00b7 '+onCampaign+' on campaign':'')
+  :'none yet';
  cohortsEl.textContent='';
  const rows=[{name:'praetorium',host:(legion.praetorium.host||'this host'),
    state:'ready',numeral:1,version:(legion.praetorium.version||''),
@@ -29641,6 +29721,17 @@ function renderLegion(){
   row.onclick=function(){openChannel(c.name);};
   cohortsEl.appendChild(row);
  }
+ const add=document.createElement('div');
+ add.className='campaign-item cohort addcohort';
+ add.title='connect a box that already serves its page';
+ const aic=document.createElement('span');aic.className='campaign-icon';aic.textContent='+';
+ add.appendChild(aic);
+ const atx=document.createElement('span');
+ const at=document.createElement('strong');at.textContent='ADD COHORT';atx.appendChild(at);
+ const am=document.createElement('small');am.textContent='by URL + token';atx.appendChild(am);
+ add.appendChild(atx);
+ add.onclick=function(){openAddCohort();};
+ cohortsEl.appendChild(add);
  renderTabs();
 }
 function renderTabs(){
@@ -29664,6 +29755,66 @@ function renderTabs(){
  };
  tab('PRAETORIUM','praetorium',false);
  for(const name of legion.tabs)tab(name,name,true);
+}
+function openAddCohort(){
+ if(legion.dialog)return;         // one dialog at a time: the overlay covers the rail
+ const ov=document.createElement('div');ov.id='addcohort';
+ const panel=document.createElement('div');panel.className='addcohort-panel';
+ const head=document.createElement('div');head.className='addcohort-head';
+ head.textContent='ADD COHORT';
+ const hint=document.createElement('div');hint.className='addcohort-hint';
+ hint.textContent='Connect a box that already serves its page: its URL and the '
+  +'TINYCMDR_WEB_TOKEN in its .env, with web.a2a true in its config.';
+ panel.appendChild(head);panel.appendChild(hint);
+ const field=function(id,label,ph,type){
+  const lab=document.createElement('label');lab.className='addcohort-field';
+  const s=document.createElement('span');s.textContent=label;
+  const i=document.createElement('input');i.id=id;i.type=type||'text';i.placeholder=ph;
+  lab.appendChild(s);lab.appendChild(i);panel.appendChild(lab);
+  return i;
+ };
+ const name=field('addcohort-name','NAME','e.g. storage');
+ const url=field('addcohort-url','URL','http://host:8790');
+ const tok=field('addcohort-token','TOKEN',"the other box's page token",'password');
+ const err=document.createElement('div');err.className='addcohort-error';err.hidden=true;
+ panel.appendChild(err);
+ const acts=document.createElement('div');acts.className='addcohort-acts';
+ const cancel=document.createElement('button');cancel.type='button';
+ cancel.textContent='CANCEL';
+ const go=document.createElement('button');go.type='button';go.id='addcohort-go';
+ go.textContent='ADD COHORT';
+ acts.appendChild(cancel);acts.appendChild(go);panel.appendChild(acts);
+ ov.appendChild(panel);
+ const close=function(){legion.dialog=null;ov.remove();};
+ ov.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){close();return;}
+  if(e.key==='Enter'){go.click();}
+ });
+ ov.onclick=function(e){if(e.target===ov)close();};
+ cancel.onclick=close;
+ go.onclick=async function(){
+  go.disabled=true;err.hidden=true;
+  const cname=name.value.trim();
+  const {status:code,j}=await post('/api/legion',{op:'add-remote',remote:cname,
+   url:url.value.trim(),token:tok.value});
+  if(code!==200||j.error){
+   go.disabled=false;err.hidden=false;
+   err.textContent=(j&&j.error)||('the hub answered '+code);
+   return;
+  }
+  close();
+  legion.praetorium=j.praetorium||legion.praetorium;
+  legion.cohorts=j.cohorts||[];legion.tabs=j.tabs||[];
+  legion.on=legion.cohorts.length>0;
+  renderLegion();
+  const added=j.added||{};
+  note('cohort '+cname+' added'+(added.lines===false
+   ?' \u00b7 no run-lines there: its tab shows the answer when it lands':''));
+  openChannel(cname);
+ };
+ document.body.appendChild(ov);
+ legion.dialog=ov;
+ name.focus();
 }
 async function refreshLegion(){
  try{
@@ -29773,13 +29924,15 @@ async function loadSessions(){
  hostEl.textContent=(j.host||'');hostVerEl.textContent='tinycmdr \u00b7 v'+(j.version||'');
  // The legion rides this same 5-second clock: the count comes from this reply, and
  // only a hub with cohorts configured pays the /api/legion read behind it. A hub
- // with none renders the section not at all and fetches nothing extra.
+ // with none still draws the rail - praetorium and the ADD COHORT invitation - and
+ // fetches nothing extra; this reply already carries the version that row shows.
  const lc=j.legion||0;
  legionCount=lc;
  if(lc>0){
   await refreshLegion();
- }else if(legion.on){
+ }else{
   legion.on=false;legion.cohorts=[];legion.tabs=[];
+  legion.praetorium={host:j.host||'',version:j.version||''};
   if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
   renderLegion();
  }
@@ -32351,10 +32504,14 @@ def run_webui():
                 self._json({"stopping": True})
                 return
             if self.path.startswith("/api/legion"):
-                # One POST family - {"op": "send" | "tab-open" | "tab-close"} - see
-                # the legion block. The browser names a CONFIGURED cohort and never
-                # a URL, so this relay cannot be aimed anywhere the operator did not
-                # write into agent.a2a_remotes; the token stays in this box's .env.
+                # One POST family - {"op": "send" | "tab-open" | "tab-close" |
+                # "add-remote"} - see the legion block. An order and the tab ops
+                # name a CONFIGURED cohort and never a URL, so the relay cannot be
+                # aimed anywhere the operator did not write into agent.a2a_remotes;
+                # the tokens stay in this box's .env. add-remote is the
+                # authenticated page's own config write: it writes a box the
+                # operator runs into that same map, by URL + token - the values
+                # they would otherwise edit in by hand.
                 if not self._auth_ok():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
@@ -32372,6 +32529,16 @@ def run_webui():
                     self._json({"tabs": legion_tab_set(client, name,
                                                        op == "tab-open")})
                     return
+                if op == "add-remote":
+                    added, code = legion_add_remote(name, body.get("url"),
+                                                    body.get("token"))
+                    if code != 200:
+                        self._json(added, code)
+                        return
+                    out = legion_overview(client)
+                    out["added"] = added
+                    self._json(out)
+                    return
                 if op == "send":
                     run_id, err, code = legion_send(name, body.get("message"), client)
                     if err:
@@ -32379,7 +32546,8 @@ def run_webui():
                         return
                     self._json({"run_id": run_id, "remote": name})
                     return
-                self._json({"error": "unknown op (send, tab-open, tab-close)"}, 400)
+                self._json({"error": "unknown op (send, tab-open, tab-close, "
+                                     "add-remote)"}, 400)
                 return
             if not self.path.startswith("/api/chat"):
                 self._drain()

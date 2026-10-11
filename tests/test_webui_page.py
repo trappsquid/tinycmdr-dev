@@ -779,7 +779,8 @@ def main():
     # -- the legion: a hub WITH cohorts ------------------------------------------------
     # The rail gains the cohort section, the stage gains the channel tabs, and a
     # cohort's channel streams the other box's lines through the same renderer a
-    # local run uses. With no cohorts configured nothing of it is drawn or fetched.
+    # local run uses. With no cohorts configured the rail still shows - praetorium
+    # and the ADD COHORT invitation - and nothing extra is fetched.
     cohorts = [
         {"name": "storage", "numeral": 2, "host": "storage:8790", "state": "ready",
          "error": "", "version": "1.0.88", "lines": True,
@@ -800,8 +801,10 @@ def main():
     check(res.get("legionHidden") is False,
           "a hub with cohorts shows the legion rail section")
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(len(names) == 3 and "PRAETORIUM" in names[0] and "storage" in names[1],
-          f"the rail pins the praetorium first, then one row per cohort ({names})")
+    check(len(names) == 4 and "PRAETORIUM" in names[0] and "storage" in names[1]
+          and "ADD COHORT" in (names[3] or ""),
+          f"the rail pins the praetorium, one row per cohort, then ADD COHORT "
+          f"({names})")
     check("COHORS III" in (names[2] or "") and (res["cohorts"][2] or {}).get("bad"),
           f"the silent cohort wears the bad dot, numbered ({names[2]!r})")
     check("connection refused" in ((res["cohorts"][2] or {}).get("title") or ""),
@@ -854,12 +857,61 @@ def main():
           f"a second order while one runs is refused in the hub's words "
           f"({res.get('note')!r})")
 
-    # ...and a hub with NO cohorts: no rail section, no tab strip, no /api/legion call
+    # ...and a hub with NO cohorts: the rail still shows - praetorium and the ADD
+    # COHORT invitation, so a cohort can be connected from the page - while the tab
+    # strip stays away and no /api/legion read is paid
     res = run_page({"runs": [], "steps": [{"kind": "polls", "n": 2}]}, script)
-    check(res.get("legionHidden") is True and res.get("legionFetches") == 0
-          and not (res.get("cohorts") or []) and not (res.get("campTabs") or []),
-          f"a hub with no cohorts shows no legion UI and fetches nothing extra "
-          f"({res.get('legionFetches')} fetch(es))")
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(res.get("legionHidden") is False and res.get("legionFetches") == 0
+          and len(names) == 2 and "PRAETORIUM" in names[0]
+          and "ADD COHORT" in names[1] and not (res.get("campTabs") or []),
+          f"a hub with no cohorts shows the rail (praetorium + ADD COHORT) and "
+          f"fetches nothing extra ({names}, {res.get('legionFetches')} fetch(es))")
+    check("none yet" in (res.get("legionStat") or ""),
+          f"...and the tally says so ({res.get('legionStat')!r})")
+
+    # ...and the invitation WORKS: the click opens the dialog, confirming POSTs
+    # add-remote with what was typed, the hub's overview lands, and the new cohort's
+    # channel opens
+    _add_steps = [
+        {"kind": "polls", "n": 2},
+        {"kind": "clickrow", "id": "cohorts", "text": "ADD COHORT", "polls": 3},
+        {"kind": "input", "id": "addcohort-name", "text": "storage"},
+        {"kind": "input", "id": "addcohort-url", "text": "http://127.0.0.1:8790"},
+        {"kind": "input", "id": "addcohort-token", "text": "tok-storage-0123456789"},
+        {"kind": "click", "id": "addcohort-go", "polls": 8},
+    ]
+    res = run_page({"runs": [], "steps": _add_steps}, script)
+    check(not res["errors"], f"the ADD COHORT page runs clean ({res['errors'][:1]})")
+    _adds = res.get("legionAdds") or []
+    check(len(_adds) == 1 and _adds[0] == {"name": "storage",
+                                           "url": "http://127.0.0.1:8790",
+                                           "token": "tok-storage-0123456789"},
+          f"confirming the dialog POSTs exactly what was typed ({_adds})")
+    check(res.get("addcohort") == [],
+          f"...and the dialog closes on success ({res.get('addcohort')})")
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 3 and "storage" in names[1] and "ADD COHORT" in names[2],
+          f"the new cohort takes its row before the invitation ({names})")
+    check(res.get("chan") == "COMMAND CHANNEL \u00b7 COHORT"
+          and ((res.get("state") or {}).get("legion") or {}).get("active") == "storage",
+          f"...and its channel is the one opened ({res.get('chan')!r})")
+    check("storage" in ((res.get("note") or {}).get("text") or ""),
+          f"...with the note naming it ({res.get('note')!r})")
+
+    # ...and a refused add keeps the dialog open with the hub's words in it, and
+    # changes nothing
+    res = run_page({"runs": [], "legion_add_error": "a cohort named 'storage' is "
+                    "already configured (agent.a2a_remotes)", "steps": _add_steps},
+                   script)
+    check(not res["errors"], f"the refused ADD COHORT page runs clean ({res['errors'][:1]})")
+    _dlg = res.get("addcohort") or []
+    check(len(_dlg) == 1 and "already configured" in (_dlg[0] or ""),
+          f"a refused add keeps the dialog open showing the hub's words ({_dlg})")
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 2 and ((res.get("state") or {}).get("legion") or {})
+          .get("active") == "praetorium",
+          f"...and no cohort row, no channel switch ({names})")
 
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0

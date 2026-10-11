@@ -44,6 +44,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -434,12 +435,125 @@ def main():
           and req("GET", "/api/legion/session?remote=ghost", TOK)[0] == 404,
           "session/lines for a cohort this hub does not have: 404")
     check(req("POST", "/api/legion", TOK, b'{"op":"send","remote":"ghost","message":"x"}')[0] == 404,
-          "an order to a cohort this hub does not have: 404 (the browser names a "
-          "CONFIGURED remote, never a URL)")
+          "an order to a cohort this hub does not have: 404 (an order names a "
+          "CONFIGURED remote, never an address)")
     check(req("POST", "/api/legion", TOK, b'{"op":"zzz"}')[0] == 400,
           "an unknown legion op: 400")
     check(req("POST", "/api/legion", None, b'{"op":"send"}')[0] == 401,
           "a legion POST without a token: 401")
+
+    # ---- ADD COHORT: the page writes a new remote into the hub's own config -----
+    # The dialog posts a box the operator runs - URL + its page token - and the hub
+    # probes the card BEFORE anything is written, so an unreachable box changes
+    # nothing. The token lands in .env under a name ending in _TOKEN on purpose: it
+    # is the same sweep every other secret rides, and the hub must resolve it with
+    # no restart (this process was just handed the value).
+    class _CohortHandler(BaseHTTPRequestHandler):
+        def log_message(self, *a):                              # keep the suite quiet
+            pass
+
+        def _send(self, payload, status=200):
+            data = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            if self.path.startswith("/.well-known/agent-card.json"):
+                self._send({"name": "tinycmdr", "version": "9.9.9",
+                            "capabilities": {"extensions": [
+                                {"uri": fb.A2A_RUN_LINES_URI, "required": False}]}})
+            else:
+                self._send({"error": "not found"}, 404)
+
+    class _CohortServer(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            pass                                    # a hung-up probe is not a suite error
+
+    _cohort = _CohortServer(("127.0.0.1", 0), _CohortHandler)
+    threading.Thread(target=_cohort.serve_forever, daemon=True).start()
+    cohort_url = "http://127.0.0.1:%d" % _cohort.server_address[1]
+    _CNAME = "TINYCMDR_COHORT_STORAGE_TOKEN"
+    _CTOK = "tok-cohort-suite-0123456789"
+
+    def _add(payload):
+        code, body, _h = req("POST", "/api/legion", TOK, json.dumps(payload).encode())
+        try:
+            return code, json.loads(body)
+        except Exception:                                           # noqa: BLE001
+            return code, {}
+
+    _saved_web = dict(fb.CONFIG["web"])   # the take-effect below reloads CONFIG from
+    code, j = _add({"op": "add-remote", "remote": "storage", "url": cohort_url,
+                    "token": _CTOK})
+    fb.CONFIG["web"] = _saved_web         # ... disk + env, which the suite's in-memory
+                                          # web block must survive (the reload itself
+                                          # is the product's normal path)
+    check(code == 200 and j.get("added", {}).get("ok") is True
+          and j.get("added", {}).get("lines") is True
+          and j.get("added", {}).get("card", {}).get("version") == "9.9.9",
+          "ADD COHORT probes the card and reports what it found",
+          (code, json.dumps(j.get("added"))[:180]))
+    _names = [(c or {}).get("name") for c in (j.get("cohorts") or [])]
+    check(_names == ["storage"] and j["cohorts"][0].get("lines") is True
+          and "127.0.0.1" in (j["cohorts"][0].get("host") or ""),
+          "the overview it answers with carries the new cohort", _names)
+    check((fb.CONFIG.get("agent") or {}).get("a2a_remotes", {}).get("storage")
+          == {"url": cohort_url, "token_env": _CNAME},
+          "the running config knows it without a restart",
+          (fb.CONFIG.get("agent") or {}).get("a2a_remotes"))
+    _cfg = json.loads((STAGE / "config.json").read_text(encoding="utf-8"))
+    check(((_cfg.get("agent") or {}).get("a2a_remotes") or {}).get("storage")
+          == {"url": cohort_url, "token_env": _CNAME},
+          "config.json on disk carries the remote and its token_env name")
+    _env = fb.ENV_FILE.read_text(encoding="utf-8") if fb.ENV_FILE.exists() else ""
+    check(("%s=%s" % (_CNAME, _CTOK)) in _env,
+          "the token landed in .env under a name the sweep knows")
+    if os.name != "nt":
+        check((fb.ENV_FILE.stat().st_mode & 0o777) == 0o600,
+              "and .env is mode 0600 after the write",
+              oct(fb.ENV_FILE.stat().st_mode & 0o777))
+    _sess = json.loads(req("GET", "/api/sessions", TOK)[1])
+    check(_sess.get("legion") == 1,
+          "the sessions reply (the page's own clock) counts it", _sess.get("legion"))
+    check(_CTOK not in req("GET", "/api/legion", TOK)[1].decode("utf-8", "replace"),
+          "the legion overview never echoes the token")
+
+    # every refusal keeps the disk as it was: a name, the hub's own channel, a dupe,
+    # a non-http address, a missing token, and a box nothing answers at
+    _cfg_before = (STAGE / "config.json").read_text(encoding="utf-8")
+    code, j = _add({"op": "add-remote", "remote": "bad name!", "url": cohort_url,
+                    "token": _CTOK})
+    check(code == 400 and j.get("error"), "a malformed cohort name: 400", (code, j))
+    code, j = _add({"op": "add-remote", "remote": "praetorium", "url": cohort_url,
+                    "token": _CTOK})
+    check(code == 400 and "praetorium" in (j.get("error") or ""),
+          "the hub's own channel name: 400", (code, j))
+    code, j = _add({"op": "add-remote", "remote": "storage", "url": cohort_url,
+                    "token": _CTOK})
+    check(code == 400 and "already" in (j.get("error") or ""),
+          "a name already configured: 400", (code, j))
+    code, j = _add({"op": "add-remote", "remote": "second",
+                    "url": "ftp://127.0.0.1", "token": _CTOK})
+    check(code == 400 and "http" in (j.get("error") or ""),
+          "an address that is not http(s): 400", (code, j))
+    code, j = _add({"op": "add-remote", "remote": "second", "url": cohort_url,
+                    "token": "   "})
+    check(code == 400 and j.get("error"), "a missing token: 400", (code, j))
+    code, j = _add({"op": "add-remote", "remote": "second",
+                    "url": "http://127.0.0.1:1", "token": _CTOK})
+    check(code == 502 and j.get("error"),
+          "a box nothing answers at: 502, not a false success", (code, j))
+    check((STAGE / "config.json").read_text(encoding="utf-8") == _cfg_before,
+          "the refused adds wrote nothing to config.json")
+    check(req("POST", "/api/legion",
+              None, b'{"op":"add-remote","remote":"x","url":"http://127.0.0.1:1",'
+                    b'"token":"y"}')[0] == 401,
+          "an add-remote POST without a token: 401")
 
     # ---- the browser's one handover: header in, HttpOnly cookie out ----------
     # The token arrives in the URL fragment once; the page POSTs it here and forgets it,
