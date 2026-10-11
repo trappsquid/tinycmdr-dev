@@ -2688,6 +2688,17 @@
       },
       "detail": "llm.max_turns bounded the whole run - the one budget a continuation could not refill - so a one-call-per-turn model hit it while most of the step budget sat unused, and the exit was the bare \"Hit the turn limit\" line with no report. It rides the same ladder as max_steps and max_minutes now: a checkpoint continues the job in a fresh segment, the segment count bounds the total, and when the segments are spent the wrap ladder asks for the report and says how to resume; 0 now means no turn cap (it meant zero turns before). The runway line, the doctor budget lines and both config examples state the scope.",
       "gate": "RED on the pre-fix build: a two-turn run ended at the bare turn-limit line after two model calls, with no continuation and no report; green on the batch"
+    },
+    {
+      "id": "add-cohort-from-the-page",
+      "title": "the legion rail connects a cohort from the page",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "0807863",
+        "expect": "untagged"
+      },
+      "detail": "The rail only listed cohorts hand-edited into agent.a2a_remotes, so connecting a box meant writing config.json and .env by hand. The rail's ADD COHORT opens a dialog (name, URL, page token) and POSTs add-remote: the name, URL and token are validated, the card is probed before anything is written, the token lands in .env under the swept TINYCMDR_COHORT_<NAME>_TOKEN name with the running hub resolving it with no restart, and the new cohort's channel opens.",
+      "gate": "RED on the pre-fix build: tests/test_webui.py's new block fails 10/10 (every add-remote op answered \"unknown op\") and tests/test_webui_page.py's new scenarios fail 11/11 (no invitation row, no dialog); green on the batch"
     }
   ]
 }

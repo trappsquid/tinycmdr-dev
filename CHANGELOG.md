@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A cohort is connected from the page:** the legion rail's ADD COHORT writes a box this hub commands into `agent.a2a_remotes` by URL and page token — the card is probed before anything is written, the token lands in `.env` under the swept `_TOKEN` name and the running hub resolves it with no restart, and the new channel opens (tests/test_webui.py, tests/test_webui_page.py).
+
 ### Fixed
 - **A long task is not ended by its own wording:** the completion-announcement guard is a single advisory reminder now (`0` disables it) instead of a demand that blocked continuation and a force two announcements later, and what ends a genuinely stuck run is the new idle-turn counter — a turn whose every tool call repeated a known result or was refused — so no model's phrasing can end a task early, and every harness stop names its reason and how to resume (tests/test_stall.py).
 - **A task is not cut off by the turn cap:** `llm.max_turns` is a per-segment checkpoint like `max_steps` and `max_minutes` now — a continuation refills it, the segment count bounds the total, and when the segments are spent the wrap ladder asks for the report instead of the bare "Hit the turn limit" exit it used to hit first for one-call-per-turn models (tests/test_stall.py).
