@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Both chat lanes in one process keep their own reporting:** with a Mattermost and a Telegram token both configured, the lanes shared one scheduler dispatcher and one reporter (last startup won), so a job made in one lane reported and asked through the other service, and the restart notice could be spent by the wrong lane; each lane registers its own dispatcher, a job records the lane it was made in, and the restart note names its lane (tests/test_telegram.py).
+
 ## [1.1.5] - 2026-10-11
 
 ### Fixed
