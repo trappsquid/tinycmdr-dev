@@ -170,7 +170,7 @@ trust the network. Rotate/reprint:
 
 ```bash
 tinycmdr token set TINYCMDR_WEB_TOKEN   # empty value mints a fresh one, prints the link
-tinycmdr web                            # print the tokenized link (opens a browser when there is one)
+tinycmdr web                            # print the tokenized link (checks the page answers first; opens a browser when there is one)
 ```
 
 **Chat:** whichever token you configure runs that lane; both → one process serves both.

@@ -372,6 +372,44 @@ answer left empty so only the search section is doing anything.
             check(written["llm"].get("max_context_tokens") == 128000,
                   "the context window is ASKED at the endpoint and written (128k -> 128000)",
                   written["llm"].get("max_context_tokens"))
+
+            # ---- the restart offer: setup's answers need the service to read them ------
+            # A running service reads config.json at START, so a bind or a token typed
+            # here is not what it serves until a restart - "setup did not fix it" was
+            # exactly this gap (reported 2026-10-10). With an instance running the wizard
+            # offers the one step that applies its answers, and runs it on yes.
+            def _restart_patch(calls):
+                def _patch(m):
+                    m.__dict__["_verb_running"] = lambda: True
+
+                    def _fake_restart():
+                        calls.append("restart")
+                        print("restart: back up (test)")
+                        return 0
+                    m.__dict__["_verb_restart"] = _fake_restart
+                return _patch
+
+            d = stage(work / "restart", False)
+            calls = []
+            rc, out, written, mod = drive(d, "", patch=_restart_patch(calls), extra=("",))
+            check(rc == 0 and calls == ["restart"],
+                  "a running instance: the wizard offers the restart and runs it on yes",
+                  out[-400:])
+            check("back up with these settings" in out,
+                  "...and the summary says the service is back up", out[-400:])
+
+            d = stage(work / "restart-no", False)
+            calls = []
+            rc, out, written, mod = drive(d, "", patch=_restart_patch(calls), extra=("n",))
+            check(rc == 0 and not calls and "Run `tinycmdr restart`" in out,
+                  "a declined offer keeps the plain restart instruction, unrun", out[-400:])
+
+            d = stage(work / "restart-idle", False)
+            rc, out, written, mod = drive(d, "")
+            check(rc == 0 and "Run `tinycmdr restart`" not in out
+                  and "nothing is running now" in out,
+                  "nothing running: the summary says the next start takes the settings",
+                  out[-400:])
         finally:
             shutil.rmtree(work, ignore_errors=True)
 

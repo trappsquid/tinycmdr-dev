@@ -1446,6 +1446,46 @@ def main():
           "and prints the link built from it")
     fb.CONFIG["web"]["token"] = saved_tok
 
+    # ---- the verb LOOKS before it promises (2026-10-10) ---------------------
+    # A link printed for a page that is not answering resolved to nothing and read as
+    # the product lying. Dark: the probe's verdict, rc 1, and no tokenized link.
+    _s = socket.socket()
+    _s.bind(("127.0.0.1", 0))
+    dead = _s.getsockname()[1]
+    _s.close()
+    fb.CONFIG["web"] = {"enabled": True, "host": "127.0.0.1", "port": dead, "token": token}
+    buf = io.StringIO()
+    err = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+        rc = fb._verb_web()
+    out = buf.getvalue() + err.getvalue()
+    check(rc == 1 and "no page is answering" in out and (":%d/" % dead) in out,
+          "a dark page: the web verb says so, with the port's URL", out[-240:])
+    check("#token=" not in out,
+          "...and hands out no tokenized link for a page nobody serves", out[-240:])
+    check(("start it the way this host does" in out) or ("restart the service" in out),
+          "...and names the door that starts it", out[-240:])
+
+    # the RECORD is what the reason quotes: a failed bind by its reason, a stale success
+    # as stale (never dressed up as a failure)
+    _reason_fn = getattr(fb, "_page_reason_sentence", None)
+    check(callable(_reason_fn),
+          "the build has the dark-page reason helper (the probe's other half)",
+          "a pre-fix build has no reason helper")
+    _d = fb._lane_state_read()
+    _d.setdefault("lanes", {})["web"] = {
+        "ok": False, "detail": "port %d is held by another process" % dead, "since": 1.0}
+    fb.LANE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fb.LANE_STATE_FILE.write_text(json.dumps(_d), encoding="utf-8")
+    _reason = _reason_fn() if callable(_reason_fn) else ""
+    check("held by another process" in _reason,
+          "a failed bind's record is what the dark-page reason quotes", _reason)
+    _d["lanes"]["web"] = {"ok": True, "detail": "port %d" % dead, "since": 1.0}
+    fb.LANE_STATE_FILE.write_text(json.dumps(_d), encoding="utf-8")
+    _reason = _reason_fn() if callable(_reason_fn) else ""
+    check("nothing answers now" in _reason and "held by another" not in _reason,
+          "a STALE success is named as stale, never as a failure", _reason)
+
     # ---- LAN announcement order (no bind: the announce path only) -----------
     fb.CONFIG["web"] = {"enabled": True, "host": "0.0.0.0", "port": 8790,
                         "token": token}
@@ -1513,11 +1553,33 @@ def main():
           == "http://127.0.0.1:%d/a2a" % BOUND,
           "...and the published agent card advertises it",
           (fb.a2a_card().get("supportedInterfaces") or [{}])[:1])
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        rc = fb._verb_web()
-    check(rc == 0 and (":%d/" % BOUND) in buf.getvalue(),
-          "...and `tinycmdr web` prints that port", buf.getvalue()[:80])
+    # The verb probes before it prints now, so the page the record names must actually
+    # answer: one tiny server ON BOUND, then the link must name it.
+    class _LanesOK(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            body = b'{"ok": true, "lanes": {}}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    _srvB = ThreadingHTTPServer(("127.0.0.1", BOUND), _LanesOK)
+    threading.Thread(target=_srvB.serve_forever, daemon=True).start()
+    try:
+        buf = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
+            rc = fb._verb_web()
+        check(rc == 0 and (":%d/" % BOUND) in buf.getvalue(),
+              "...and `tinycmdr web` prints that port (probed, then the link)",
+              buf.getvalue()[:80] + err.getvalue()[:80])
+    finally:
+        _srvB.shutdown()
+        _srvB.server_close()
     check(fb._web_port(fb.CONFIG["web"]) == (BOUND, None),
           "...and doctor's page line follows", fb._web_port(fb.CONFIG["web"]))
 

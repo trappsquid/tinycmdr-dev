@@ -33419,7 +33419,13 @@ def _verb_web(rest=None):
     is one. Read-only with respect to the running SERVICE - a second process must
     NOT bind the port to answer this. It is not read-only on disk: a host with no
     token gets one minted into .env (the page is gated, so the verb that opens it
-    must be able to create the key), which is the only file it writes."""
+    must be able to create the key), which is the only file it writes.
+
+    It LOOKS before it promises: a link printed for a page that is not answering
+    resolved to nothing and read as the product lying (reported 2026-10-10, the
+    same run that had every door print URLs nobody served). Dark page: the reason
+    and the restart door, exit 1, no browser.
+    """
     tok = _web_token() or _web_token_mint()
     if not tok:
         print("no token: mint one with `tinycmdr token set TINYCMDR_WEB_TOKEN`.",
@@ -33429,6 +33435,10 @@ def _verb_web(rest=None):
     # port, not 8790, or `tinycmdr web` hands out an address this box is not serving.
     port = web_port_effective()
     urls = _web_base_urls(port)
+    if not _web_answers(port):
+        for line in _page_not_answering_note(port):
+            print(line, file=sys.stderr)
+        return 1
     full = urls[0][0] + "#token=" + tok
     print("tinycmdr page: %s" % full)
     for base, _loop in urls[1:]:
@@ -33441,6 +33451,54 @@ def _verb_web(rest=None):
         except Exception:
             pass
     return 0
+
+
+def _page_reason_sentence():
+    """One sentence: why a configured page is not answering, from the record alone.
+
+    run_webui is the only writer that knows: lane_down on a failed or refused bind,
+    lane_up with the bound port on a good one. A STALE success is its own shape - the
+    record says a port, the process that wrote it is gone - and must not be printed as
+    a failure reason. A missing record is a state too (no process that writes one
+    reached a bind attempt) and is never dressed up as a reason.
+    """
+    data = _lane_state_read()
+    rec = (data.get("lanes") or {}).get("web") or {}
+    if rec and not rec.get("ok") and rec.get("detail"):
+        return "the last start that left a record failed: %s" % rec["detail"]
+    fails = (data.get("failures") or {}).get("web") or {}
+    if fails.get("error"):
+        return "the last start that left a record failed: %s" % fails["error"]
+    if rec.get("ok") and rec.get("detail"):
+        return ("the page's own record says %s, but nothing answers now - the process "
+                "that wrote it is gone, or the page died with it" % rec["detail"])
+    if _verb_running() is True:
+        return ("the running instance wrote no page record, so the page did not come up "
+                "in it")
+    return "this install is not running, so nothing is serving the page"
+
+
+def _page_not_answering_note(port):
+    """The lines for a configured page that is NOT answering.
+
+    One text for `--web`'s refusal, `tinycmdr web` and doctor, so every door tells the
+    operator the same story: what the record says, whether anything is running, and the
+    one command that changes it. Names only what is measured - the probe found no /api/
+    health at `port` - and never a URL that resolved to nothing (reported 2026-10-10).
+    """
+    out = ["no page is answering on http://127.0.0.1:%d/" % int(port)]
+    if not (CONFIG.get("web") or {}).get("enabled", True):
+        out.append("the page is off in config.json (web.enabled false): `tinycmdr setup` "
+                   "turns it on, or `tinycmdr --web` serves one run")
+        return out
+    out.append(_page_reason_sentence())
+    if _verb_running() is True:
+        out.append("restart the service to bring it back:  tinycmdr restart")
+    else:
+        out.append("start it the way this host does (launchd, systemd, or the Windows "
+                   "Startup shortcut / scheduled task)")
+    out.append("the raw reason is in %s (or: tinycmdr logs 20)" % (BASE_DIR / "tinycmdr.log"))
+    return out
 
 
 class MattermostDestination(Destination):
@@ -38385,6 +38443,26 @@ def _run_setup_interactive(rest=None):
     # the keys it just wrote are masked like the rest (2026-09-29).
     _refresh_secrets()
 
+    # The running service reads config.json at START (measured 2026-09-28), so the
+    # answers just given are not what it serves: a page bind typed here stays on the old
+    # port until a restart, which is "setup did not fix it" verbatim (reported
+    # 2026-10-10). Apply them with the shipped restart door, offered once, right here.
+    _setup_running = _verb_running()
+    _apply_line = "Run `tinycmdr restart` to apply to background service."
+    if _setup_running is True:
+        try:
+            _ans_restart = input("   Restart the background service now to apply? "
+                                 "[Y/n]: ").strip().lower()
+        except (EOFError, OSError):
+            _ans_restart = "n"
+        if _ans_restart in ("", "y", "yes"):
+            _apply_line = ("the background service is back up with these settings"
+                           if _verb_restart() == 0 else
+                           "the restart did not complete - the reason is above, and "
+                           "`tinycmdr logs 20` shows the service's own log")
+    elif _setup_running is False:
+        _apply_line = "the next start serves these settings (nothing is running now)"
+
     summary = [
         "LLM Endpoint : %s" % llm.get("base_url"),
         "LLM Model    : %s" % llm.get("model"),
@@ -38404,7 +38482,7 @@ def _run_setup_interactive(rest=None):
            else "this LAN only (searxng never needs consent)"),
         "---",
         "✓ Saved to config.json & .env",
-        "Run `tinycmdr restart` to apply to background service.",
+        _apply_line,
     ]
     print(_cli_render_box("Setup Complete", summary))
     return 0
@@ -40308,7 +40386,8 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   approvals [clear]  what the confirm gate has been told to stop asking about
                      (the session and permanent answers); `clear` asks again
   version            the version alone
-  web                open the page: prints the tokenized link, opens a browser
+  web                open the page: checks it answers first, then prints the
+                     tokenized link and opens a browser
   proc               the processes running from THIS folder
   update [--full]    fetch the published build (verified download; nothing to do with git)
   update <src>       put a newer build in place (file, zip or folder); no .bak copy
@@ -40625,12 +40704,32 @@ def _verb_doctor():
     # The page is the door a bare start opens, and "no token" is a supported state (the
     # next start mints one) - but it is worth NAMING, because an install that predates the
     # page has exactly that and nothing else in this output would say the page exists.
+    # And it is worth MEASURING: this line said "token set" on a box whose page had never
+    # bound, which every reader took as the page being up (reported 2026-10-10). One
+    # probe answers the question the operator is actually asking.
     web = CONFIG.get("web") or {}
     port, port_note = _web_port(web)
+    # A lock probe, cheap and side-effect-free; the instance line below prints this
+    # same reading.
+    running = _verb_running()
     if not web.get("enabled", True):
         print("  page      : off (web.enabled false; `tinycmdr setup` turns it on)")
     elif _web_token():
-        print("  page      : on, port %d, token set (`tinycmdr web` prints the link)" % port)
+        _urls = _web_base_urls(port)
+        if _web_answers(port):
+            print("  page      : on, port %d, ANSWERING - %s (`tinycmdr web` prints the "
+                  "tokenized link)" % (port, ", ".join(u for u, _loop in _urls)))
+        else:
+            print("  page      : on, port %d, NOT answering" % port)
+            if running is True:
+                problems.append(
+                    "the page is on (port %d) but nothing is answering on %s: %s. "
+                    "Restart the service (`tinycmdr restart`), then check again"
+                    % (port, _urls[0][0], _page_reason_sentence()))
+            else:
+                notes.append(
+                    "no page is answering on %s: this install is not running, and the "
+                    "page starts with it" % _urls[0][0])
         if str(web.get("host") or "").strip() in ("0.0.0.0", "::"):
             for _line in _firewall_note(port):
                 notes.append(_line)
@@ -40679,7 +40778,6 @@ def _verb_doctor():
         problems.append(("the model endpoint at %s did not answer" % url)
                         + lan_permission_hint(url))
 
-    running = _verb_running()
     print("  instance  : %s" % {True: "running (the lock is held)",
                                 False: "not running (the lock is free)",
                                 None: "unknown"}[running])
@@ -43968,10 +44066,28 @@ def main():
             # locks the install FOLDER itself, so there is no lock file to delete and
             # deleting one would hand the next start a fresh lock - a second bot on the
             # same token (A-2026-10-08-131).
+            # Before refusing, LOOK at the page the flags asked about: --web IS the
+            # asking (see _start_page), the page is served BY the running instance, and
+            # a bare refusal for it read as "cannot start" while the browser had
+            # nothing to open (reported 2026-10-10: --web refused, then a URL nobody
+            # served). A page that answers hands over its link; a dark one gets the
+            # record's reason and the restart door.
+            _page_port = web_port_effective()
+            _page_up = _web_answers(_page_port)
+            if _page_up and "--web" in sys.argv:
+                print("tinycmdr page: already serving here (the running instance)")
+                _announce_web(_page_port, open_browser=not _web_no_browser, force=True)
+                sys.exit(0)
             log.critical("STARTUP ABORTED: another tinycmdr is already running from %s. %s",
                          BASE_DIR, instance_busy_note().replace("\n", " "))
             print(f"\n*** tinycmdr is already running from this folder ***\n"
                   f"{instance_busy_note()}\n", file=sys.stderr)
+            if _page_up:
+                print("  it is serving the page: %s - `tinycmdr web` prints the "
+                      "tokenized link" % _web_base_urls(_page_port)[0][0], file=sys.stderr)
+            elif "--web" in sys.argv:
+                for line in _page_not_answering_note(_page_port):
+                    print("  " + line, file=sys.stderr)
             sys.exit(3)
 
     if "--app" in sys.argv:

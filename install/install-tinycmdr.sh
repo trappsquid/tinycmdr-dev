@@ -110,7 +110,7 @@ LOG="${TINYCMDR_INSTALL_LOG:-/tmp/tinycmdr-install.log}"
 PY="${TINYCMDR_PYTHON:-python3}"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""; MM_URL_ARG=""
-WEB_ON=1; WEB_HOST_ARG=""; WEB_HOST_GIVEN=0; WEB_PORT="8790"
+WEB_ON=1; WEB_HOST_ARG=""; WEB_HOST_GIVEN=0; WEB_PORT="8790"; WEB_PORT_GIVEN=0
 # What the CALLER asked for, captured before the defaults below fill anything in:
 # an update must only change what it was told to change.
 MODEL_BASE_GIVEN=""; MODEL_GIVEN=""
@@ -148,7 +148,7 @@ while [ $# -gt 0 ]; do
         --telegram-token)   TG_TOKEN="$2"; shift 2 ;;
         --telegram-ids)     TG_IDS="$2"; shift 2 ;;
         --web-host)         WEB_HOST_ARG="$2"; shift 2 ;;
-        --web-port)         WEB_PORT="$2"; shift 2 ;;
+        --web-port)         WEB_PORT="$2"; WEB_PORT_GIVEN=1; shift 2 ;;
         --web-token)        WEB_TOKEN_ARG="$2"; shift 2 ;;
         --no-web)           WEB_ON=0; shift ;;
         --install-dir)      INSTALL_DIR="$2"; DIR_GIVEN=1; shift 2 ;;
@@ -1422,6 +1422,18 @@ fi
 
 WEB_HOST="127.0.0.1"
 if [ "$WEB_ON" = 1 ]; then
+    # The port a REDO already serves, read BEFORE the summary and the firewall block
+    # print it: those lines used the flag default (8790) while this box served another
+    # port, so the URL the installer handed out was not the box's (reported 2026-10-10).
+    if [ "$WEB_PORT_GIVEN" = 0 ] && [ -f "$INSTALL_DIR/config.json" ]; then
+        _kept_port="$("$PY" -c 'import json,sys
+d=json.load(open(sys.argv[1],encoding="utf-8"))
+print(((d.get("web") or {}).get("port") or ""))' "$INSTALL_DIR/config.json" 2>/dev/null || true)"
+        case "$_kept_port" in
+            ''|0|*[!0-9]*) ;;
+            *) WEB_PORT="$_kept_port" ;;
+        esac
+    fi
     if [ -n "$WEB_HOST_ARG" ]; then
         WEB_HOST="$WEB_HOST_ARG"; WEB_HOST_GIVEN=1
     elif [ "$ASK_Q" = 1 ]; then
@@ -1975,6 +1987,27 @@ if [ "$SERVE" = 1 ]; then
 say "check"
 sleep 2
 tail -n 12 "$INSTALL_DIR/tinycmdr.log" 2>/dev/null | sed 's/^/    /' || true
+if [ "$WEB_ON" = 1 ]; then
+    # The page is the door most operators open first, and nothing ever LOOKED at it:
+    # "done" printed a URL whether or not the page bound (reported 2026-10-10). /api/
+    # health is auth-free by design, which is what makes it the probe.
+    _page_ok=0
+    _page_try=0
+    while [ "$_page_try" -lt 15 ]; do
+        if curl -fsS -m 2 "http://127.0.0.1:$WEB_PORT/api/health" >/dev/null 2>&1; then
+            _page_ok=1
+            break
+        fi
+        _page_try=$((_page_try + 1))
+        sleep 2
+    done
+    if [ "$_page_ok" = 1 ]; then
+        info "page            : answering now on http://127.0.0.1:$WEB_PORT"
+    else
+        warn "page            : NOT answering on http://127.0.0.1:$WEB_PORT yet - the reason is in"
+        warn "                  $INSTALL_DIR/tinycmdr.log, and ${SCTL_HINT} status $SERVICE_NAME shows the unit"
+    fi
+fi
 if [ "$CHAT_LANE" = 1 ]; then
     if grep -qE 'authenticated as|Starting bot' "$INSTALL_DIR/tinycmdr.log" 2>/dev/null; then
         info "mattermost      : connected (the log shows the bot login)"
@@ -2011,6 +2044,28 @@ if [ "$SERVE" = 1 ]; then
         MODE_LINE="system - boots with the machine"
     fi
 
+    # The addresses a visitor can actually type: "<this-host>" is a placeholder, not a
+    # URL (reported 2026-10-10). hostname -I is the Linux door; the placeholder stays
+    # where it answers nothing.
+    if [ "$WEB_ON" = 1 ]; then
+        if [ "$WEB_HOST" = "0.0.0.0" ]; then
+            _lan_ips="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^127\.|^$' | head -3 || true)"
+            if [ -n "$_lan_ips" ]; then
+                _page_hosts=""
+                for _ip in $_lan_ips; do
+                    _page_hosts="$_page_hosts http://$_ip:$WEB_PORT"
+                done
+                PAGE_LINE="${_page_hosts# } (on your network; token in .env)"
+            else
+                PAGE_LINE="http://<this-host>:$WEB_PORT (on your network; token in .env)"
+            fi
+        else
+            PAGE_LINE="http://127.0.0.1:$WEB_PORT (token in .env)"
+        fi
+    else
+        PAGE_LINE="disabled"
+    fi
+
     cat <<EOF
 
 tinycmdr is installed.
@@ -2019,7 +2074,7 @@ tinycmdr is installed.
   active   : ${SCTL_HINT} status $SERVICE_NAME
   enabled  : $(sctl is-enabled "$SERVICE_NAME" 2>&1)
   logs     : journalctl ${JCTL_SCOPE}-u $SERVICE_NAME -f    and    $INSTALL_DIR/tinycmdr.log
-  page     : $([ "$WEB_ON" = 1 ] && { [ "$WEB_HOST" = "0.0.0.0" ] && echo "http://<this-host>:$WEB_PORT (on your network; token in .env)" || echo "http://127.0.0.1:$WEB_PORT (token in .env)"; } || echo "disabled")
+  page     : $PAGE_LINE
   restart  : ${SCTL_HINT} restart $SERVICE_NAME
   local    : $VENV_PY $INSTALL_DIR/tinycmdr.py --once "/status"
   session  : $VENV_PY $INSTALL_DIR/tinycmdr.py --cli

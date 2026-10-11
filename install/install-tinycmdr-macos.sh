@@ -123,7 +123,7 @@ DEFAULT_MODEL_BASE="http://127.0.0.1:8081/v1"
 DEFAULT_MODEL="main"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
-WEB_ON=1; WEB_HOST_ARG=""; WEB_HOST_GIVEN=0; WEB_PORT="8790"
+WEB_ON=1; WEB_HOST_ARG=""; WEB_HOST_GIVEN=0; WEB_PORT="8790"; WEB_PORT_GIVEN=0
 TG_TOKEN=""; TG_IDS=""
 MM_URL_ARG=""; MM_PORT_ARG=""; SECRETS_FILE=""
 FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
@@ -148,7 +148,7 @@ while [ $# -gt 0 ]; do
         --telegram-token)  TG_TOKEN="$2"; shift 2 ;;
         --telegram-ids)    TG_IDS="$2"; shift 2 ;;
         --web-host)        WEB_HOST_ARG="$2"; shift 2 ;;
-        --web-port)        WEB_PORT="$2"; shift 2 ;;
+        --web-port)        WEB_PORT="$2"; WEB_PORT_GIVEN=1; shift 2 ;;
         --web-token)       WEB_TOKEN_ARG="$2"; shift 2 ;;
         --no-web)          WEB_ON=0; shift ;;
         --allowed-user)    ALLOWED_ARG="$2"; shift 2 ;;
@@ -1319,6 +1319,18 @@ fi
 
 WEB_HOST="127.0.0.1"
 if [ "$WEB_ON" = 1 ]; then
+    # The port a REDO already serves, read BEFORE the summary and the firewall block
+    # print it: those lines used the flag default (8790) while this box served another
+    # port, so the URL the installer handed out was not the box's (reported 2026-10-10).
+    if [ "$WEB_PORT_GIVEN" = 0 ] && [ -f "$INSTALL_DIR/config.json" ]; then
+        _kept_port="$("$VPY" -c 'import json,sys
+d=json.load(open(sys.argv[1],encoding="utf-8"))
+print(((d.get("web") or {}).get("port") or ""))' "$INSTALL_DIR/config.json" 2>/dev/null || true)"
+        case "$_kept_port" in
+            ''|0|*[!0-9]*) ;;
+            *) WEB_PORT="$_kept_port" ;;
+        esac
+    fi
     if [ -n "$WEB_HOST_ARG" ]; then
         WEB_HOST="$WEB_HOST_ARG"; WEB_HOST_GIVEN=1
     elif [ "$ASK" = 1 ]; then
@@ -1812,6 +1824,27 @@ else
 A Mac reached only over SSH has no GUI session to hold an agent: log in at the console and
 re-run, or load it there later with:  launchctl bootstrap gui/\$(id -u) \"$PLIST\""
     info "agent loaded as $LABEL"
+    # The page is the door most operators open first, and nothing ever LOOKED at it:
+    # "done" printed a URL whether or not the page bound (reported 2026-10-10). /api/
+    # health is auth-free by design, which is what makes it the probe.
+    if [ "$WEB_ON" = 1 ]; then
+        _page_ok=0
+        _page_try=0
+        while [ "$_page_try" -lt 15 ]; do
+            if curl -fsS -m 2 "http://127.0.0.1:$WEB_PORT/api/health" >/dev/null 2>&1; then
+                _page_ok=1
+                break
+            fi
+            _page_try=$((_page_try + 1))
+            sleep 2
+        done
+        if [ "$_page_ok" = 1 ]; then
+            info "page        : answering now on http://127.0.0.1:$WEB_PORT"
+        else
+            warn "page        : NOT answering on http://127.0.0.1:$WEB_PORT yet - the reason is in"
+            warn "              $INSTALL_DIR/tinycmdr.log  (or: $VPY $INSTALL_DIR/tinycmdr.py logs 20)"
+        fi
+    fi
 fi
 fi
 
@@ -1828,7 +1861,25 @@ if [ "$SERVE" = 1 ]; then
     info "restart     : bash $INSTALL_DIR/maintenance/restart-tinycmdr-macos.sh"
     if [ "$WEB_ON" = 1 ]; then
         if [ "$WEB_HOST" = "0.0.0.0" ]; then
-            info "page        : http://<this-host>:$WEB_PORT - any machine on your network; token in .env"
+            # The addresses a visitor can actually type: "<this-host>" is a placeholder,
+            # not a URL (reported 2026-10-10). Best-effort - the default interface, then
+            # hostname -I where it exists; the placeholder stays when neither answers.
+            _lan_dev="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+            _lan_ips=""
+            if [ -n "$_lan_dev" ]; then
+                _lan_ips="$(ipconfig getifaddr "$_lan_dev" 2>/dev/null || true)"
+            fi
+            if [ -z "$_lan_ips" ]; then
+                _lan_ips="$(hostname -I 2>/dev/null | tr ' ' '\n' \
+                    | grep -vE '^127\.|^$' | head -3 || true)"
+            fi
+            if [ -n "$_lan_ips" ]; then
+                printf '%s\n' "$_lan_ips" | while read -r _ip; do
+                    info "page        : http://$_ip:$WEB_PORT - any machine on your network; token in .env"
+                done
+            else
+                info "page        : http://<this-host>:$WEB_PORT - any machine on your network; token in .env"
+            fi
             # The bind needs no root; the FIREWALL hole does. ALF refuses inbound for an
             # app nobody allowed, and a launchd agent cannot answer its prompt - so the
             # LAN answer COMPLETES here: run it as root, offer it at a terminal, and say

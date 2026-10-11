@@ -38,6 +38,8 @@ import re
 import subprocess
 import sys
 import threading
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -209,6 +211,66 @@ def main():
                                   len(_StubHandler.calls) >= 1, out)
             failures += not check("--once printed the model's reply",
                                   STUB_REPLY in (got.stdout or ""), out)
+
+        # 6. the page, SERVED and probed: nothing else in the gate starts the installed
+        # tree as a service and looks at its page, so "the installer said the page is
+        # up" was a claim with no exit code behind it - and every door printed URLs
+        # nobody served (reported 2026-10-10). The bare tree with the page on is the
+        # shape the launcher/launchd/task starts, so this grades exactly that.
+        web = {}
+        try:
+            web = (json.loads((install_dir / "config.json").read_text(encoding="utf-8"))
+                   .get("web") or {})
+        except (OSError, ValueError):
+            pass
+        if not web.get("enabled", True):
+            print("  skip the page check (web.enabled false in this install)")
+        else:
+            port = int(web.get("port") or 8790)
+            print("  page: starting the installed tree, probing 127.0.0.1:%d/api/health"
+                  % port)
+            env = dict(os.environ)
+            env["TINYCMDR_NO_BROWSER"] = "1"      # a smoke run opens no browser tab
+            proc = subprocess.Popen([python, str(install_dir / "tinycmdr.py")],
+                                    cwd=str(install_dir), env=env,
+                                    stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    encoding="utf-8", errors="replace")
+            served = False
+            t0 = time.time()
+            while time.time() - t0 < 45 and proc.poll() is None:
+                try:
+                    with urllib.request.urlopen(
+                            "http://127.0.0.1:%d/api/health" % port, timeout=2) as r:
+                        if r.status == 200 and b'"lanes"' in r.read(4096):
+                            served = True
+                            break
+                except Exception:                                        # noqa: BLE001
+                    time.sleep(0.5)
+            web_out = ""
+            if served:
+                # `tinycmdr web` must hand out the port the page actually bound, and it
+                # checks liveness first now - so it runs while the page is up.
+                got = run(python, install_dir, ["web"])
+                web_out = (got.stdout or "") + (got.stderr or "")
+                failures += not check("`tinycmdr web` hands out the bound port's link",
+                                      got.returncode == 0 and (":%d/" % port) in web_out,
+                                      web_out)
+            if proc.poll() is None:
+                proc.kill()
+            tail = ""
+            try:
+                tail = (proc.communicate(timeout=10)[0] or "")[-400:]
+            except Exception:                                            # noqa: BLE001
+                pass
+            if not served and not tail:
+                try:
+                    tail = (install_dir / "tinycmdr.log").read_text(
+                        encoding="utf-8", errors="replace")[-600:]
+                except OSError:
+                    pass
+            failures += not check("the page answers on 127.0.0.1:%d (/api/health)" % port,
+                                  served, tail or web_out)
     finally:
         if server is not None:
             server.shutdown()

@@ -557,6 +557,17 @@ function Get-TinycmdrFirewallCommand {
     return "Remove-NetFirewallRule -DisplayName 'tinycmdr page' -ErrorAction SilentlyContinue; " +
            "New-NetFirewallRule -DisplayName 'tinycmdr page' -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow"
 }
+function Get-TinycmdrLanIps {
+    # The addresses a LAN visitor can actually type, best-effort, for the summary and
+    # the post-start page line: "<this-pc>" is a placeholder, not a URL, and the
+    # operator typed a remembered port while every line here said something else
+    # (reported 2026-10-10). Never fails: no address prints the placeholder.
+    try {
+        return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                 Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+                 Select-Object -ExpandProperty IPAddress)
+    } catch { return @() }
+}
 function Head ($m) { Write-Host "`n== $m" -ForegroundColor Cyan }
 function Fail ($m) {
     Write-Host "`nFAILED: $m" -ForegroundColor Red
@@ -1342,6 +1353,18 @@ if ($Ask -and -not $KeepConn) {
         Write-Host "  page        : disabled (-NoWeb)"
     }
     if (-not $NoWeb) {
+        # The port a REDO already serves, read BEFORE anything is printed or firewalled:
+        # the offer below builds its firewall rule from $WebPort, and the flag default
+        # (8790) put a rule on a port this box does not serve while the config kept
+        # another one - the operator answered yes, a window flashed, and the LAN URL
+        # still did not work (reported 2026-10-10). A flag this run was GIVEN wins.
+        if (-not $PSBoundParameters.ContainsKey('WebPort')) {
+            try {
+                $keptPort = [int](Get-Content (Join-Path $InstallDir "config.json") -Raw |
+                                  ConvertFrom-Json).web.port
+                if ($keptPort -gt 0) { $WebPort = $keptPort }
+            } catch { }
+        }
         # Ports below 1024 are a PRIVILEGE boundary: without Administrator the bind fails
         # and the page is simply absent. Fall back here, with the reason, rather than
         # leaving the host to discover it at first start.
@@ -1400,14 +1423,51 @@ if ($Ask -and -not $KeepConn) {
                     Write-Host "                  $(Get-TinycmdrFirewallCommand -Port $WebPort)"
                 }
             } elseif ($Ask -and (Ask-Yes "Open the port now (one Administrator prompt)?" $false)) {
+                # The elevated run is its own window that closes by itself, so its
+                # OUTCOME is written to a temp log and read back: a one-second flash
+                # with no rule and no reason is all this used to leave behind
+                # (reported 2026-10-10). The inner command rides a .ps1 file because
+                # Start-Process mangles a -Command string with quotes in it, and it
+                # cannot use -RedirectStandardError together with -Verb.
+                $fwScript = Join-Path $env:TEMP "tinycmdr-firewall.ps1"
+                $fwLogOut = Join-Path $env:TEMP "tinycmdr-firewall.log"
+                $fwNote = ""
                 try {
+                    Set-Content -LiteralPath $fwScript -Encoding ASCII -Value @(
+                        '# run elevated by install-tinycmdr.ps1; the outcome lands in the log',
+                        '$ErrorActionPreference = "Stop"',
+                        'try {',
+                        "  " + (Get-TinycmdrFirewallCommand -Port $WebPort),
+                        "  'ok: rule added for port $WebPort' | Out-File -LiteralPath '$fwLogOut' -Encoding ascii",
+                        '} catch {',
+                        "  'failed: ' + `$_.Exception.Message | Out-File -LiteralPath '$fwLogOut' -Encoding ascii",
+                        '}'
+                    )
+                    Remove-Item -LiteralPath $fwLogOut -Force -ErrorAction SilentlyContinue
                     Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait `
-                        -ArgumentList @("-NoProfile", "-Command", (Get-TinycmdrFirewallCommand -Port $WebPort)) | Out-Null
-                } catch { }        # a cancelled UAC prompt is an answer, not an error
+                        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $fwScript) | Out-Null
+                } catch {
+                    # A declined UAC prompt lands here. That is an answer, not an error -
+                    # and the operator is TOLD which answer it was.
+                    $fwNote = $_.Exception.Message
+                } finally {
+                    Remove-Item -LiteralPath $fwScript -Force -ErrorAction SilentlyContinue
+                }
                 if (Test-TinycmdrFirewallRule) {
                     Write-Host "  firewall    : opened port $WebPort (rule 'tinycmdr page')"
+                    Remove-Item -LiteralPath $fwLogOut -Force -ErrorAction SilentlyContinue
                 } else {
-                    Write-Warning "the port is still closed; run in an elevated PowerShell:"
+                    if (Test-Path $fwLogOut) {
+                        $fwNote = [string](Get-Content -LiteralPath $fwLogOut -ErrorAction SilentlyContinue |
+                                           Select-Object -First 1)
+                        Remove-Item -LiteralPath $fwLogOut -Force -ErrorAction SilentlyContinue
+                    }
+                    if ($fwNote) {
+                        Write-Warning "the port is still closed - the elevated run said: $fwNote"
+                    } else {
+                        Write-Warning "the port is still closed - the elevation prompt was cancelled or never ran"
+                    }
+                    Write-Host "  run in an elevated PowerShell:"
                     Write-Host "                  $(Get-TinycmdrFirewallCommand -Port $WebPort)"
                 }
             } else {
@@ -2279,6 +2339,36 @@ if ($RegisterTask -and -not $NoStart) {
         }
         $Unverified = $true
     }
+    if (-not $NoWeb) {
+        # The page is the door most operators open first, and until this check nothing
+        # in the installer ever LOOKED at it: "starting and verifying" proved the model
+        # endpoint, so an install whose page never bound still read as verified
+        # (reported 2026-10-10). /api/health is auth-free by design, which is what
+        # makes it the probe; up to 30 s covers a cold first start.
+        $pageOk = $false
+        foreach ($i in 1..15) {
+            try {
+                $pg = Invoke-WebRequest -Uri "http://127.0.0.1:$WebPort/api/health" `
+                        -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+                if ($pg.StatusCode -eq 200 -and $pg.Content -match '"lanes"') { $pageOk = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 2
+        }
+        if ($pageOk) {
+            Say "page    : answering now at http://127.0.0.1:$WebPort/ (`"tinycmdr web`" prints"
+            Say "          the tokenized link)"
+            if ($WebHost -eq "0.0.0.0") {
+                foreach ($ip in Get-TinycmdrLanIps) { Say "          from your network: http://$ip`:$WebPort/" }
+            }
+        } else {
+            Say "page    : NOT answering on http://127.0.0.1:$WebPort yet - the files and the"
+            Say "          $(if ($AsService) { 'task' } else { 'shortcut' }) are in place, so this is"
+            Say "          a configuration or port gap. The reason is in:"
+            Say "          $InstallDir\tinycmdr.log    (or: tinycmdr logs 20)"
+            Say "          after fixing:  tinycmdr restart"
+            $Unverified = $true
+        }
+    }
 }
 
 Head "done - still to do"
@@ -2294,7 +2384,7 @@ if ($TgLane -and -not $ChatLane) {
     Say "serves it. Open it from a browser on this machine:"
     Say "  http://127.0.0.1:$WebPort"
     if ($WebHost -eq "0.0.0.0") {
-        Say "  or from any machine on your network: http://<this-pc>:$WebPort"
+        foreach ($ip in Get-TinycmdrLanIps) { Say "  from your network: http://$ip`:$WebPort" }
     }
     Say "the tokenized link:  cd $InstallDir ; python tinycmdr.py web"
     Say ""
@@ -2310,6 +2400,17 @@ if ($TgLane -and -not $ChatLane) {
     Say "  install-tinycmdr.cmd -Force -MattermostTokenFile <file with the token>"
     Say "Add a Telegram DM whenever you want one:"
     Say "  install-tinycmdr.cmd -Force -TelegramToken <token> -TelegramIds <your numeric id>"
+    Say ""
+}
+if (-not $NoWeb -and ($ChatLane -or $TgLane)) {
+    # A box with a chat lane is exactly the case that was never told its page URL - the
+    # page line existed only in the no-lane branch, so an operator with Mattermost AND
+    # the page had to guess, and guessed a port nobody served (reported 2026-10-10).
+    Say "page    : http://127.0.0.1:$WebPort   (`"tinycmdr web`" prints the tokenized link)"
+    if ($WebHost -eq "0.0.0.0") {
+        foreach ($ip in Get-TinycmdrLanIps) { Say "          from your network: http://$ip`:$WebPort" }
+    }
+    if (-not $RegisterTask) { Say "          (no background task was registered - nothing serves it yet)" }
     Say ""
 }
 if (-not $NoWeb -and $WebHost -eq "0.0.0.0" -and -not (Test-TinycmdrFirewallRule)) {

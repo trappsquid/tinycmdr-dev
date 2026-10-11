@@ -557,6 +557,35 @@ def main():
     check("the summary names what was added, tried first",
           "you added {0} (tried first)" in install)
 
+    print("\n== the page is proven, and every offer names the box's own port ==")
+    # The port a redo already serves must be read BEFORE anything is printed or
+    # firewalled: the offer used to build its rule from the flag default (8790) while
+    # the box's config kept another port - the operator answered yes, a window flashed,
+    # and the LAN URL still did not work (reported 2026-10-10).
+    kept = install.find("$keptPort = [int](Get-Content")
+    offer = install.find("Open the port now")
+    check("a redo reads the kept web.port before the firewall offer",
+          kept != -1 and offer != -1 and kept < offer, (kept, offer))
+    check("...and a -WebPort this run was given wins over the kept one",
+          re.search(r"if \(-not \$PSBoundParameters\.ContainsKey\('WebPort'\)\) \{",
+                    install) is not None)
+    check("the elevated firewall run writes its OUTCOME to a log and reads it back",
+          "tinycmdr-firewall.log" in install and "the elevated run said:" in install,
+          "no log/readback pair around the UAC run")
+    check("...and a declined elevation is named, never swallowed",
+          "the elevation prompt was cancelled or never ran" in install)
+    check("the installer PROBES the page it just started (/api/health)",
+          "http://127.0.0.1:$WebPort/api/health" in install)
+    check("...and says so when it is not answering",
+          "NOT answering on http://127.0.0.1:$WebPort" in install)
+    _chatpage = between(install, "if (-not $NoWeb -and ($ChatLane -or $TgLane)) {",
+                        "if (-not $NoWeb -and $WebHost")
+    check("a chat-lane install is TOLD its page URL (the branch that had none)",
+          'Say "page    : http://127.0.0.1:$WebPort' in _chatpage,
+          _chatpage[:240])
+    check("...and LAN URLs carry the box's real addresses, not <this-pc>",
+          "Get-TinycmdrLanIps" in install and "http://<this-pc>:$WebPort" not in install)
+
     print("\n== tinycmdr.cmd refuses the Microsoft Store python stub ==")
     check("the shim looks python up with where + findstr",
           "where %~1" in shim and 'findstr /i /c:"WindowsApps"' in shim)
@@ -722,10 +751,11 @@ def main():
     check("an elevated shell runs the rule itself",
           between(ps1, "} elseif ($IsAdmin) {", "} elseif ($Ask -and (Ask-Yes").count(
               'New-NetFirewallRule -DisplayName "tinycmdr page"') == 1)
-    check("a terminal is offered one UAC prompt (default no), named on the command line",
+    check("a terminal is offered one UAC prompt (default no), run from a .ps1 that reports",
           "(Ask-Yes \"Open the port now (one Administrator prompt)?\" $false)" in ps1
           and "-Verb RunAs -Wait" in ps1
-          and '-ArgumentList @("-NoProfile", "-Command", (Get-TinycmdrFirewallCommand -Port $WebPort))' in ps1)
+          and ('-ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $fwScript)'
+               in ps1))
     check("still-to-do carries the exact command when the port stayed closed",
           'if (-not $NoWeb -and $WebHost -eq "0.0.0.0" -and -not (Test-TinycmdrFirewallRule)) {' in ps1
           and '$todo += "firewall' in ps1

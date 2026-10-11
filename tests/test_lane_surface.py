@@ -1190,6 +1190,59 @@ The lane rules this grades, all of them visible only by RUNNING the file:
             finally:
                 m._release_lock()
 
+            # -- --web beside that instance: the PAGE first, the refusal second ---------
+            # Typing --web IS the asking: the page it asks for is served BY the running
+            # instance, and the refusal used to say "already running" while the browser
+            # had nothing to open, then the operator guessed a port (reported
+            # 2026-10-10). A page that answers hands over its link (rc 0); a dark page
+            # gets the record, the probe's verdict and the restart door (rc 3).
+            d2 = work / "lockhold_page"
+            d2.mkdir(exist_ok=True)
+            shutil.copy2(SRC, d2 / "tinycmdr.py")
+            port2 = free_port()
+            web2 = {"enabled": True, "host": "127.0.0.1", "port": port2, "token": "t" * 32}
+            # the staged CONFIG before the module loads: run_webui reads it at import
+            (d2 / "config.json").write_text(json.dumps({"llm": LLM, "web": web2}),
+                                            encoding="utf-8")
+            m2 = load(d2)
+            _held2 = m2.acquire_single_instance_lock()
+            check(_held2 is True, "the lockholder folder's bot holds its lock", _held2)
+            try:
+                # dark first: the probe finds nothing, so the refusal names the page's
+                # state and never announces a page nobody serves
+                code, said = run(d2, args=("--web", "--no-browser"), timeout=30,
+                                 config={"llm": LLM, "web": web2})
+                check(code == 3 and "already running from this folder" in said,
+                      "--web beside a running instance still refuses to START (rc 3)",
+                      (code, said[-400:]))
+                check("no page is answering" in said and "tinycmdr restart" in said,
+                      "...but names the page's state and the restart door now",
+                      said[-400:])
+                check("tinycmdr page: already serving" not in said,
+                      "...and never announces a page that does not answer", said[-300:])
+                # then with the page actually served by the lock holder
+                srv2 = m2.run_webui()
+                check(srv2 is not None, "the holder serves the page", srv2)
+                try:
+                    code, said = run(d2, args=("--web", "--no-browser"), timeout=30,
+                                     config={"llm": LLM, "web": web2})
+                    check(code == 0 and "already serving" in said,
+                          "--web beside a SERVING page hands over the link (rc 0)",
+                          (code, said[-400:]))
+                    check((":%d/" % port2) in said,
+                          "...and the link names the port the page bound", said[-300:])
+                    check("#token=" not in said,
+                          "...with no token off a non-tty (the supervisor-log rule)",
+                          said[-300:])
+                finally:
+                    try:
+                        srv2.shutdown()
+                        srv2.server_close()
+                    except Exception:                                # noqa: BLE001
+                        pass
+            finally:
+                m2._release_lock()
+
             # -- `--once` takes the TASK, and only the task ----------------------------
             # A separate flag after `--once` used to be swallowed into the prompt - the model was
             # asked "--cli hello" (read back from the session the run wrote: run 24,

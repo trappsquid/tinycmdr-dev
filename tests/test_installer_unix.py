@@ -117,6 +117,11 @@ def write_stubs(bindir, user, home, fake_id=False, curl_fails=False, slim=False)
         "journalctl": "exit 0",
         "launchctl": "exit 0",
         "plutil": "exit 0",
+        # A timing stub, like the fake venv is a build stub: nothing runs behind these
+        # installs, so every `sleep` is dead weight - and the post-start page probe sleeps
+        # between 15 attempts, which a sandbox must not pay (or it would outlive the
+        # suite's timeout). No installer wait is semantic here.
+        "sleep": "exit 0",
     }
     if fake_id:
         # A host where the installer does NOT run as the service user and the group is
@@ -274,6 +279,34 @@ def make_bus(sb):
     s = socket.socket(socket.AF_UNIX)
     s.bind(str(bus))
     s.close()
+
+
+def free_port():
+    """A loopback port nothing holds right now - the probe must find it dark."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def plan_lan_ips():
+    """The addresses the MAC installer's own lookup would find here, so a check can tell
+    "printed a real address" from "printed the placeholder" only when the box has one."""
+    ips = []
+    dev = subprocess.run(["sh", "-c",
+                          "route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}'"],
+                         capture_output=True, text=True).stdout.strip()
+    if dev:
+        got = subprocess.run(["ipconfig", "getifaddr", dev], capture_output=True, text=True)
+        if got.returncode == 0:
+            ips += [x.strip() for x in got.stdout.split() if x.strip()]
+    if not ips:
+        got = subprocess.run(["sh", "-c",
+                              "hostname -I 2>/dev/null | tr ' ' '\\n' | grep -vE '^127\\.|^$'"],
+                             capture_output=True, text=True)
+        ips += [x.strip() for x in got.stdout.split() if x.strip()]
+    return ips
 
 
 def case_linux_user_mode(sb, pkg, bindir, user, py):
@@ -1289,10 +1322,10 @@ def case_lan_reachability(sb, pkg, bindir, user, py):
     log = sb / "logs" / "lan.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
-    def stage_kept_install(path):
+    def stage_kept_install(path, port):
         fake_venv(path, py)
         (path / "config.json").write_text(json.dumps({
-            "web": {"enabled": True, "host": "0.0.0.0", "port": 8790},
+            "web": {"enabled": True, "host": "0.0.0.0", "port": port},
             "agent": {"bot_name": "lan"},
             "llm": {"base_url": "http://127.0.0.1:1/v1", "model": "main",
                     "api_key": "none"},
@@ -1309,7 +1342,8 @@ def case_lan_reachability(sb, pkg, bindir, user, py):
         'esac\nexit 0\n', encoding="utf-8")
     (lanbin / "ufw").chmod(0o755)
     lin = sb / "lan-lin"
-    stage_kept_install(lin)
+    port_l = free_port()
+    stage_kept_install(lin, port_l)
     lin_env = sandbox_home_env(sb, lanbin, log, user,
                                {"TINYCMDR_PYTHON": py, "TINYCMDR_ASK": "1"})
     got = subprocess.run([str(x) for x in (
@@ -1325,22 +1359,30 @@ def case_lan_reachability(sb, pkg, bindir, user, py):
     check("all-Enter keeps the kept 0.0.0.0 page bind on Linux",
           (conf.get("web") or {}).get("host") == "0.0.0.0",
           f"web.host is {(conf.get('web') or {}).get('host')!r}")
+    # ...and every line that NAMES the port names the box's own, not the flag default:
+    # the firewall rule and the printed URL went to 8790 while this box served another
+    # port (reported 2026-10-10).
+    check("the Linux lines name the KEPT port, never the default",
+          ("0.0.0.0:%d" % port_l) in out and ("0.0.0.0:8790") not in out,
+          out[-300:])
     if os.geteuid() == 0:
         # The gate's container runs as root: the run OPENED the port itself.
         check("root: a live ufw is opened by the run (the stub was called)",
-              ufw_log.exists() and "allow 8790/tcp" in ufw_log.read_text(encoding="utf-8"),
+              ufw_log.exists()
+              and ("allow %d/tcp" % port_l) in ufw_log.read_text(encoding="utf-8"),
               "ufw calls: " + (ufw_log.read_text(encoding="utf-8")
                                if ufw_log.exists() else "(none)"))
     else:
         _sum = out.find("tinycmdr is installed.")
         check("a live ufw is named where the reader ends up, with the exact command",
               _sum != -1 and _sum < out.find("ufw is active")
-              and "sudo ufw allow 8790/tcp" in out[_sum:], out[-260:])
+              and ("sudo ufw allow %d/tcp" % port_l) in out[_sum:], out[-260:])
 
     # -- macOS: same keep, and the firewall allow sits in the closing summary --------
     on_mac = os.uname().sysname == "Darwin"
     mac = sb / "lan-mac"
-    stage_kept_install(mac)
+    port_m = free_port()
+    stage_kept_install(mac, port_m)
     mac_env = sandbox_home_env(sb, bindir, log, user,
                                {"TINYCMDR_PYTHON": py, "TINYCMDR_ASK": "1"})
     mac_args = ["bash", pkg / "install" / "install-tinycmdr-macos.sh", "--no-start",
@@ -1357,6 +1399,9 @@ def case_lan_reachability(sb, pkg, bindir, user, py):
     check("all-Enter keeps the kept 0.0.0.0 page bind on macOS",
           (conf.get("web") or {}).get("host") == "0.0.0.0",
           f"web.host is {(conf.get('web') or {}).get('host')!r}")
+    check("the macOS lines name the KEPT port, never the default",
+          ("0.0.0.0:%d" % port_m) in out and ("0.0.0.0:8790") not in out,
+          out[-300:])
     if on_mac:
         st = subprocess.run(["/usr/libexec/ApplicationFirewall/socketfilterfw",
                              "--getglobalstate"], capture_output=True, text=True)
@@ -1371,6 +1416,50 @@ def case_lan_reachability(sb, pkg, bindir, user, py):
             print("SKIP the macOS firewall-text half: firewall off, root, or not a Mac")
     else:
         print("SKIP the macOS firewall-text half: not a Mac")
+
+    # the closing page line carries a REAL address when this box has one - a placeholder
+    # in the middle of an install report is not a URL (reported 2026-10-10)
+    _tail = out[out.rfind("=== done"):]
+    if plan_lan_ips():
+        check("the macOS closing page line names a real address and the box's own port",
+              re.search(r"http://\d+\.\d+\.\d+\.\d+:%d" % port_m, _tail) is not None,
+              _tail[-300:])
+    else:
+        check("the macOS closing page line falls back to the placeholder with no address",
+              ("<this-host>:%d" % port_m) in _tail, _tail[-300:])
+
+    # -- the page is PROBED after the agent loads ---------------------------------
+    # Nothing ever LOOKED at the page a fresh install claims to serve: the closing line
+    # printed a URL either way (reported 2026-10-10). Two sandbox runs: a curl stub
+    # (this bindir only) that answers, and the real curl against a free port - and
+    # `sleep` is a no-op stub here, so the dark run's 15 attempts are instant.
+    okbin = sb / "lan-curl-ok"
+    shutil.copytree(bindir, okbin)
+    (okbin / "curl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (okbin / "curl").chmod(0o755)
+    mac_up = sb / "lan-mac-up"
+    stage_kept_install(mac_up, port_m)
+    got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
+               "--no-path", "--python", py, "--label", "com.tinycmdr.lanup",
+               "--install-dir", mac_up],
+              sandbox_home_env(sb, okbin, log, user, {"TINYCMDR_PYTHON": py}), pkg)
+    out = got.stdout + got.stderr
+    check("a page that answers: the install reports it, naming the running port",
+          got.returncode == 0
+          and ("answering now on http://127.0.0.1:%d" % port_m) in out,
+          out[-400:])
+
+    mac_down = sb / "lan-mac-down"
+    stage_kept_install(mac_down, port_m)
+    got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y",
+               "--no-path", "--python", py, "--label", "com.tinycmdr.landown",
+               "--install-dir", mac_down],
+              sandbox_home_env(sb, bindir, log, user, {"TINYCMDR_PYTHON": py}), pkg)
+    out = got.stdout + got.stderr
+    check("a page that does not answer: the install SAYS so and names the log",
+          got.returncode == 0
+          and ("NOT answering on http://127.0.0.1:%d" % port_m) in out
+          and "tinycmdr.log" in out, out[-500:])
     return lin
 
 
