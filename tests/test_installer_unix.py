@@ -532,8 +532,14 @@ def case_macos_install(sb, pkg, bindir, user, py):
               f"{plist} is not there")
     else:
         print("SKIP the plist half: launchd is macOS-only")
-    check("...and the summary says the agent is not loaded (--no-start)",
-          "NOT loaded (--no-start)" in got.stdout, got.stdout[-300:])
+    if on_mac:
+        check("...and the summary says the agent is not loaded (--no-start)",
+              "NOT loaded (--no-start)" in got.stdout, got.stdout[-300:])
+    else:
+        # --no-launchd exits before the summary, with its own truthful line: asserting
+        # the macOS wording here failed EVERY Linux run since the check landed.
+        check("...and a --no-launchd run says the agent is not registered",
+              "files installed, agent not registered" in got.stdout, got.stdout[-300:])
     # A --python that cannot run names the flag and the way through, instead of the old
     # bare "$PY could not run" (measured 2026-10-10).
     broken = sb / "not-a-python"
@@ -1005,11 +1011,20 @@ def case_linux_without_systemd(sb, pkg, bindir, user, py):
     check("a files-only install works without systemctl",
           got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-400:]}{got.stderr[-300:]}")
-    got2 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
-                "--no-deps", "--no-sudoers", "--install-dir", inst], env, pkg)
-    check("...while a run that needs systemd names --no-service instead",
-          got2.returncode == 1 and "--no-service" in (got2.stdout + got2.stderr),
-          f"rc={got2.returncode}; out={got2.stdout[-300:]}{got2.stderr[-300:]}")
+    got2 = None
+    if any((pathlib.Path(p) / "systemctl").exists()
+           for p in os.environ.get("PATH", "").split(os.pathsep) if p):
+        # The refusal below is the no-systemd door, and this host HAS one: the stub dir
+        # cannot hide a later systemctl (and the fabricated bus socket then sends the
+        # run into the real one), so the premise cannot be built here. Graded on hosts
+        # that really lack it - and in the docker gate (tc-linux-gate).
+        print("SKIP the --no-service refusal: this host has a real systemctl")
+    else:
+        got2 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                    "--no-deps", "--no-sudoers", "--install-dir", inst], env, pkg)
+        check("...while a run that needs systemd names --no-service instead",
+              got2.returncode == 1 and "--no-service" in (got2.stdout + got2.stderr),
+              f"rc={got2.returncode}; out={got2.stdout[-300:]}{got2.stderr[-300:]}")
     got3 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
                 "--uninstall", "--install-dir", inst], env, pkg)
     check("...and an uninstall works without systemctl",
