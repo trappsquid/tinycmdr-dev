@@ -2725,10 +2725,10 @@
     {
       "id": "page-probed-before-named",
       "title": "every door proves the page before it hands out a URL",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "52f4c37",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "`tinycmdr --web` beside a running instance refused with \"already running\" without ever looking at the page, `tinycmdr web` and doctor printed or implied a URL they had not probed, `setup` saved answers a running service would never read, and every installer finished on a page URL it had not checked while the firewall offer built its rule from the flag default instead of the port the config keeps; the doors now probe /api/health first, name the port and address the box actually serves, read a redo's kept port before printing or firewalling, and the Windows elevated firewall run reports its outcome from a log.",
       "gate": "RED on the pre-fix build: the dark-page verb and reason checks in tests/test_webui.py, the --web announce/refuse checks in tests/test_lane_surface.py, the restart offer in tests/test_model_surface.py, and 6 + 8 checks across the two installer suites run in a worktree at the pre-fix revision; green on the batch"
