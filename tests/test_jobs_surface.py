@@ -372,6 +372,12 @@ reaches a model, a chat server or the clock.
         sched.jobs["nightly"]["next"] = time.time() - 1
         got = fb.acquire_single_instance_lock()
         check("the merge is graded while the instance lock is held", got)
+        # The clock is taken BEFORE the tick: `next` is the next minute boundary after it,
+        # and comparing against a clock read AFTER the tick flips the answer in the one
+        # second a tick lands exactly on that boundary (croniter from 04:36:59.9 answers
+        # 04:37:00; the check at 04:37:00.1 then fails) - measured 2026-10-11, a red
+        # install-surface Windows job from a passing tree.
+        _tick_at = time.time()
         sched._tick()
         merged = json.loads(jobs_file.read_text(encoding="utf-8"))
     finally:
@@ -383,7 +389,7 @@ reaches a model, a chat server or the clock.
     check("a job another process added mid-tick survives that tick's save",
           "from_once" in merged, sorted(merged))
     check("...and the tick still moved the job it saved",
-          merged.get("nightly", {}).get("next", 0) > time.time(),
+          _tick_at < merged.get("nightly", {}).get("next", 0) <= _tick_at + 61,
           merged.get("nightly"))
 
     # ------------------- A-2026-10-08-153: an adopt does not eat a due occurrence ---------
@@ -404,9 +410,13 @@ reaches a model, a chat server or the clock.
     sched._reload_if_changed()
     check("an adopted jobs.json keeps a due `next` (the occurrence is not skipped)",
           sched.jobs["nightly"]["next"] <= time.time(), sched.jobs["nightly"]["next"])
+    # Same boundary rule as the tick above: the start-up skip answers the next minute
+    # boundary after ITS OWN clock, so the clock must be read before the call.
+    _load_at = time.time()
     sched._load()                                        # the start-up call
     check("...while the start-up load still skips missed runs",
-          sched.jobs["nightly"]["next"] > time.time(), sched.jobs["nightly"]["next"])
+          _load_at < sched.jobs["nightly"]["next"] <= _load_at + 61,
+          sched.jobs["nightly"]["next"])
     sched._stop.set()
 
     # ------------------- A-2026-10-08-154: no croniter, no firing --------------------------
