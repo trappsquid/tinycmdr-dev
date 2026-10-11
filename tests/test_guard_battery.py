@@ -856,6 +856,21 @@ def test_a_written_python_file_is_read_the_same_way():
     check("...and an approved run goes through",
           not out.startswith("DECLINED") and not target.exists(), out[:120])
 
+    # The same command is what the Windows shell runs, and there it died before starting:
+    # PowerShell reads a line that STARTS with a quoted string as an expression, so
+    # `"<python>" script.py` was a ParserError and the answer `exit_code=1` with nothing
+    # run (measured on the Windows gate, 2026-10-11). The harness translates that one
+    # shape with the call operator; every other line stays byte-identical.
+    _pwsh = getattr(fb, "_pwsh_run_ready", None)
+    check("a command starting with a quoted path is made runnable on Windows",
+          bool(_pwsh)
+          and _pwsh('"C:\\Program Files\\P\\python.exe" x.py')
+          == '& "C:\\Program Files\\P\\python.exe" x.py'
+          and _pwsh("python x.py") == "python x.py"
+          and _pwsh('  "C:\\a b\\c.exe" --flag') == '& "C:\\a b\\c.exe" --flag'
+          and _pwsh('"alone"') == '"alone"',
+          (bool(_pwsh) and _pwsh('"C:\\P\\python.exe" x.py'),))
+
     # the string form: `python -c` is the same door, and a whole root is the never tier
     out = fb.tool_shell({"command": '"%s" -c "import shutil; shutil.rmtree(\'/\')"' % py},
                         ctx_none)

@@ -8285,10 +8285,28 @@ def _tool_named_in_code(code):
     return ""
 
 
+_PWSH_QUOTED_START_RX = re.compile(r'^\s*"[^"]+"(?=\s+\S)')
+
+
+def _pwsh_run_ready(segment):
+    """`"C:\\Program Files\\x.exe" arg` -> `& "C:\\Program Files\\x.exe" arg`.
+
+    PowerShell parses a line that STARTS with a quoted string as an expression: the path
+    is a string, the token after it an operator (`/var/x` divides, `C:\\x` will not parse
+    at all), and the command never runs - the answer was `exit_code=1` with a ParserError
+    (measured on the Windows gate, 2026-10-11: the approved `"<python>" script.py` run of
+    the guard battery). `& ` is PowerShell's own way to say "run this string as a
+    command", applied only to that shape so every other line is byte-identical.
+    """
+    if _PWSH_QUOTED_START_RX.match(str(segment or "")):
+        return "& " + str(segment).lstrip()
+    return segment
+
+
 def _pwsh_chain_and(command):
     """Translate unquoted && into PowerShell 5.1 compatible '; if ($?) { ... }'."""
     if "&&" not in command:
-        return command
+        return _pwsh_run_ready(command)
     parts, in_quote = [], None
     i, n, last_i = 0, len(command), 0
     while i < n:
@@ -8312,11 +8330,11 @@ def _pwsh_chain_and(command):
                 i += 1
     parts.append(command[last_i:])
     if len(parts) <= 1:
-        return command
+        return _pwsh_run_ready(command)
     segments = [p.strip() for p in parts]
-    res = segments[0]
+    res = _pwsh_run_ready(segments[0])
     for seg in segments[1:]:
-        res += f"; if ($?) {{ {seg} }}"
+        res += f"; if ($?) {{ {_pwsh_run_ready(seg)} }}"
     return res
 
 
