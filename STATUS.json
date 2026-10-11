@@ -2798,6 +2798,17 @@
       },
       "detail": "With a Mattermost token and a Telegram token both configured, one process serves both lanes - and both wrote the same globals at startup, so the scheduler dispatcher and the reporter were whichever lane started last: a job made in one lane reported and asked through the other service (a Telegram chat id posted through the Mattermost API, and the reverse), and the restart notice could be consumed by the wrong lane and posted to a channel it never had. Each lane registers its own dispatcher, a job records the lane it was made in, the restart note names its lane and only that lane posts it, and the Telegram lane gained the two readers and the draft contract a scheduled job needs - three latent crashes, none reachable before because no job had ever run on a Telegram lane.",
       "gate": "RED on the pre-fix build: 10 of the 11 new checks in tests/test_telegram.py fail against the pre-fix build (the pair block), including the wrong-lane report and the missing ask readers; green on the batch (164 checks)"
+    },
+    {
+      "id": "files-only-install-needs-no-systemd",
+      "title": "a files-only Linux install works without a systemd session",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "725b99b",
+        "expect": "untagged"
+      },
+      "detail": "The user-mode gate demanded a session bus before it ever read `--no-service`, so a container, WSL without systemd, or a CI runner could not install even files-only - and the refusal named only `--mode system` as a way out. The gate steps aside when no service is being written, and the refusal now names `--mode user --no-service` too. Found driving the published one-liner end to end in an ubuntu container: install, the `tinycmdr` verb on PATH, status/health/doctor, the page answering on its port.",
+      "gate": "RED on the pre-fix build: the no-bus `--no-service` check in tests/test_installer_unix.py exits 1 at the gate (1 check); green on the batch, and re-run end-to-end in the container"
     }
   ]
 }
