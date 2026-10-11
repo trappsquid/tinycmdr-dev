@@ -205,6 +205,28 @@ def main():
               "a later update finds the token and does not mint another", again)
         check("pip install -r" not in out2,
               "...and the same requirements stay quiet on a re-run", out2[-300:])
+
+        # A-2026-10-11-17: an installed VERSION that cannot be read used to skip the
+        # never-downgrade guard SILENTLY, on the one tree the updater exists to repair.
+        # It still updates (0.0.0 is older than any release) and it now SAYS the guard had
+        # nothing to compare.
+        inst2 = work / "install2"
+        inst2.mkdir()
+        (inst2 / "tinycmdr.py").write_text("print('a build whose VERSION line is gone')\n",
+                                           encoding="utf-8")
+        (inst2 / "config.json").write_text("{}", encoding="utf-8")
+        proc3 = subprocess.run(["sh", str(SCRIPT), str(inst2)], cwd=str(work), env=env,
+                               capture_output=True, text=True, timeout=300,
+                               stdin=subprocess.DEVNULL)
+        out3 = proc3.stdout + proc3.stderr
+        check(proc3.returncode == 0,
+              "a damaged tree still updates (that IS the repair path)",
+              (proc3.returncode, out3[-300:]))
+        check("cannot be read" in out3 and "0.0.0" in out3,
+              "an unreadable VERSION says the guard has nothing to compare",
+              out3[-400:])
+        check('VERSION = "9.9.9"' in (inst2 / "tinycmdr.py").read_text(encoding="utf-8"),
+              "...and the damaged tree now runs the release build")
     finally:
         if srv is not None:
             srv.shutdown()

@@ -785,6 +785,12 @@ def main():
           and 0 <= update_ps1.find("SecurityProtocol") < update_ps1.find("Invoke-WebRequest"))
     check("update.ps1 honours TINYCMDR_UPDATE_URL like update.sh",
           "$env:TINYCMDR_UPDATE_URL" in update_ps1)
+    # A-2026-10-11-17's .ps1 twin: an installed VERSION that cannot be read must not
+    # skip the never-downgrade guard SILENTLY (update.sh's twin is graded by running it).
+    check("update.ps1 compares a damaged VERSION as 0.0.0 and says so",
+          '$Cur -eq "?"' in update_ps1 and '$Cmp = "0.0.0"' in update_ps1
+          and "cannot be read" in update_ps1
+          and re.search(r'Test-Newer \$Cmp \$New', update_ps1) is not None)
     check("the restart helper matches the install at a path boundary",
           "TrimEnd('\\') + '\\'" in restart_ps1
           and re.search(r"IndexOf\(\$install,\s*\n", restart_ps1) is None,

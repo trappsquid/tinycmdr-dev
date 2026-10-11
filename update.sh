@@ -102,7 +102,18 @@ _newer() {  # _newer <a> <b> -> 0 when a is a NEWER x.y.z than b
         exit 1
     }'
 }
-if [ "$CUR" != "?" ] && [ "$NEW" != "?" ] && _newer "$CUR" "$NEW"; then
+# Never DOWNGRADE - unless the installed VERSION cannot be read, in which case the guard
+# used to skip ITSELF, silently, on the one tree it exists to repair (A-2026-10-11-17).
+# "?" compares as 0.0.0: any parseable release is an upgrade from a build that cannot
+# state its version, and the substitution is SAID, so a re-pointed `latest` cannot win a
+# comparison nobody made.
+CMP="$CUR"
+if [ "$CUR" = "?" ]; then
+    echo "update: the installed VERSION cannot be read (a damaged build) - continuing as if" >&2
+    echo "        it were 0.0.0; the downgrade check has nothing else to compare." >&2
+    CMP="0.0.0"
+fi
+if [ "$NEW" != "?" ] && _newer "$CMP" "$NEW"; then
     echo "update: the published build is $NEW, OLDER than the $CUR installed here - refusing" >&2
     echo "        to replace a newer build with an older one. Nothing was changed." >&2
     exit 1

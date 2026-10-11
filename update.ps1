@@ -74,7 +74,16 @@ try {
         }
         return $false
     }
-    if ($Cur -ne "?" -and $New -ne "?" -and (Test-Newer $Cur $New)) {
+    # "?" compares as 0.0.0: an installed VERSION that cannot be read used to skip this
+    # guard silently, on the one tree it exists to repair (A-2026-10-11-17) - any
+    # parseable release is an upgrade from a build that cannot state its version, and the
+    # substitution is said, so a re-pointed `latest` cannot win a comparison nobody made.
+    $Cmp = $Cur
+    if ($Cur -eq "?") {
+        Write-Host "update: the installed VERSION cannot be read (a damaged build) - continuing as if it were 0.0.0; the downgrade check has nothing else to compare."
+        $Cmp = "0.0.0"
+    }
+    if ($New -ne "?" -and (Test-Newer $Cmp $New)) {
         Write-Error "update: the published build is $New, OLDER than the $Cur installed here - refusing to replace a newer build with an older one. Nothing was changed."; exit 1
     }
 
