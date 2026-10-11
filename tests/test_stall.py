@@ -2839,6 +2839,42 @@ def test_stop_landing_with_the_reply_prevents_the_tool_batch_from_running():
     check("stop: the model was not asked again", calls["n"] == 1, calls)
 
 
+def test_whitespace_twins_in_one_batch_are_suppressed():
+    """The in-batch duplicate suppression compared RAW argument strings, so two copies of
+    one mutating call that differ at all in JSON whitespace both executed - the very class
+    _call_sig was minted to remove (A-2026-10-10-94)."""
+    probe = TMP / "dupe_batch_probe.txt"
+    if probe.exists():
+        probe.unlink()
+    _redirect_state()
+    fb.AGENT.histories.clear()
+    saved_chat = fb.AGENT._chat
+    cmd = shell_append(probe, "ran")
+    a1 = json.dumps({"command": cmd})
+    a2 = a1.replace(": ", " : ")          # valid JSON, different whitespace only
+    calls = {"n": 0}
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None, max_tokens=None,
+                  cancel_event=None, on_delta=None, session_key=None, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return {"role": "assistant", "content": "fine."}
+        return {"role": "assistant", "content": "running it",
+                "tool_calls": [
+                    {"id": "c1", "function": {"name": "shell", "arguments": a1}},
+                    {"id": "c2", "function": {"name": "shell", "arguments": a2}}]}
+
+    fb.AGENT._chat = fake_chat
+    try:
+        fb.AGENT.run("dupe-batch", "run it twice", channel_id="chan-dupe-batch")
+    finally:
+        fb.AGENT._chat = saved_chat
+    ran = len(probe.read_text(encoding="utf-8", errors="replace").splitlines()) \
+        if probe.exists() else 0
+    check("batch dupe: the whitespace-twin of a call is suppressed (one execution)",
+          ran == 1, ran)
+
+
 def test_stop_guard_sits_inside_the_batch_worker():
     """Source-level on purpose. A model's tool calls are dispatched in parallel, so no run-level
     test can order "the stop arrives between call 1 and call 2" deterministically; what can be

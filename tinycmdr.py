@@ -22360,10 +22360,15 @@ class Agent:
                         # read_file x2, read_file x2, execute_code x2 with
                         # byte-identical args digests and every copy executed),
                         # which doubles the side effect of anything mutating.
+                        # The comparison is the canonical signature, the same key
+                        # every other repeat guard reads: on RAW strings, two copies
+                        # that differ only in JSON whitespace both ran
+                        # (A-2026-10-10-94).
+                        _sig_here = _call_sig(name, raw_args)
                         for _j in range(i):
                             _fj = tool_calls[_j].get("function", {})
-                            if (_fj.get("name") == name
-                                    and _fj.get("arguments", "") == raw_args):
+                            if _call_sig(_fj.get("name", ""),
+                                         _fj.get("arguments", "")) == _sig_here:
                                 try:
                                     parsed = json.loads(raw_args or "{}")
                                 except Exception:
