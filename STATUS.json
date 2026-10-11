@@ -2699,6 +2699,17 @@
       },
       "detail": "The rail only listed cohorts hand-edited into agent.a2a_remotes, so connecting a box meant writing config.json and .env by hand. The rail's ADD COHORT opens a dialog (name, URL, page token) and POSTs add-remote: the name, URL and token are validated, the card is probed before anything is written, the token lands in .env under the swept TINYCMDR_COHORT_<NAME>_TOKEN name with the running hub resolving it with no restart, and the new cohort's channel opens.",
       "gate": "RED on the pre-fix build: tests/test_webui.py's new block fails 10/10 (every add-remote op answered \"unknown op\") and tests/test_webui_page.py's new scenarios fail 11/11 (no invitation row, no dialog); green on the batch"
+    },
+    {
+      "id": "the-lan-answer-completes",
+      "title": "the installers complete the LAN answer, and stop un-doing it",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "46a71e6",
+        "expect": "untagged"
+      },
+      "detail": "Choosing \"reachable from other machines\" only printed a firewall command: nothing was ever opened (the Windows installer runs unelevated by design, and a launchd agent cannot answer macOS's allow prompt), and on Windows the question was not gated on a terminal at all - a scripted re-run read EOF, its \"n\" default answered for the user, and a kept 0.0.0.0 bind was rewritten to loopback. The installers now open the port when the run has the rights (root, an elevated shell), offer the one UAC or sudo prompt when it does not, and carry the exact command into \"still to do\" otherwise; the question runs only at a terminal and defaults to the bind the config already has.",
+      "gate": "RED on the pre-fix build: 10 checks in tests/test_installer_unix.py (the all-Enter re-run reset web.host to 127.0.0.1 on both platforms) and 6 in tests/test_installer_windows.py; green on the batch. The elevated branches (root, UAC) are pinned by shape - a suite cannot become root - and the ps1 was parsed on a real Windows host (PowerShell 5.1, 0 errors), its exact New-NetFirewallRule command dry-run against the real module (-WhatIf: all parameters valid, no rule created)."
     }
   ]
 }
