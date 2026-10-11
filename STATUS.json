@@ -2677,6 +2677,17 @@
       },
       "detail": "The delivery guard counted completion-sounding phrases in replies that still queued tool calls: at three announcements it demanded the report and blocked auto-continue, at five it forced the wrap - and on the live box the demand landed at step 51 of an audit that kept working for hours, because a phrase list cannot tell narration from a stall. The count is one advisory reminder now (0 disables it; the old `or 3` made 0 mean 3); what ends a genuinely stuck run is the new idle-turn counter, which counts turns whose every tool call repeated a result already known or was refused, and every harness stop names its reason and says how to resume.",
       "gate": "RED on the pre-fix build: the reminder-only run was wrapped by its words, an explicit 0 still reminded, and an idle run reached its scripted end; green on the batch"
+    },
+    {
+      "id": "the-turn-cap-is-a-checkpoint",
+      "title": "the turn cap is a per-segment checkpoint",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "b1357e3",
+        "expect": "untagged"
+      },
+      "detail": "llm.max_turns bounded the whole run - the one budget a continuation could not refill - so a one-call-per-turn model hit it while most of the step budget sat unused, and the exit was the bare \"Hit the turn limit\" line with no report. It rides the same ladder as max_steps and max_minutes now: a checkpoint continues the job in a fresh segment, the segment count bounds the total, and when the segments are spent the wrap ladder asks for the report and says how to resume; 0 now means no turn cap (it meant zero turns before). The runway line, the doctor budget lines and both config examples state the scope.",
+      "gate": "RED on the pre-fix build: a two-turn run ended at the bare turn-limit line after two model calls, with no continuation and no report; green on the batch"
     }
   ]
 }
