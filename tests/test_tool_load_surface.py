@@ -189,6 +189,29 @@ in a temp tree, no network and no Mattermost connection.
         except ValueError as e:
             check("manifest: no command is refused", "command" in str(e), e)
 
+        # The timeout blocks the call for its whole length, and a manufactured manifest is
+        # exactly the shape that can carry a day (A-2026-10-11-04): refused at load, with
+        # the bound named.
+        base = {"description": "x", "schema": {"type": "object"}, "command": ["true"]}
+        (d / "slow.tool.json").write_text(
+            json.dumps(dict(base, name="slow", timeout=86400)), encoding="utf-8")
+        try:
+            fb.load_tool_defs(d / "slow.tool.json")
+            check("manifest: a day-long timeout is refused at load", False, "loaded anyway")
+        except ValueError as e:
+            check("manifest: a day-long timeout is refused at load", "600" in str(e), e)
+        (d / "neg.tool.json").write_text(
+            json.dumps(dict(base, name="neg", timeout=-5)), encoding="utf-8")
+        try:
+            fb.load_tool_defs(d / "neg.tool.json")
+            check("manifest: a negative timeout is refused at load", False, "loaded anyway")
+        except ValueError as e:
+            check("manifest: a negative timeout is refused at load", "1-600" in str(e), e)
+        (d / "ok.tool.json").write_text(
+            json.dumps(dict(base, name="ok", timeout=45)), encoding="utf-8")
+        check("manifest: a timeout inside the bound loads",
+              len(fb.load_tool_defs(d / "ok.tool.json")) == 1)
+
 
     def test_a_file_with_no_tool_is_refused():
         d = tool_files_dir("none")

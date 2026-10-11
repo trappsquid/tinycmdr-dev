@@ -16047,8 +16047,20 @@ def _load_manifest_tool(path):
     elif not (isinstance(command, list)
               and all(isinstance(a, str) for a in command)):
         raise ValueError("command must be a string or a list of strings")
+    # The timeout blocks the CALL for its whole length, and a manifest is the shape that
+    # "arrives from outside the bot (a download, a copy, a manufactured manifest)" - a
+    # 24-hour value would park the tool call for a day, and an abandoned run's in-flight
+    # call is the window that already cost a mutation (A-2026-10-11-04). 600 s is past
+    # every door's need; the refusal names the file's bound so the fix is one edit.
+    try:
+        timeout = float(spec.get("timeout") or 120)
+    except (TypeError, ValueError):
+        raise ValueError("timeout must be a number of seconds")
+    if not 1.0 <= timeout <= 600.0:
+        raise ValueError("timeout %gs is outside the 1-600s a manifest tool may ask "
+                         "for (the call blocks for it)" % timeout)
     entry = {"command": list(command),
-             "timeout": float(spec.get("timeout") or 120),
+             "timeout": timeout,
              "cwd": str(spec.get("cwd") or path.parent)}
     # An absolute-tier command in a dropped-in manifest is refused at LOAD, not left to
     # fail at call time: the file arrives from outside the bot (a download, a copy, a
