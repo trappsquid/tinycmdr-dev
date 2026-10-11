@@ -695,9 +695,14 @@ def main():
     check("a paste-capable masked reader exists",
           "function Read-Secret {" in install and "[Console]::ReadKey($true)" in install,
           "Read-Secret missing")
-    check("Ask-Text's secret branch no longer calls Read-Host -AsSecureString",
-          "Read-Host $shown -AsSecureString" not in install,
-          "a prompt still masks itself with Read-Host -AsSecureString")
+    _sec_code = [l for l in install.splitlines() if not l.lstrip().startswith("#")]
+    check("no secret read uses Read-Host -AsSecureString (blank in some hosts, "
+          "and it drops a pasted value)",
+          all("-AsSecureString" not in l for l in _sec_code),
+          next((l.strip() for l in _sec_code if "-AsSecureString" in l), ""))
+    check("the redirected branch reads the line off stdin, never through the console",
+          "$line = [Console]::In.ReadLine()" in install,
+          "a piped secret has no value-preserving read")
     check("the Mattermost token field uses it too (the field that would not paste)",
           "Read-Secret \"Mattermost bot token" in install,
           "the Mattermost token prompt is still a raw Read-Host")
@@ -806,6 +811,30 @@ def main():
                                capture_output=True, text=True)
             check("%s parses" % rel, r.returncode == 0,
                   (r.stdout + r.stderr).strip()[:200])
+
+        # ...and the masked reader KEEPS a value fed through a pipe. The redirected
+        # branch used Read-Host -AsSecureString, which under -NonInteractive fails and
+        # falls back to the ReadKey branch's value (measured on pwsh 2026-10-11) - a
+        # fleet push could install with no token at all. It reads the line off stdin
+        # now; the check feeds one and grades the round trip.
+        _m = re.search(r"(?s)function Read-Secret \{.*?\n\}", install)
+        _fn = _m.group(0) if _m else ""
+        import tempfile
+        _probe_dir = tempfile.mkdtemp(prefix="fbtest-winsec-")
+        try:
+            _probe = os.path.join(_probe_dir, "readsecret.ps1")
+            with open(_probe, "w", encoding="utf-8") as fh:
+                fh.write(_fn + "\n$v = Read-Secret 'secret: '\n"
+                         "Write-Output ('VAL=' + [Convert]::ToHexString("
+                         "[Text.Encoding]::UTF8.GetBytes($v)))\n")
+            r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-File", _probe],
+                               input="tok123\n", capture_output=True, text=True,
+                               timeout=60)
+            check("the masked reader keeps a value fed through a pipe",
+                  "VAL=746F6B313233" in r.stdout and "tok123" not in r.stdout,
+                  (r.stdout + r.stderr).strip()[:300])
+        finally:
+            shutil.rmtree(_probe_dir, ignore_errors=True)
 
     print("\n== the copy phase carries the page's assets (fresh-install regression) ==")
     # The installer used to copy a hand-written list of names; the page redesign added

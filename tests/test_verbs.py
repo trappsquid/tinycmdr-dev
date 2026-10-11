@@ -15,7 +15,9 @@ import json
 import logging
 import os
 import re
+import select
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -976,6 +978,7 @@ def _body():
             return {"ok": False, "ids": [], "status": 401, "error": "HTTP 401"}
 
         fb.probe_endpoint = _401_probe
+        _saved_secret_401 = fb._ask_secret
         fb._ask_secret = lambda prompt: "sk-fixed"
         os.environ.pop("TINYCMDR_LLM_API_KEY", None)
         fb.CONFIG["llm"]["api_key"] = "none"
@@ -1000,6 +1003,9 @@ def _body():
         check("...and a key that is still refused writes nothing",
               rc == 1 and written["llm"]["base_url"] == "https://api.fixed.example/v1",
               (rc, written["llm"]["base_url"], err[:200]))
+        # The stub above is for THIS door only: `token set` reads through _ask_secret
+        # too now, and a leaked lambda answered every later secret prompt with it.
+        fb._ask_secret = _saved_secret_401
         os.environ.pop("TINYCMDR_LLM_API_KEY", None)
         fb.CONFIG["llm"]["api_key"] = ""
 
@@ -1100,7 +1106,7 @@ def _body():
         _wiz_written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
         _wiz_env = (workdir / ".env").read_text(encoding="utf-8")
         check("the wizard runs to the end", rc == 0, (rc, err[:200]))
-        check("the Mattermost token is asked for through the no-echo reader",
+        check("the Mattermost token is asked for through the masked reader",
               any("Mattermost bot token" in p for p in _seen_prompts), _seen_prompts)
         check("...and the Telegram token, and the page token",
               any("Telegram bot token" in p for p in _seen_prompts)
@@ -1136,8 +1142,81 @@ def _body():
             sys.stdin = _saved_stdin
             fb._ask_endpoint_kind, fb._choose_one_model = _saved_kind, _saved_choose
             fb._ask_secret = _real_secret
-        check("the model key is read through the no-echo reader as well",
+        check("the model key is read through the masked reader as well",
               any("API key" in p for p in _seen_prompts), _seen_prompts)
+
+        # ---- the masked field: what the operator SEES while typing -----------
+        # getpass() showed NOTHING as a value was typed or pasted - a dead field on
+        # a console (measured 2026-10-11: the wizard's token question and a fresh
+        # Windows install's bot-token prompt both read as one). The editing rules
+        # live in _masked_line, fed one unit of input at a time, so they are graded
+        # with a canned stream on every platform; the terminal half runs on a pty.
+        _masked = getattr(fb, "_masked_line", None)
+        check("the masked field engine exists (one * per character)", callable(_masked))
+        if callable(_masked):
+            _fed = iter(["a", "b", "c", "\x7f", "d", "\r"])
+            _shown = []
+            _got = _masked(lambda: next(_fed, ""), _shown.append, "Secret: ")
+            check("...every character shows one star, backspace rubs one out",
+                  _got == "abd"
+                  and _shown == ["Secret: ", "*", "*", "*", "\b \b", "*", "\n"],
+                  (_got, _shown))
+            _fed = iter(["a", "\x00", "K", "d", "\r"])   # a function key's two units
+            _got = _masked(lambda: next(_fed, ""), lambda _s: None, "S: ")
+            check("...a function-key pair is swallowed, not taken as input",
+                  _got == "ad", _got)
+            _fed = iter(["a", "\x04", "\r"])             # any other control byte
+            _got = _masked(lambda: next(_fed, ""), lambda _s: None, "S: ")
+            check("...a stray control byte never lands in the value", _got == "a", _got)
+            _fed = iter([])
+            _shown = []
+            _got = _masked(lambda: next(_fed, ""), _shown.append, "S: ")
+            check("...EOF ends the field with what was typed",
+                  _got == "" and _shown == ["S: ", "\n"], _shown)
+
+        if os.name == "posix":
+            import pty as _pty
+            _code = ("import sys\n"
+                     "sys.path.insert(0, %r)\n"
+                     "import tinycmdr as _fb\n"
+                     "v = _fb._ask_secret('Bot token (input hidden): ')\n"
+                     "print('VAL=' + v.encode('utf-8').hex(), flush=True)\n"
+                     % str(workdir))
+            _kpid, _kfd = _pty.fork()
+            if _kpid == 0:
+                os.chdir(str(workdir))
+                os.execvp(sys.executable, [sys.executable, "-c", _code])
+            _kout = b""
+            _sent = False
+            _deadline = time.time() + 30
+            while time.time() < _deadline and b"VAL=" not in _kout:
+                _r, _, _ = select.select([_kfd], [], [], 0.2)
+                if _r:
+                    try:
+                        _chunk = os.read(_kfd, 4096)
+                    except OSError:
+                        break
+                    if not _chunk:
+                        break
+                    _kout += _chunk
+                if not _sent and b"Bot token (input hidden): " in _kout:
+                    os.write(_kfd, b"abc\x7fd\r")
+                    _sent = True
+            try:
+                os.kill(_kpid, signal.SIGKILL)     # already exited on the happy path
+            except ProcessLookupError:
+                pass
+            os.waitpid(_kpid, 0)
+            _ktext = _kout.decode("utf-8", "replace")
+            check("on a real terminal the value is masked as it is typed",
+                  _sent and _ktext.count("*") == 4 and "\x08 \x08" in _ktext
+                  and "VAL=616264" in _ktext
+                  and "abc" not in _ktext and "abd" not in _ktext,
+                  repr(_ktext[-200:]))
+        else:
+            print("SKIP the pty half: this runner has no POSIX pty to put in cbreak "
+                  "(a Windows console is driven by msvcrt); the editing rules above "
+                  "are the half that runs everywhere")
 
         # ---- model add / remove: an endpoint has a route of its own -----------
         # (operator, 2026-09-22: "your solution to wire in another endpoint is to rerun

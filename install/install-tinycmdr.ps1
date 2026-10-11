@@ -129,9 +129,14 @@ function Read-Secret {
     # sees a paste as a burst of keypresses, so it is masked exactly like typing.
     param([string] $Prompt)
     if ([Console]::IsInputRedirected) {
-        $sec = Read-Host $Prompt -AsSecureString
-        return [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                   [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+        # A pipe or a script: nothing to mask, and the value must arrive as fed.
+        # Read-Host -AsSecureString read blank in some hosts and DROPPED a piped value
+        # in others - the failure this reader was minted for - so the line is read off
+        # stdin directly (measured 2026-10-11: Console.In and the Read-Host questions
+        # around it share one buffer, so a fed line is never lost or stolen).
+        $line = [Console]::In.ReadLine()
+        if ($null -eq $line) { return "" }
+        return $line
     }
     Write-Host -NoNewline $Prompt
     $chars = New-Object System.Collections.Generic.List[char]

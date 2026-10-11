@@ -42179,11 +42179,83 @@ def set_primary_endpoint(url, force=False, key=None, clear_api_key=False):
     return 0, list(ids or []), lines
 
 
-def _ask_secret(prompt):
-    """Read a secret at the terminal without echoing it; a plain line on a pipe.
+def _masked_line(read_one, write, prompt):
+    """One * per character typed or pasted; backspace rubs one out; Enter ends it.
 
-    Kept in one place so the fix doors share it and a test can replace the ASKING
-    without replacing the flow."""
+    `read_one` yields ONE unit of input (a byte on POSIX, a character on Windows) or
+    "" at EOF; `write` emits a fragment. The platform readers below feed it, so the
+    edit rules live in one place and a canned character stream can grade them on every
+    platform - a Windows console cannot be driven from a suite."""
+    write(prompt)
+    value = []
+    while True:
+        ch = read_one()
+        if ch == "" or ch in ("\r", "\n"):
+            break
+        if ch in ("\x7f", "\x08"):                 # DEL or BS: rub one star out
+            if value:
+                value.pop()
+                write("\b \b")
+            continue
+        if ch == "\x03":                           # Ctrl-C, where a console sends it
+            raise KeyboardInterrupt
+        if ch in ("\x00", "\xe0"):                 # a function/arrow key: both halves
+            read_one()
+            continue
+        if ch < " ":                               # any other control byte is noise
+            continue
+        value.append(ch)
+        write("*")
+    write("\n")
+    return "".join(value)
+
+
+def _secret_write(fragment):
+    """One fragment of a masked field: the prompt, a star, or the rub-out."""
+    sys.stdout.write(fragment)
+    sys.stdout.flush()
+
+
+def _read_secret_tty(prompt):
+    """POSIX: the terminal in cbreak (no echo, one byte at a time) + the engine."""
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    before = termios.tcgetattr(fd)
+    tty.setcbreak(fd)
+    try:
+        raw = _masked_line(lambda: os.read(fd, 1).decode("latin-1"),
+                           _secret_write, prompt)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, before)
+    return raw.encode("latin-1", "replace").decode("utf-8", "replace")
+
+
+def _read_secret_win(prompt):
+    """Windows: the installer's own reader shape - msvcrt.getwch feeds the engine."""
+    import msvcrt
+    return _masked_line(msvcrt.getwch, _secret_write, prompt)
+
+
+def _ask_secret(prompt):
+    """Read a secret at the terminal, one * per character for typing or a paste.
+
+    Kept in one place so every secret door shares it - the setup wizard, `token set`,
+    the search and model wizards - and a test can replace the ASKING without replacing
+    the flow. getpass() showed NOTHING as the value was typed or pasted - a blind field
+    on a console (measured 2026-10-11, on the wizard's Mattermost-token question and on
+    a fresh Windows install) - so the characters go through the masked engine above,
+    the shape the installers already used."""
+    if _secret_stdin_is_tty():
+        try:
+            value = (_read_secret_win(prompt) if os.name == "nt"
+                     else _read_secret_tty(prompt))
+        except Exception:                                        # noqa: BLE001
+            # No terminal to control (a faked stdin, a host without termios/msvcrt):
+            # getpass below still reads the value - blind, never worse than before.
+            pass
+        else:
+            return value.strip()
     import getpass
     try:
         if sys.stdin.isatty():
@@ -42191,6 +42263,15 @@ def _ask_secret(prompt):
     except Exception:                                            # noqa: BLE001
         pass
     return (sys.stdin.readline() or "").strip()
+
+
+def _secret_stdin_is_tty():
+    """True only for a REAL terminal: isatty() alone accepts fakes and the NUL device,
+    and the masked reader needs a fileno it can put in cbreak."""
+    try:
+        return sys.stdin.isatty() and os.isatty(sys.stdin.fileno())
+    except Exception:                                            # noqa: BLE001
+        return False
 
 
 def _verb_model_endpoint(args):
@@ -42742,18 +42823,10 @@ def _verb_search_add_interactive():
         if not url:
             print("   no url - nothing was added", file=sys.stderr)
             break
-        # Hidden on a real console (getpass); a fake/redirected stdin falls back to a
-        # plain read, so a suite can drive it. The --key-env door is named for a key
-        # that should never be typed anywhere.
-        try:
-            _real_tty = sys.stdin.isatty() and os.isatty(sys.stdin.fileno())
-        except Exception:                                        # noqa: BLE001
-            _real_tty = False
-        if _real_tty:
-            import getpass
-            key = getpass.getpass("   API key (not echoed): ").strip()
-        else:
-            key = input("   API key (Enter = an endpoint that answers anonymously): ").strip()
+        # Masked on a real console; a fake/redirected stdin falls back to a plain read,
+        # so a suite can drive it. The --key-env door is named for a key that should
+        # never be typed anywhere.
+        key = _ask_secret("   API key (Enter = an endpoint that answers anonymously): ")
         label = input("   label [%s]: "
                       % (url.split("//", 1)[-1].split("/")[0] or "generic")).strip()
         entry, err = _search_entry_build("", url, label, "", key)
@@ -43472,12 +43545,8 @@ def _verb_token(rest):
             print("a .env key name, please: capitals, digits, underscore",
                   file=sys.stderr)
             return 2
-        import getpass
         try:
-            if sys.stdin.isatty():
-                value = getpass.getpass("value for %s (not echoed): " % name)
-            else:
-                value = (sys.stdin.readline() or "").strip()
+            value = _ask_secret("value for %s (input hidden): " % name)
         except Exception as e:
             print("could not read the value: %s" % e, file=sys.stderr)
             return 1
