@@ -622,6 +622,38 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
             os.environ["STUB_MODE"] = "exit"
             os.environ["STUB_EXIT"] = "7"
             check(d.main(["--once"]) == 7, "--once returns one lifetime's exit code")
+
+            # ---- the helper's OWN logs are bounded like the bot's -------------------
+            # The supervisor outlives every bot crash, so logs/supervisor.log and the
+            # child's captured stdout grew without bound while the bot's own log rotates
+            # (A-2026-10-10-98). Size-based rotation, one predecessor, the same 5 MB cap.
+            d = stage(work / "cap")
+            cap = getattr(d, "LOG_CAP_BYTES", 5 * 1024 * 1024)
+            try:
+                d.LOG_CAP_BYTES = 64
+                d.LOG_FILE.write_text("old\n" * 40, encoding="utf-8")
+                d.log("the next line")
+                oh = d.LOG_FILE.with_name(d.LOG_FILE.name + ".1")
+                check(oh.exists() and "old" in oh.read_text(encoding="utf-8")
+                      and "old" not in d.LOG_FILE.read_text(encoding="utf-8")
+                      and "the next line" in d.LOG_FILE.read_text(encoding="utf-8"),
+                      "supervisor.log rotates to one predecessor past the cap (%s)"
+                      % sorted(p.name for p in d.LOG_FILE.parent.iterdir()))
+                d.BOT_STDOUT.write_text("noise\n" * 40, encoding="utf-8")
+                saved_popen = d.subprocess.Popen
+                d.subprocess.Popen = lambda *a, **k: type("P", (), {"pid": 4242})()
+                try:
+                    _proc, fh = d.start_bot()
+                    fh.close()
+                finally:
+                    d.subprocess.Popen = saved_popen
+                oh2 = d.BOT_STDOUT.with_name(d.BOT_STDOUT.name + ".1")
+                check(oh2.exists() and "noise" not in d.BOT_STDOUT.read_text(encoding="utf-8")
+                      and "supervised start" in d.BOT_STDOUT.read_text(encoding="utf-8"),
+                      "...and the child's stdout capture rotates on the next start (%s)"
+                      % sorted(p.name for p in d.BOT_STDOUT.parent.iterdir()))
+            finally:
+                d.LOG_CAP_BYTES = cap
         finally:
             os.environ.pop("STUB_MODE", None)
             os.environ.pop("STUB_EXIT", None)

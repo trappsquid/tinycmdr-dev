@@ -54,7 +54,24 @@ SELF_RESTARTS_BEFORE_STOP = 5   # unrequested 75s in the window below: stop the 
 SELF_RESTART_WINDOW_S = 30 * 60  # the bound on those: 5 self-restarts per 30 min
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# The bot's own log rotates at 5 MB with three backups; this file has no handler of its
+# own, so its logs are bounded the simple way - size-based rotation with ONE predecessor
+# (`supervisor.log` -> `.1`, the old `.1` replaced). The supervisor is the process that
+# outlives every bot crash, so without a bound it is the one that grows for ever
+# (A-2026-10-10-98; measured shape: the bot's own rotated file was 5.2 MB while these two
+# had no bound at all).
+LOG_CAP_BYTES = 5 * 1024 * 1024
+
 CHILD_ARGS = []
+
+
+def _rotate_if_large(path):
+    """Size-based rotation with one predecessor. Never raises."""
+    try:
+        if path.exists() and path.stat().st_size > LOG_CAP_BYTES:
+            path.replace(path.with_name(path.name + ".1"))
+    except OSError:
+        pass
 
 
 def log(msg):
@@ -62,6 +79,7 @@ def log(msg):
     line = "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
     try:
         LOGS.mkdir(exist_ok=True)
+        _rotate_if_large(LOG_FILE)
         with LOG_FILE.open("a", encoding="utf-8", errors="replace") as fh:
             fh.write(line)
     except OSError:
@@ -100,6 +118,9 @@ def start_bot():
     # Tells the bot that exiting is a handover, so /restart does not spawn a second
     # copy that would race us for the instance lock.
     env["TINYCMDR_SUPERVISED"] = "1"
+    # The previous lifetime's handle is closed (run_once's finally), so the rename is
+    # free; a capture that outgrew the cap starts fresh with one predecessor.
+    _rotate_if_large(BOT_STDOUT)
     fh = open(BOT_STDOUT, "a", encoding="utf-8", errors="replace")
     fh.write("\n===== supervised start {} =====\n".format(
         time.strftime("%Y-%m-%d %H:%M:%S")))
