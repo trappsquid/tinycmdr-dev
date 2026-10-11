@@ -20,9 +20,11 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -2257,19 +2259,62 @@ def _body():
             gblob = gone.stdout + gone.stderr
             check("H1: `%s` exits 2" % " ".join(argv), gone.returncode == 2, gone.returncode)
             check("H1: `%s` says %r" % (" ".join(argv), want), want in gblob, gblob[-200:])
-        wv = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "web"],
-                            cwd=str(stage), capture_output=True, text=True,
-                            timeout=120, stdin=subprocess.DEVNULL,
-                            env=dict(os.environ, TINYCMDR_PLAIN="1", TINYCMDR_NO_BROWSER="1"))
-        wblob = wv.stdout + wv.stderr
-        check("H1: `web` exits 0", wv.returncode == 0, (wv.returncode, wblob[-200:]))
-        check("H1: `web` mints the token the page needs",
-              "minted TINYCMDR_WEB_TOKEN" in wblob, wblob[-200:])
-        _tok = [ln.split("=", 1)[1] for ln in
-                (stage / ".env").read_text(encoding="utf-8").splitlines()
-                if ln.startswith("TINYCMDR_WEB_TOKEN=")]
-        check("H1: `web` prints the link built from it",
-              bool(_tok) and ("#token=" + _tok[-1]) in wblob, wblob[-200:])
+        # The word after the program name is a VERB, and `web` now PROBES before it
+        # prints: a link must not be handed out for a page nobody serves. So this run
+        # needs a port of its OWN that answers - the staged config used to carry no web
+        # block at all, the verb probed the default 8790, and whether this check passed
+        # depended on what else on the box held that port (measured on CI: it was green
+        # locally only because the operator's own page answered there). A free port plus
+        # an in-process /api/health server makes the answer the test's, not the box's.
+        _s = socket.socket()
+        _s.bind(("127.0.0.1", 0))
+        _vport = _s.getsockname()[1]
+        _s.close()
+
+        class _LanesOK(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                body = b'{"ok": true, "lanes": {}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        _vi = json.loads((stage / "config.json").read_text(encoding="utf-8"))
+        _vi["web"] = {"enabled": True, "host": "127.0.0.1", "port": _vport}
+        (stage / "config.json").write_text(json.dumps(_vi), encoding="utf-8")
+        _vsrv = ThreadingHTTPServer(("127.0.0.1", _vport), _LanesOK)
+        threading.Thread(target=_vsrv.serve_forever, daemon=True).start()
+        try:
+            wv = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "web"],
+                                cwd=str(stage), capture_output=True, text=True,
+                                timeout=120, stdin=subprocess.DEVNULL,
+                                env=dict(os.environ, TINYCMDR_PLAIN="1", TINYCMDR_NO_BROWSER="1"))
+            wblob = wv.stdout + wv.stderr
+            check("H1: `web` exits 0", wv.returncode == 0, (wv.returncode, wblob[-200:]))
+            check("H1: `web` mints the token the page needs",
+                  "minted TINYCMDR_WEB_TOKEN" in wblob, wblob[-200:])
+            _tok = [ln.split("=", 1)[1] for ln in
+                    (stage / ".env").read_text(encoding="utf-8").splitlines()
+                    if ln.startswith("TINYCMDR_WEB_TOKEN=")]
+            check("H1: `web` prints the link built from it",
+                  bool(_tok) and ("#token=" + _tok[-1]) in wblob, wblob[-200:])
+        finally:
+            _vsrv.shutdown()
+            _vsrv.server_close()
+        # ...and with nothing on the configured port the verb says so and exits 1,
+        # instead of printing a link that resolves to nothing (the 2026-10-10 contract).
+        wv2 = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "web"],
+                             cwd=str(stage), capture_output=True, text=True,
+                             timeout=120, stdin=subprocess.DEVNULL,
+                             env=dict(os.environ, TINYCMDR_PLAIN="1", TINYCMDR_NO_BROWSER="1"))
+        w2blob = wv2.stdout + wv2.stderr
+        check("H1: `web` with nothing serving says so and exits 1",
+              wv2.returncode == 1 and "no page is answering" in w2blob
+              and "#token=" not in w2blob, (wv2.returncode, w2blob[-240:]))
         # `--web` gets its own run: the chat-intent fixture would send it through the
         # chat startup gate first, so the config is blanked to no-intent and the run
         # must serve the page - and hold it open, which is the whole point of the flag.
