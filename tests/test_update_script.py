@@ -128,10 +128,39 @@ def main():
         env["TINYCMDR_UPDATE_URL"] = url
         env["TINYCMDR_PYTHON"] = sys.executable
         env.pop("TINYCMDR_WEB_TOKEN", None)
+        # A-2026-10-11-16: the fetch must carry install.sh's bounds. The script's own curl
+        # is observed through a wrapper on PATH that records its arguments and hands them
+        # to the real one - the script cannot hang on a black-holed route with the flags
+        # present, and this is what says they are.
+        _curl = shutil.which("curl")
+        _wget = shutil.which("wget")
+        fetch_log = work / "fetch.log"
+        wrap_dir = work / "wrap"
+        wrap_dir.mkdir()
+        if _curl:
+            (wrap_dir / "curl").write_text(
+                '#!/bin/sh\nprintf "curl %s\\n" "$*" >> "%s"\nexec "%s" "$@"\n'
+                % ("%s", fetch_log, _curl), encoding="utf-8")
+            (wrap_dir / "curl").chmod(0o755)
+        elif _wget:
+            (wrap_dir / "wget").write_text(
+                '#!/bin/sh\nprintf "wget %s\\n" "$*" >> "%s"\nexec "%s" "$@"\n'
+                % ("%s", fetch_log, _wget), encoding="utf-8")
+            (wrap_dir / "wget").chmod(0o755)
+        env["PATH"] = str(wrap_dir) + os.pathsep + env.get("PATH", "")
         proc = subprocess.run(["sh", str(SCRIPT), str(inst)], cwd=str(work), env=env,
                               capture_output=True, text=True, timeout=300,
                               stdin=subprocess.DEVNULL)
         out = proc.stdout + proc.stderr
+        _fetches = fetch_log.read_text(encoding="utf-8") if fetch_log.exists() else ""
+        if _curl:
+            check("--connect-timeout" in _fetches and "--retry 3" in _fetches,
+                  "the fetch cannot hang with no clock (install.sh's bounds)",
+                  _fetches)
+        elif _wget:
+            check("--timeout=15" in _fetches and "--tries=3" in _fetches,
+                  "the fetch cannot hang with no clock (install.sh's bounds)",
+                  _fetches)
         check(proc.returncode == 0, "update.sh runs and exits 0", (proc.returncode, out[-300:]))
         check("9.9.9" in out and "1.0.0" in out,
               "it names the version it moved from and to", out[:200])

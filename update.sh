@@ -43,10 +43,13 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "update: $DIR is $CUR; fetching the latest release for this host ($ASSET)"
 fetch() {   # fetch <url> <dest>
+    # The same bounds install.sh puts on its fetches: a black-holed route must time
+    # out rather than hang `tinycmdr update` with no clock, and a transient error is
+    # worth a retry (A-2026-10-11-16).
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$1" -o "$2"
+        curl -fsSL --retry 3 --connect-timeout 15 "$1" -o "$2"
     else
-        wget -q "$1" -O "$2"
+        wget -q --timeout=15 --tries=3 "$1" -O "$2"
     fi
 }
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
