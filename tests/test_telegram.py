@@ -76,6 +76,13 @@ class FakeClient:
     def answer_callback(self, callback_id, text=""):
         self.callbacks.append(callback_id)
 
+    def get_file(self, file_id):
+        return b"X" * 8                 # the download door: bytes for any id
+
+    def send_file(self, chat_id, path, note="", reply_to=None):
+        self.messages.append({"chat": chat_id, "text": "[file %s]" % path})
+        return {"message_id": 1}
+
     def me(self):
         return {"username": "tinycmdr_test"}
 
@@ -499,12 +506,12 @@ check("/help answers", poller.handle(msg(1, "/help", 123456789, mid=2)) is True
       and "tinycmdr" in client3.messages[-1]["text"])
 check("/stop with nothing running says so",
       poller.handle(msg(1, "/stop", 123456789, mid=3)) is True
-      and "nothing is running" in client3.messages[-1]["text"])
+      and "is running right now" in client3.messages[-1]["text"])
 check("a repeated update id is not handled twice",
       poller.handle(msg(1, "/help", 123456789, mid=3)) is True
       and len(client3.messages) == 2)
 submitted = []
-poller.submit = lambda chat_id, text, mid: submitted.append((chat_id, text, mid))
+poller.submit = lambda chat_id, text, mid, media=None: submitted.append((chat_id, text, mid))
 check("a task is handed to the chat's worker",
       poller.handle(msg(1, "check the backups", 123456789, mid=4)) is True
       and submitted == [(1, "check the backups", 4)], str(submitted))
@@ -518,7 +525,7 @@ check("each chat gets its own conversation name",
 cross = FakeClient()
 xp = fb.TelegramPoller(cross, {"111", "222"})
 handed = []
-xp.submit = lambda chat_id, text, mid: handed.append((chat_id, text, mid))
+xp.submit = lambda chat_id, text, mid, media=None: handed.append((chat_id, text, mid))
 check("the same message id in two chats is two messages",
       xp.handle(msg(11, "one", 111, mid=1)) is True
       and xp.handle(msg(22, "two", 222, mid=1)) is True
@@ -1169,7 +1176,7 @@ check("A-161: three media messages draw ONE notice, not three",
 _pm = FakeClient()
 _pm2 = fb.TelegramPoller(_pm, {"7"})
 _pm_got = []
-_pm2.submit = lambda cid, text, mid: _pm_got.append((cid, text, mid))
+_pm2.submit = lambda cid, text, mid, media=None: _pm_got.append((cid, text, mid))
 try:
     _pm_handled = _pm2.handle({"update_id": 1, "message": {
         "message_id": 1, "text": 123, "chat": {"id": 62, "type": "private"},
@@ -1204,7 +1211,7 @@ check("A-164: a press with no chat is not blamed on the (allowed) user",
 # A-166: the dedupe window is per chat.
 _p166 = fb.TelegramPoller(FakeClient(), {"11", "22"})
 _handed166 = []
-_p166.submit = lambda cid, text, mid: _handed166.append((cid, mid))
+_p166.submit = lambda cid, text, mid, media=None: _handed166.append((cid, mid))
 for _i in range(1, 4002):
     _p166.handle(msg(11, "x", 11, mid=_i))
 _p166.handle(msg(22, "hello", 22, mid=1))
@@ -1573,6 +1580,235 @@ try:
 finally:
     _gate169.set()
     _restore169()
+
+
+# ---- 2026-10-11: the lane answers the Mattermost command surface ------------------
+# A `/restart` typed into a Telegram chat was handed to the model as a task and it
+# answered "the operator is requesting a restart" while the bot kept running: this
+# lane knew five verbs against the Mattermost lane's seventeen. It answers the same
+# words now, on the same helpers, and an unknown /word is refused locally - never
+# sent to the model as a task.
+_mm_words = ("/new", "/reset", "/stop", "/status", "/model", "/reasoning", "/plan",
+             "/fork", "/undo", "/retry", "/save", "/bg", "/pause", "/restart",
+             "/version", "/help")
+
+
+def _last(c):
+    """The last text this fake API was sent, or "" (a pre-fix build often sends none,
+    and a check must FAIL there, not IndexError)."""
+    return c.messages[-1]["text"] if c.messages else ""
+
+
+check("every Mattermost chat verb is a verb here",
+      all(w in fb._TG_VERBS for w in _mm_words),
+      [w for w in _mm_words if w not in fb._TG_VERBS])
+
+_cmd = FakeClient()
+_pcmd = fb.TelegramPoller(_cmd, {"7"})
+_cmd_sub = []
+_pcmd.submit = lambda *a, **k: _cmd_sub.append(a)
+for _i, _line in enumerate(("/help", "/start", "/status", "/usage", "/version", "/model",
+                            "/reasoning", "/plan", "/fork", "/undo", "/retry", "/save",
+                            "/pause", "/pause off", "/new", "/reset", "/bg")):
+    _pcmd.handle(msg(88, _line, 7, mid=100 + _i))
+check("each command is answered in the chat, not by the model",
+      len(_cmd.messages) >= 16 and _cmd_sub == [],
+      (len(_cmd.messages), _cmd_sub))
+
+# /restart: the regression the operator hit. The lane answers, the chat's run is
+# flagged, and perform_restart does the work - the model never sees the word.
+# (Chat 777: a chat no earlier check has runs for, so "busy" is a fact this check owns.)
+_rc = FakeClient()
+_prc = fb.TelegramPoller(_rc, {"7"})
+_prc_sub = []
+_prc.submit = lambda *a, **k: _prc_sub.append(a)
+_restart_calls = []
+_saved_restart = fb.perform_restart
+fb.perform_restart = lambda *a, **k: _restart_calls.append(a)
+try:
+    _prc.handle(msg(777, "/restart", 7, mid=1))
+    check("/restart answers the chat and never reaches the model",
+          bool(_restart_calls) and not _prc_sub
+          and "Restarting" in _last(_rc),
+          (_last(_rc)[:40], _prc_sub))
+    _ev_rs = threading.Event()
+    _prc.cancel[777] = _ev_rs
+    _prc.handle(msg(777, "/restart", 7, mid=2))
+    check("/restart refuses while a task is live and names the way out",
+          "still running" in _last(_rc) and not _ev_rs.is_set(),
+          _last(_rc)[:60])
+    _ev_rs2 = threading.Event()
+    _prc.cancel[777] = _ev_rs2
+    _prc.handle(msg(777, "/restart force", 7, mid=3))
+    check("/restart force flags the live run first", _ev_rs2.is_set())
+finally:
+    fb.perform_restart = _saved_restart
+
+# an unknown /word is refused, never sent on
+_uc = FakeClient()
+_puc = fb.TelegramPoller(_uc, {"7"})
+_puc_sub = []
+_puc.submit = lambda *a, **k: _puc_sub.append(a)
+_puc.handle(msg(7, "/wibble", 7, mid=4))
+check("an unknown command is refused locally, the Mattermost lane's own rule",
+      "Unknown command" in _last(_uc) and not _puc_sub,
+      (_last(_uc)[:60], _puc_sub))
+_puc.handle(msg(7, "/cmdr stop", 7, mid=5))
+check("the retired prefix points at the current one",
+      "prefix" in _last(_uc).lower(), _last(_uc)[:60])
+
+# /stop releases a parked question at once, as stopped (not a timeout)
+_qdest = fb.TelegramDestination(FakeClient(), chat_id=7, session_key="telegram-7")
+_qrow = _qdest._open_question("Restart the task now?", ["yes", "no"])
+_pqs = fb.TelegramPoller(FakeClient(), {"7"})
+_pqs.live[7] = _qdest
+_pqs.handle(msg(7, "/stop", 7, mid=6))
+check("/stop releases a parked question as STOPPED",
+      _qrow["ev"].is_set() and _qrow.get("stopped") is True, _qrow)
+
+# /pause holds tasks and says so; /pause off resumes (chat 888: no earlier runs)
+_pc = FakeClient()
+_pp = fb.TelegramPoller(_pc, {"7"})
+_pp_sub = []
+_pp.submit = lambda *a, **k: _pp_sub.append(a)
+_pp.handle(msg(888, "/pause the disk is full", 7, mid=7))
+_pp.handle(msg(888, "do the thing", 7, mid=8))
+check("/pause holds a new task instead of running it",
+      "Paused" in _last(_pc) and not _pp_sub,
+      (_last(_pc)[:50], _pp_sub))
+_pp.handle(msg(888, "/pause off", 7, mid=9))
+_pp.handle(msg(888, "do the thing", 7, mid=10))
+check("/pause off resumes and the task goes through", bool(_pp_sub), _pp_sub)
+
+# inbound files: a photo, a document and a voice note are read here now ("uploads
+# both ways" was true of the Mattermost door only)
+_media_msg = {"photo": [{"file_id": "small"}, {"file_id": "big"}],
+              "document": {"file_id": "doc1", "file_name": "notes.txt",
+                           "mime_type": "text/plain"},
+              "voice": {"file_id": "v1"}}
+# getattr: a pre-fix build has no such reader, and the check must FAIL there, not die
+_media_of = getattr(fb, "tg_media_of", None)
+_items = _media_of(_media_msg) if _media_of else []
+check("the biggest photo, the document and the voice note are the files read",
+      [i[0] for i in _items] == ["doc1", "big", "v1"], _items)
+
+
+class _GetFileClient(FakeClient):
+    def get_file(self, file_id):
+        return b"X" * 8
+
+
+_download = getattr(fb, "tg_download_media", None)
+_vision_saved = fb.CONFIG["agent"].get("vision")
+fb.CONFIG["agent"]["vision"] = True          # the door the image rides, per config
+try:
+    _notes, _images = _download(_GetFileClient(),
+                                [("big", "photo-big.jpg", "image/jpeg")]) if _download \
+        else ([], [])
+    check("an inbound image is saved and handed to vision",
+          bool(_images) and _images[0][0] == "image/jpeg" and "image attached" in _notes[0],
+          (_notes, _images))
+finally:
+    fb.CONFIG["agent"]["vision"] = _vision_saved
+_notes2, _images2 = _download(_GetFileClient(),
+                              [("doc1", "notes.txt", "text/plain")]) if _download \
+    else ([], [])
+check("a document is saved and named for read_file",
+      not _images2 and bool(_notes2) and "read_file" in _notes2[0], _notes2)
+
+
+class _NoFileClient(FakeClient):
+    def get_file(self, file_id):
+        raise RuntimeError("file is too big")
+
+
+_notes3, _images3 = _download(_NoFileClient(),
+                              [("x", "big.bin", "application/octet-stream")]) if _download \
+    else ([], [])
+check("a failed download becomes a note in the run, not silence",
+      bool(_notes3) and "failed to download" in _notes3[0], _notes3)
+
+# the poller hands media to the chat's worker with the caption
+_pmc = fb.TelegramPoller(FakeClient(), {"7"})
+_pmc_got = []
+_pmc.submit = lambda chat_id, text, mid, media=None: _pmc_got.append((text, media))
+_pmc.handle({"update_id": 1, "message": {
+    "message_id": 1, "caption": "look at this", "chat": {"id": 90, "type": "private"},
+    "from": {"id": 7, "username": "u"}, "photo": [{"file_id": "big"}]}})
+check("a caption + photo is a task carrying the media",
+      bool(_pmc_got) and _pmc_got[0][0] == "look at this" and bool(_pmc_got[0][1])
+      and _pmc_got[0][1][0][0] == "big",
+      _pmc_got)
+_pmc.handle({"update_id": 2, "message": {
+    "message_id": 2, "chat": {"id": 91, "type": "private"},
+    "from": {"id": 7, "username": "u"},
+    "document": {"file_id": "d1", "file_name": "a.bin"}}})
+check("a file-only message is a task, not the text-only notice",
+      len(_pmc_got) == 2 and _pmc_got[1][0] == "" and bool(_pmc_got[1][1]), _pmc_got)
+
+# run_telegram level: a /status in the batch is answered by the lane, through the
+# worker, with drive_run never called - and a photo batch reaches drive_run with the
+# image content attached.
+class _CmdPoll(_OnePollClient):
+    batch = [msg(7, "/status", 7, mid=1)]
+
+
+_never_called = []
+_holder_cmd, _restore_cmd = _tg_setup(
+    _CmdPoll, {"token": _TG_TOK, "allowed_users": ["7"]},
+    drive_run=lambda *a, **k: _never_called.append(a))
+try:
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+    _cl_cmd = _holder_cmd.get("client")
+    _dl = time.time() + 5
+    while time.time() < _dl and not any("tinycmdr v" in m["text"] for m in _cl_cmd.messages):
+        time.sleep(0.02)
+    check("run_telegram answers /status in the chat, never in a run",
+          any("tinycmdr v" in m["text"] for m in _cl_cmd.messages) and not _never_called,
+          ([m["text"][:30] for m in _cl_cmd.messages], _never_called))
+finally:
+    _restore_cmd()
+
+class _PhotoPoll(_OnePollClient):
+    batch = [{"update_id": 1, "message": {
+        "message_id": 1, "caption": "what is this", "chat": {"id": 92, "type": "private"},
+        "from": {"id": 7, "username": "u"}, "photo": [{"file_id": "big"}]}}]
+
+_photo_seen = {}
+
+
+def _rich_drive(key, text, reporter, **kw):
+    _photo_seen["text"] = text
+    _photo_seen["rich"] = kw.get("rich_content")
+    return "seen"
+
+
+_holder_ph, _restore_ph = _tg_setup(
+    _PhotoPoll, {"token": _TG_TOK, "allowed_users": ["7"]}, drive_run=_rich_drive)
+_vision_saved2 = fb.CONFIG["agent"].get("vision")
+fb.CONFIG["agent"]["vision"] = True
+try:
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+    _cl_ph = _holder_ph.get("client")
+    _dl = time.time() + 5
+    while time.time() < _dl and "rich" not in _photo_seen:
+        time.sleep(0.02)
+    _rich = _photo_seen.get("rich") or []
+    check("a photo DM reaches the run as vision content",
+          bool(_rich) and _rich[-1]["type"] == "image_url"
+          and _rich[-1]["image_url"]["url"].startswith("data:image/jpeg;base64,"),
+          _rich)
+    check("...with the saved-file note in the run's text",
+          "image attached" in (_photo_seen.get("text") or ""), _photo_seen.get("text"))
+finally:
+    fb.CONFIG["agent"]["vision"] = _vision_saved2
+    _restore_ph()
 
 
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")

@@ -26862,6 +26862,85 @@ def model_command(session_key, arg):
               "conversation now inherit it)")
 
 
+def reasoning_command(session_key, arg, llm_url=""):
+    """`/reasoning [level|auto|off]` for every chat surface - one word, one answer.
+
+    Extracted from the Mattermost handler's inline copy when the Telegram lane grew
+    the same command. That copy named `self.llm_url`, an attribute its dispatcher
+    never sets, so `/reasoning <level>` raised AttributeError there (found while
+    mirroring it, 2026-10-11); the endpoint now comes from the caller or the agent.
+    """
+    arg = (arg or "").strip().lower()
+    url = llm_url or getattr(AGENT, "llm_url", "") or (CONFIG["llm"].get("base_url") or "")
+    over = AGENT.reasoning_overrides
+    cur = over.get(session_key) or CONFIG["llm"].get("reasoning") or "auto"
+    if arg in ("", "?", "status"):
+        return ("\U0001f9e0 Reasoning effort: **%s** (this conversation; "
+                "config default %s).\nUsage: `/reasoning <auto|off|%s>` - "
+                "`auto` sends no reasoning field at all, `off` disables it "
+                "where the endpoint supports that."
+                % (cur, CONFIG["llm"].get("reasoning") or "auto",
+                   "|".join(REASONING_LEVELS)))
+    if arg == "auto":
+        over.pop(session_key, None)
+        try:
+            over.touched.add(session_key)
+        except Exception:
+            pass
+        _save_overrides()
+        return "\U0001f9e0 Reasoning effort back to auto (no field sent)."
+    if arg in REASONING_LEVELS or arg == "off":
+        over[session_key] = arg
+        try:
+            over.touched.add(session_key)
+        except Exception:
+            pass
+        _save_overrides()
+        wire = {"effort": "reasoning_effort",
+                "responses": "reasoning.effort",
+                "budget": "thinking.budget_tokens"}[
+                    str(CONFIG["llm"].get("reasoning_mode") or "auto")
+                    if str(CONFIG["llm"].get("reasoning_mode") or "auto")
+                    in ("effort", "responses", "budget")
+                    else ("responses" if "/responses" in str(url)
+                          else "budget" if "anthropic" in str(url).lower()
+                          else "effort")]
+        return ("\U0001f9e0 Reasoning effort for this conversation: **%s** "
+                "(sent as `%s`)." % (arg, wire))
+    return ("\U0001f9e0 Unknown level %r - use auto, off, or one of: %s."
+            % (arg, ", ".join(REASONING_LEVELS)))
+
+
+def session_export(session_key):
+    """Write one conversation to sessions/export-<ts>.md: (path, message count), or
+    (None, 0) when there is nothing to export.
+
+    One writer for /save on every chat surface (the Mattermost handler's inline copy
+    moved here when the Telegram lane grew the verb, 2026-10-11).
+    """
+    hist = AGENT._history(session_key)
+    if not hist:
+        return None, 0
+    lines = ["# tinycmdr session export — %s" % session_key,
+             "_%s_\n" % time.strftime("%Y-%m-%d %H:%M")]
+    for m in hist:
+        role = m.get("role", "?")
+        if role == "tool":
+            continue
+        content = m.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        label = {"user": "**You**", "assistant": "**tinycmdr**",
+                 "system": "**system**"}.get(role, "**%s**" % role)
+        lines.append("%s:\n%s\n" % (label, content))
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    _ensure_sessions_dir()
+    path = os.path.join(SESSIONS_DIR, "export-%s.md" % ts)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    return path, len(hist)
+
+
 # Mattermost bot layer (mmpy_bot, imported lazily so --cli needs no extras)
 # --- color ---------------------------------------------------------------------
 # Mattermost has no text color, but a post can carry Slack-style attachments, which
@@ -34906,48 +34985,8 @@ class MattermostDispatcher:
             return
         if low == "/reasoning" or low.startswith("/reasoning "):
             arg = stripped.split(maxsplit=1)[1].strip().lower() if " " in stripped else ""
-            over = AGENT.reasoning_overrides
-            cur = over.get(session_key) or CONFIG["llm"].get("reasoning") or "auto"
-            if arg in ("", "?", "status"):
-                self._post(channel_id, post_root,
-                           "\U0001f9e0 Reasoning effort: **%s** (this conversation; "
-                           "config default %s).\nUsage: `/reasoning <auto|off|%s>` - "
-                           "`auto` sends no reasoning field at all, `off` disables it "
-                           "where the endpoint supports that."
-                           % (cur, CONFIG["llm"].get("reasoning") or "auto",
-                              "|".join(REASONING_LEVELS)))
-            elif arg == "auto":
-                over.pop(session_key, None)
-                try:
-                    over.touched.add(session_key)
-                except Exception:
-                    pass
-                _save_overrides()
-                self._post(channel_id, post_root,
-                           "\U0001f9e0 Reasoning effort back to auto (no field sent).")
-            elif arg in REASONING_LEVELS or arg == "off":
-                over[session_key] = arg
-                try:
-                    over.touched.add(session_key)
-                except Exception:
-                    pass
-                _save_overrides()
-                wire = {"effort": "reasoning_effort",
-                        "responses": "reasoning.effort",
-                        "budget": "thinking.budget_tokens"}[
-                            str(CONFIG["llm"].get("reasoning_mode") or "auto")
-                            if str(CONFIG["llm"].get("reasoning_mode") or "auto")
-                            in ("effort", "responses", "budget")
-                            else ("responses" if "/responses" in str(self.llm_url or "")
-                                  else "budget" if "anthropic" in str(self.llm_url or "").lower()
-                                  else "effort")]
-                self._post(channel_id, post_root,
-                           "\U0001f9e0 Reasoning effort for this conversation: **%s** "
-                           "(sent as `%s`)." % (arg, wire))
-            else:
-                self._post(channel_id, post_root,
-                           "\U0001f9e0 Unknown level %r - use auto, off, or one of: %s."
-                           % (arg, ", ".join(REASONING_LEVELS)))
+            self._post(channel_id, post_root,
+                       reasoning_command(session_key, arg))
             return
         if low == "/plan" or low.startswith("/plan "):
             arg = stripped.split(maxsplit=1)[1].strip().lower() if " " in stripped else ""
@@ -34988,30 +35027,13 @@ class MattermostDispatcher:
                            f"`/tinycmdr resume {made}` continues the copy.")
             return
         if low == "/save":
-            hist = AGENT._history(session_key)
-            if not hist:
+            path, count = session_export(session_key)
+            if not path:
                 self._post(channel_id, post_root, "This session is empty.")
                 return
-            lines = [f"# tinycmdr session export — {session_key}",
-                     f"_{time.strftime('%Y-%m-%d %H:%M')}_\n"]
-            for m in hist:
-                role = m.get("role", "?")
-                if role == "tool":
-                    continue
-                content = m.get("content")
-                if not isinstance(content, str) or not content.strip():
-                    continue
-                label = {"user": "**You**", "assistant": "**tinycmdr**",
-                         "system": "**system**"}.get(role, f"**{role}**")
-                lines.append(f"{label}:\n{content}\n")
-            ts = time.strftime("%Y%m%d-%H%M%S")
-            _ensure_sessions_dir()
-            path = os.path.join(SESSIONS_DIR, f"export-{ts}.md")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines))
             self._post(channel_id, post_root,
                        f"💾 Session exported to `{path}` "
-                       f"({len(hist)} messages).")
+                       f"({count} messages).")
             return
         if low == "/version":
             self._post(channel_id, post_root, f"tinycmdr v{VERSION}")
@@ -35755,9 +35777,20 @@ TG_SEEN_PER_CHAT = 200        # message ids remembered per chat for redelivery d
 TG_NOTICE_MAX = 256           # chats remembered for the once-only "no text here" notice
 TG_QUEUE_MAX = 5              # DMs allowed to queue behind a live run in one chat
 
-# The verbs this lane answers. Kept in one place so the dedupe can tell an order
-# (idempotent, must re-fire when redelivered) from a task (must not) - A-171.
-_TG_VERBS = ("/start", "/help", "/stop", "/new", "/usage")
+# The verbs this lane answers - the same words the Mattermost lane answers with, plus
+# this lane's own /start and /usage. An unknown /word is refused here rather than handed
+# to the model as a task: a `/restart` typed in a Telegram chat reached the model and it
+# answered "the operator is requesting a restart" while the bot kept running
+# (2026-10-11).
+_TG_VERBS = ("/start", "/help", "/stop", "/new", "/reset", "/usage", "/version",
+             "/status", "/model", "/reasoning", "/plan", "/fork", "/undo", "/retry",
+             "/save", "/bg", "/pause", "/restart")
+
+# The two that run on the poll loop's own thread even while a run owns the chat,
+# exactly as the Mattermost listener reads them mid-run: a /stop has to bite the run
+# it names, and a forced restart kills what it replaces. Every other verb waits for
+# the run through the chat's queue (the state it touches is the run's).
+_TG_FAST = ("/stop", "/restart")
 
 # Of those, ONLY /stop is re-run on a redelivered update: a task must never run twice
 # and /help or /usage re-answering is just noise, but a /stop dropped as "already seen"
@@ -35765,25 +35798,27 @@ _TG_VERBS = ("/start", "/help", "/stop", "/new", "/usage")
 _TG_REDELIVER = ("/stop",)
 
 TG_HELP = ("<b>tinycmdr</b>\n"
-
            "Send a task in plain words and it runs on this box: shell, files, a URL "
-
            "you hand it, its notes and its own tools.\n\n"
-
-           "<b>/new</b> start a fresh conversation\n"
-
-           "<b>/usage</b> tokens and time for this chat's last run\n"
-
-           "<b>/stop</b> cancel the run in flight\n"
-
+           "<b>Commands</b> — the same words as every other surface, also with a "
+           "<b>/tinycmdr</b> prefix and a <b>@botname</b> suffix:\n"
+           "<b>/new</b> fresh conversation · <b>/stop</b> cancel the run in flight · "
+           "<b>/usage</b> tokens and time for the last run\n"
+           "<b>/status</b> health, model, context · <b>/model [name|list]</b> show or "
+           "switch the model\n"
+           "<b>/reasoning &lt;auto|off|level&gt;</b> effort for this chat · "
+           "<b>/plan on|off|apply</b> read-only planning\n"
+           "<b>/undo [N]</b> drop exchanges · <b>/retry</b> re-run the last request · "
+           "<b>/save</b> export this chat\n"
+           "<b>/bg &lt;task&gt;</b> run in background · <b>/pause [reason|off]</b> "
+           "hold new tasks\n"
+           "<b>/fork [name]</b> branch the conversation · <b>/restart [force]</b> the "
+           "bot · <b>/version</b>\n"
            "<b>/help</b> this screen (also <b>/start</b>)\n\n"
-
-           "Every verb also works with a <b>/tinycmdr</b> prefix — "
-
-           "<b>/tinycmdr stop</b>, for instance — and a <b>@botname</b> suffix.\n\n"
-
+           "Management verbs run here too, as "
+           "<b>/tinycmdr update|doctor|health|proc|config|logs|clean|approvals|"
+           "failures</b> — <b>update</b> checks for a new release and applies it.\n\n"
            "Anything else is a request. While it works, the message above keeps "
-
            "itself current, and a plain line you type is sent in at the next step.")
 
 
@@ -36136,6 +36171,10 @@ class TelegramClient:
 
         self._base = "%s/bot%s/" % (TG_API, token)
 
+        # The file download rides its own prefix ("/file/bot<token>/<path>"): built
+        # here, beside the call base, so the token lives in one place in this class.
+        self._file_base = "%s/file/bot%s/" % (TG_API, token)
+
         if http_timeout is None:
 
             # telegram.http_timeout bounds every non-poll call; the long poll has its own
@@ -36330,6 +36369,22 @@ class TelegramClient:
         return self.call("answerCallbackQuery", callback_query_id=callback_id,
 
                          text=text or None)
+
+    def get_file(self, file_id):
+        """The bytes of one file the Bot API holds - the lane's download door.
+
+        Two calls by Telegram's design: getFile names the path, then the path streams.
+        The 20 MB ceiling is the API's own, and it answers a refusal ("file is too
+        big") through the same RuntimeError every call raises, which the lane turns
+        into the note the run reads."""
+        info = self.call("getFile", file_id=file_id)
+        path = str((info or {}).get("file_path") or "")
+        if not path:
+            raise RuntimeError("getFile: no file_path for %s" % file_id)
+        r = requests.get(self._file_base + path, timeout=TG_UPLOAD_TIMEOUT)
+        if r.status_code != 200:
+            raise RuntimeError("file download: HTTP %s" % r.status_code)
+        return r.content
 
 
 
@@ -36837,8 +36892,93 @@ class TelegramDestination(Destination):
 
         return True
 
+    def stop_question(self):
+
+        """Release a parked question as STOPPED, not timed out.
+
+        A /stop must not sit out the question's whole window: the row is flagged (the
+        harness reads `stopped` and tells the model to stop, not to guess) and released
+        - the same release the Mattermost dispatcher's /stop performs for its channels.
+        """
+
+        row = self._asking.get("q")
+
+        if row is None or row["ev"].is_set():
+
+            return False
+
+        row["answer"] = None
+
+        row["stopped"] = True
+
+        row["ev"].set()
+
+        return True
 
 
+
+
+
+def tg_media_of(msg):
+    """[(file_id, filename, mime)] for the media one message carries.
+
+    The Mattermost lane has read files out of a post since 1.0.x while this lane
+    answered "I can only read text here" - the README's "uploads both ways" was true
+    of one chat door (2026-10-11). One entry per file: a document keeps its own name;
+    a photo picks the LARGEST of the sizes Telegram offers (the same image in four
+    copies, smallest first); a voice note, an audio clip and a video arrive under the
+    name Telegram can read back. A sticker is not a file the agent can use, so it is
+    left to the text-only notice.
+    """
+    out = []
+    doc = msg.get("document")
+    if isinstance(doc, dict) and doc.get("file_id"):
+        out.append((doc["file_id"],
+                    doc.get("file_name") or ("document-%s" % doc["file_id"]),
+                    doc.get("mime_type") or "application/octet-stream"))
+    photos = msg.get("photo")
+    if isinstance(photos, list) and photos:
+        big = photos[-1]
+        if isinstance(big, dict) and big.get("file_id"):
+            out.append((big["file_id"], "photo-%s.jpg" % big["file_id"], "image/jpeg"))
+    for field, ext, mime in (("voice", ".oga", "audio/ogg"),
+                             ("audio", "", ""),
+                             ("video", "", "")):
+        f = msg.get(field)
+        if isinstance(f, dict) and f.get("file_id"):
+            name = f.get("file_name") or ("%s-%s%s" % (field, f["file_id"], ext))
+            out.append((f["file_id"], name,
+                        f.get("mime_type") or mime or "application/octet-stream"))
+    return out
+
+
+def tg_download_media(client, items):
+    """(notes, images) for the media a message carried: saved to uploads/, an image
+    also rendered into the prompt when vision is on.
+
+    The same grammar the Mattermost lane's _process_attachments produces, so a run
+    reads one shape in every lane. A download that fails is a NOTE in the run's text,
+    not a lost message (the same rule the chat lane follows).
+    """
+    import base64
+    notes, images = [], []
+    for fid, name, mime in items:
+        try:
+            content = client.get_file(fid)
+        except Exception as exc:                                # noqa: BLE001 - reported
+            notes.append("[failed to download attachment %s: %s]" % (name, exc))
+            continue
+        UPLOADS_DIR.mkdir(exist_ok=True)
+        dest = UPLOADS_DIR / ("%d_%s" % (int(time.time()), os.path.basename(name)))
+        dest.write_bytes(content)
+        if str(mime).startswith("image/") and CONFIG["agent"].get("vision"):
+            images.append((mime, base64.b64encode(content).decode()))
+            notes.append("[image attached; also saved to %s]" % dest)
+        else:
+            notes.append("[attachment saved to %s (%s, %d bytes) "
+                         "- use read_file to inspect it]"
+                         % (dest, mime or "unknown", len(content)))
+    return notes, images
 
 
 class TelegramPoller:
@@ -36867,9 +37007,22 @@ class TelegramPoller:
 
         self.submit = None              # set by run_telegram
 
+        self.submit_command = None      # set by run_telegram
+
         self.live = {}                  # chat_id -> TelegramDestination
 
         self.cancel = {}                # chat_id -> the run's cancel event
+
+        # chat_id -> set of a background task's cancel events (/bg). Kept beside the
+        # live run's slot so /stop reaches everything this chat started, the way the
+        # Mattermost dispatcher's cancel_events set does.
+        self.bg = {}
+
+        self._bg_lock = threading.Lock()
+
+        # None, or the reason new work is held - the Mattermost dispatcher's /pause,
+        # the same words (messages wait, commands and /stop still work).
+        self.paused = None
 
         # Dedupe is PER CHAT: message ids are per chat, so one shared window let a busy
         # second user evict the first user's history and a redelivery became a second run
@@ -36890,7 +37043,30 @@ class TelegramPoller:
 
 
 
-    def _verb(self, chat_id, text):
+    def _say(self, chat_id, text, reply_to=None):
+        """One reply from the lane itself, rendered like an answer (raw markdown in,
+        Telegram HTML out). A failed send is logged, never raised: a 429 on one reply
+        must not become "one update failed" for the update that actually worked
+        (A-170's rule)."""
+        try:
+            for i, piece in enumerate(tg_render(text)):
+                self.c.send(chat_id, piece, reply_to=reply_to if i == 0 else None)
+        except Exception as exc:                                # noqa: BLE001 - reported
+            log.warning("telegram: a reply could not be sent (%s)", exc)
+
+    def _verb(self, chat_id, text, sender=""):
+
+        """One command, answered where it stands. False = not a command this lane
+        knows; True = answered; a STRING = the command asked for a run next (/retry),
+        and the caller hands that string to the chat's worker, where every task goes.
+
+        The words are the Mattermost lane's, command for command (one word everywhere):
+        /new /stop /status /model /reasoning /plan /fork /undo /retry /save /bg /pause
+        /restart /version /help, the /tinycmdr management verbs, and this lane's own
+        /start and /usage. Before this existed, `/restart` typed here reached the model
+        as a task and it answered "the operator is requesting a restart" while the bot
+        kept running (2026-10-11).
+        """
 
         words = text.split()
 
@@ -36903,6 +37079,10 @@ class TelegramPoller:
         # to the model (A-160).
         verb = words[0].lower().split("@", 1)[0]
 
+        arg = text.split(maxsplit=1)[1].strip() if len(words) > 1 else ""
+
+        key = tg_session_key(chat_id)
+
         if verb in ("/start", "/help"):
 
             self.c.send(chat_id, TG_HELP)
@@ -36911,23 +37091,58 @@ class TelegramPoller:
 
         if verb == "/stop":
 
-            ev = self.cancel.get(chat_id)
+            # The Mattermost listener's /stop, word for word: every cancel event this
+            # chat owns (the live run's, a background task's, a scheduled job reporting
+            # into it), and a parked question released NOW - its window would otherwise
+            # hold the run long after the operator asked it to stop (A-143's "my stop
+            # was ignored").
+            events = [self.cancel.get(chat_id)] + list(self.bg.get(chat_id, set()))
 
-            if ev is not None:
+            runs = RUNS.by_channel(chat_id)
 
-                ev.set()
+            live = [e for e in events if e is not None and not e.is_set()]
 
-                self.c.send(chat_id, "\u23f9 stopping - the call in flight is being closed")
+            live += [c for c in runs if not c.cancel_event.is_set()]
+
+            dest = self.live.get(chat_id)
+
+            if dest is not None:
+
+                dest.stop_question()
+
+            for e in events:
+
+                if e is not None:
+
+                    e.set()
+
+            for c in runs:
+
+                c.cancel_event.set()
+
+            if live:
+
+                self._say(chat_id, "🛑 Stopping now — nothing further will be executed.")
+
+            elif runs or any(e is not None for e in events):
+
+                self._say(chat_id, "🛑 That run is already flagged to stop and will "
+
+                                   "execute nothing further, but it has not unwound yet "
+
+                                   "(`/status` for state). The stall watchdog abandons "
+
+                                   "it if it stays quiet.")
 
             else:
 
-                self.c.send(chat_id, "nothing is running")
+                self._say(chat_id, "Nothing is running right now.")
 
             return True
 
-        if verb == "/new":
+        if verb in ("/new", "/reset"):
 
-            AGENT.reset(tg_session_key(chat_id))
+            AGENT.reset(key)
 
             # A FRESH conversation needs a fresh progress message: the live destination
             # kept the old run's steps on screen (A-172).
@@ -36941,21 +37156,343 @@ class TelegramPoller:
 
                 live._flush(force=True)
 
-            self.c.send(chat_id, "\U0001F195 fresh conversation")
+            self._say(chat_id, "🔄 Session cleared. Fresh context.")
 
             return True
 
         if verb == "/usage":
 
-            u = AGENT.last_usage.get(tg_session_key(chat_id))
+            u = AGENT.last_usage.get(key)
 
-            self.c.send(chat_id, tg_escape(fmt_usage(u) if u and u.get("calls")
+            self._say(chat_id, fmt_usage(u) if u and u.get("calls")
 
-                                           else "nothing yet in this chat"))
+                      else "nothing yet in this chat")
+
+            return True
+
+        if verb == "/status":
+
+            self._say(chat_id, status_text(key, paused=self.paused))
+
+            return True
+
+        if verb == "/version":
+
+            self._say(chat_id, "tinycmdr v%s" % VERSION)
+
+            return True
+
+        if verb == "/model":
+
+            self._say(chat_id, model_command(key, arg))
+
+            return True
+
+        if verb == "/reasoning":
+
+            self._say(chat_id, reasoning_command(key, arg))
+
+            return True
+
+        if verb == "/plan":
+
+            if arg.lower() in ("on", "off"):
+
+                mode = plan_mode_set(key, "plan" if arg.lower() == "on" else "execute")
+
+                if mode == "plan":
+
+                    self._say(chat_id, "🧭 Plan mode ON — this machine is read-only: "
+
+                                       "the agent investigates and records a plan, and "
+
+                                       "nothing writes or runs until `/plan apply`.")
+
+                else:
+
+                    self._say(chat_id, "🧭 Plan mode OFF — execution resumed.")
+
+            elif arg.lower() in ("apply", "approve"):
+
+                plan_mode_set(key, "execute")
+
+                body = plan_render(key)
+
+                self._say(chat_id, "✅ Plan approved — execution mode is on."
+
+                          + ("\n\n" + body if body else ""))
+
+            else:
+
+                state = ("plan (read-only)" if plan_mode(key) == "plan" else "execute")
+
+                self._say(chat_id, "🧭 Mode: %s. Usage: `/plan on` (look, don't touch), "
+
+                                   "`/plan apply` (approve and execute), `/plan off` "
+
+                                   "(resume execution)." % state)
+
+            return True
+
+        if verb == "/fork":
+
+            made = AGENT.fork(key, arg or None)
+
+            if not made:
+
+                self._say(chat_id, "Nothing to fork yet - this session has no saved turns.")
+
+            else:
+
+                self._say(chat_id, "🍴 Forked to `%s` - the original is untouched. "
+
+                                   "`/tinycmdr resume %s` continues the copy."
+
+                          % (made, made))
+
+            return True
+
+        if verb == "/undo":
+
+            try:
+
+                n = int(arg) if arg else 1
+
+            except ValueError:
+
+                n = 1
+
+            removed = AGENT.undo(key, max(1, min(n, 50)))
+
+            if removed:
+
+                self._say(chat_id, "↩️ Removed the last %d exchange(s) from this session."
+
+                          % removed)
+
+            else:
+
+                self._say(chat_id, "Nothing to undo.")
+
+            return True
+
+        if verb == "/retry":
+
+            last = AGENT.pop_last_user(key)
+
+            if last is None:
+
+                self._say(chat_id, "Nothing to retry.")
+
+                return True
+
+            self._say(chat_id, "🔁 Retrying your last request...")
+
+            if isinstance(last, str):
+
+                return last
+
+            return "\n".join(p.get("text", "") for p in last if isinstance(p, dict))
+
+        if verb == "/save":
+
+            path, count = session_export(key)
+
+            if not path:
+
+                self._say(chat_id, "This session is empty.")
+
+                return True
+
+            self._say(chat_id, "💾 Session exported to `%s` (%d messages)." % (path, count))
+
+            try:
+
+                # The path is on the host this chat cannot see: hand the file itself
+                # over, the one thing a phone can read.
+                self.c.send_file(chat_id, path, note="session export")
+
+            except Exception as exc:                            # noqa: BLE001 - said, not raised
+
+                log.warning("telegram: the session export could not be attached (%s)", exc)
+
+            return True
+
+        if verb == "/bg":
+
+            if not arg:
+
+                self._say(chat_id, "Usage: `/bg <task>`")
+
+                return True
+
+            self._bg_task(chat_id, arg, sender)
+
+            return True
+
+        if verb == "/pause":
+
+            if arg.lower() == "off":
+
+                self.paused = None
+
+                self._say(chat_id, "▶️ Resumed.")
+
+            else:
+
+                self.paused = arg or "no reason given"
+
+                self._say(chat_id, "⏸️ Paused (%s). New tasks will be held — "
+
+                                   "`/pause off` to resume." % self.paused)
+
+            return True
+
+        if verb == "/restart":
+
+            force = arg.lower().startswith("force")
+
+            runs = RUNS.by_channel(chat_id)
+
+            ev = self.cancel.get(chat_id)
+
+            running = (any(not c.cancel_event.is_set() for c in runs)
+
+                       or (ev is not None and not ev.is_set()))
+
+            if running and not force:
+
+                self._say(chat_id, "⚠️ A task is still running. `/stop` it first, or use "
+
+                                   "`/restart force` to kill it and restart now.")
+
+                return True
+
+            if force:
+
+                # "force" has to MEAN force: flag the live run so its in-flight calls
+                # are killed, then restart without waiting for it to unwind.
+                for c in runs:
+
+                    c.cancel_event.set()
+
+                if ev is not None:
+
+                    ev.set()
+
+                for e in self.bg.get(chat_id, set()):
+
+                    e.set()
+
+            self._say(chat_id, "♻️ Restarting — back in a few seconds, and I'll confirm "
+
+                               "here when I'm up. Sessions and scheduled jobs survive; "
+
+                               "config.json and tinycmdr.py changes are picked up.")
+
+            perform_restart(chat_id, None, sender)
+
+            return True
+
+        # `/tinycmdr <verb>` for the management verbs: one word per thing, every surface
+        # (the Mattermost handler's door, verb for verb).
+        if verb.startswith("/") and verb[1:] in _CHAT_VERB_SET:
+
+            line = text[1:]
+
+            out = verb_from_chat(line)
+
+            self._say(chat_id, out)
+
+            _upd = (line.strip().split()[:1] or [""])[0].lower() == "update"
+
+            if (_upd and "VERSION " in str(out) and "->" in str(out)
+
+                    and "already up to date" not in str(out)):
+
+                self._say(chat_id, "♻️ Restarting onto it now - back in a few seconds.")
+
+                perform_restart(chat_id, None, sender)
 
             return True
 
         return False
+
+    def _bg_task(self, chat_id, task, sender=""):
+
+        """One background run for this chat - the Mattermost lane's /bg.
+
+        Its own destination (its own growing message), its own cancel event registered
+        with the chat (so /stop and /restart force reach it), and the same drive_run
+        every task uses. The session is one-shot, like the chat lane's background
+        tasks: reset when it finishes, and the conversation's model is inherited.
+        """
+
+        key = "%s-bg-%d" % (tg_session_key(chat_id), int(time.time()))
+
+        cancel = threading.Event()
+
+        with self._bg_lock:
+
+            self.bg.setdefault(chat_id, set()).add(cancel)
+
+        inherited = AGENT.model_overrides.get(tg_session_key(chat_id))
+
+        if inherited:
+
+            AGENT.model_overrides[key] = inherited
+
+        self._say(chat_id, "🧵 Background task started: %s" % task[:150])
+
+        def _run():
+
+            dest = TelegramDestination(self.c, chat_id, key)
+
+            reporter = RunReporter(dest, key, label="🧵 Working…")
+
+            try:
+
+                result = drive_run(key, task, reporter, cancel_event=cancel,
+
+                                   channel_id=chat_id, ask_door=dest)
+
+                if result:
+
+                    dest.answer(result)
+
+            except OperatorStop as exc:
+
+                dest.line("checkin", "stopped: %s" % exc)
+
+            except Exception as exc:                            # noqa: BLE001 - reported
+
+                log.exception("telegram: the background task failed")
+
+                dest.line("error", "run failed: %s: %s" % (type(exc).__name__, exc))
+
+            finally:
+
+                reporter.finish(ok=True)
+
+                with self._bg_lock:
+
+                    evs = self.bg.get(chat_id)
+
+                    if evs is not None:
+
+                        evs.discard(cancel)
+
+                        if not evs:
+
+                            self.bg.pop(chat_id, None)
+
+                AGENT.reset(key)
+
+                AGENT.model_overrides.pop(key, None)
+
+        threading.Thread(target=_run, daemon=True,
+
+                         name="tg-bg-%s" % chat_id).start()
 
 
 
@@ -37085,14 +37622,17 @@ class TelegramPoller:
 
             return False
 
-        if not text:
+        media = tg_media_of(msg)
 
-            # A photo, voice note or sticker carries no text (a caption does, and is
-            # read now); it used to vanish with no reply and no log line, which reads
+        if not text and not media:
+
+            # A sticker or a service message carries nothing this lane can use (a
+            # caption does, and is read; a document, photo or voice note is downloaded
+            # below now); it used to vanish with no reply and no log line, which reads
             # as the bot being broken. Say so ONCE per chat - three photos used to draw
             # three identical replies (A-161).
 
-            log.info("telegram: a message with no text from chat %s", chat_id)
+            log.info("telegram: a message with no text or media from chat %s", chat_id)
 
             if chat_id not in self._no_text_told:
 
@@ -37143,33 +37683,86 @@ class TelegramPoller:
 
         # answer, the run kept going, and the operator believed it had stopped
 
-        # (A-2026-10-05-143). Verbs are checked before the open question now; anything
+        # (A-2026-10-05-143). Commands are checked before the open question now;
 
-        # that is not a verb still falls through to the question.
+        # anything that is not a command still falls through to the question.
 
         # `/tinycmdr <cmd>` works here too: a Telegram client hands an unknown command
         # over as ordinary text, so the prefix only has to be understood (done above).
-        if verb in _TG_VERBS and self._verb(chat_id, text):
+        sender = str(user.get("id") or "")
+
+        # /stop and /restart run HERE, on the poll loop's own thread: a run holds the
+        # chat's worker, so a queued stop would be read only after the run it is meant
+        # to stop. Every other command queues through submit_command when a run is
+        # live, exactly as the Mattermost worker reads its channel queue - the state
+        # those commands touch (the session, the model, the plan) is the run's.
+        if verb in _TG_FAST and self._verb(chat_id, text, sender):
+
+            return True
+
+        if verb in _TG_VERBS or (verb.startswith("/") and verb[1:] in _CHAT_VERB_SET):
+
+            if self.submit_command is not None:
+
+                self.submit_command(chat_id, text, sender)
+
+            else:
+
+                # No worker wiring (a bare poller): answer where it stands, and let a
+                # /retry's follow-up go through the ordinary task door.
+                follow = self._verb(chat_id, text, sender)
+
+                if isinstance(follow, str) and follow.strip() and self.submit is not None:
+
+                    self.submit(chat_id, follow, None, None)
 
             return True
 
         dest = self.live.get(chat_id)
 
-        if dest is not None and dest.reply_ask(text):
+        if text and dest is not None and dest.reply_ask(text):
+
+            return True
+
+        if self.paused is not None and not text.startswith("/pause"):
+
+            # The Mattermost lane's pause, word for word: new work is held here, while
+            # commands (/stop above all) still answer.
+            self._say(chat_id, "⏸️ Paused (%s). New tasks will be held — `/pause off` to "
+
+                               "resume." % self.paused)
+
+            return True
+
+        if text.startswith("/"):
+
+            # The Mattermost lane refuses an unknown verb the same way: a slash command
+            # is an order, and one this lane does not know is answered locally, never
+            # sent to the model as a task.
+            if cmdr_legacy_prefix(text):
+
+                self._say(chat_id, CMDR_MOVED)
+
+            else:
+
+                self._say(chat_id, "Unknown command `%s` — try /help. (Slash commands "
+
+                                   "are handled locally; nothing was sent to the model.)"
+
+                          % text.split()[0])
 
             return True
 
         # A run is live for this chat: a plain message is a correction to it, not a
         # second task to queue behind it (a command above is still out-of-band).
 
-        if self.steer(chat_id, text, str(user.get("id") or "")):
+        if text and self.steer(chat_id, text, sender):
 
             return True
 
         if self.submit is not None:
 
-            self.submit(chat_id, text, mid)
-
+            self.submit(chat_id, text, mid, media)
         return True
 
 
@@ -37398,13 +37991,75 @@ def run_telegram():
 
                 return
 
+            if task.get("kind") == "cmd":
+
+                # A command queued behind a live run (submit_command): answered here, in
+                # order, so it cannot touch state the run is using. A /retry hands its
+                # task back and runs in this same slot.
+                try:
+
+                    follow = poller._verb(chat_id, task["text"], task.get("sender") or "")
+
+                except Exception:
+
+                    log.exception("telegram: a queued command failed")
+
+                    follow = None
+
+                if not isinstance(follow, str) or not follow.strip():
+
+                    continue
+
+                with locks:
+
+                    cancel = threading.Event()
+
+                    poller.cancel.setdefault(chat_id, cancel)
+
+                task = {"kind": "task", "text": follow, "msg_id": None,
+
+                        "cancel": cancel, "media": None}
+
             # Adopt the event submit() already registered for this chat: /stop sets
 
             # that one, so minting a fresh event here silently dropped a stop that
 
             # landed between the message arriving and this run starting.
 
-            text, msg_id, cancel = task
+            text, msg_id, cancel = task["text"], task.get("msg_id"), task.get("cancel")
+
+            media = task.get("media")
+
+            rich = None
+
+            if media:
+
+                # The download happens HERE, on the worker, not on the poll loop: a
+                # 20 MB document must not stall the lane's heartbeat. The notes go into
+                # the run's text exactly as the Mattermost lane's intake writes them.
+                try:
+
+                    notes, images = tg_download_media(client, media)
+
+                except Exception as exc:
+
+                    log.exception("telegram: the attachment download failed")
+
+                    notes, images = ["[failed to download the attachment(s): %s]" % exc], []
+
+                if notes:
+
+                    text = (text + "\n" if text.strip() else "") + "\n".join(notes)
+
+                if images:
+
+                    rich = [{"type": "text", "text": text}]
+
+                    for mime, b64 in images:
+
+                        rich.append({"type": "image_url",
+
+                                     "image_url": {"url": "data:%s;base64,%s" % (mime, b64)}})
 
             key = tg_session_key(chat_id)
 
@@ -37422,7 +38077,9 @@ def run_telegram():
 
                 client.typing(chat_id)
 
-                answer = drive_run(key, text, reporter, cancel_event=cancel,
+                answer = drive_run(key, text, reporter, rich_content=rich,
+
+                                   cancel_event=cancel,
 
                                    # The chat id is this run's channel: it is what a
                                    # `schedule` job made here reports back to, and what
@@ -37475,7 +38132,7 @@ def run_telegram():
 
 
 
-    def submit(chat_id, text, msg_id):
+    def submit(chat_id, text, msg_id, media=None):
 
         over = False
 
@@ -37513,7 +38170,86 @@ def run_telegram():
 
                 poller.cancel.setdefault(chat_id, cancel)
 
-                q.put((text, msg_id, cancel))
+                q.put({"kind": "task", "text": text, "msg_id": msg_id,
+
+                       "cancel": cancel, "media": media})
+
+        if over:
+
+            try:
+
+                client.send(chat_id, "I'm already working through %d message(s) here - "
+
+                                     "send this one when they are done." % TG_QUEUE_MAX)
+
+            except Exception as e:                          # noqa: BLE001 - the cap holds
+
+                log.warning("telegram: could not say the queue is full: %s", e)
+
+    def _run_command(chat_id, text, sender):
+
+        """Answer one command here and now, and hand a /retry follow-up to the worker."""
+
+        try:
+
+            follow = poller._verb(chat_id, text, sender)
+
+        except Exception as exc:                            # noqa: BLE001 - reported
+
+            log.exception("telegram: a command failed")
+
+            try:
+
+                client.send(chat_id, "⚠️ That command failed: %s: %s"
+
+                            % (type(exc).__name__, exc))
+
+            except Exception:                               # noqa: BLE001 - said already
+
+                pass
+
+            return
+
+        if isinstance(follow, str) and follow.strip():
+
+            submit(chat_id, follow, None, None)
+
+    def submit_command(chat_id, text, sender=""):
+
+        """Answer a command in order with this chat's runs.
+
+        Commands go through the chat's worker exactly as tasks do - one path, so a
+        heavyweight verb (`/tinycmdr update` fetches and installs) can never block the
+        poll loop, and a command's replies queue behind a live run the way the
+        Mattermost worker reads its channel queue: the state a command writes (the
+        session, the model, the plan) belongs to the run that is live.
+        """
+
+        over = False
+
+        with locks:
+
+            q = queues.get(chat_id)
+
+            if q is not None and q.qsize() >= TG_QUEUE_MAX:
+
+                over = True
+
+            else:
+
+                if q is None:
+
+                    q = queues[chat_id] = queue.Queue()
+
+                    t = threading.Thread(target=worker, args=(chat_id,), daemon=True,
+
+                                         name="tg-%s" % chat_id)
+
+                    workers[chat_id] = t
+
+                    t.start()
+
+                q.put({"kind": "cmd", "text": text, "sender": sender})
 
         if over:
 
@@ -37530,6 +38266,8 @@ def run_telegram():
 
 
     poller.submit = submit
+
+    poller.submit_command = submit_command
 
 
 

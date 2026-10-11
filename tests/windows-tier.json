@@ -27,6 +27,7 @@
     "tests/test_spill_state_surface.py",
     "tests/test_stall.py",
     "tests/test_status.py",
+    "tests/test_telegram.py",
     "tests/test_tool_load_surface.py",
     "tests/test_tree_lists.py",
     "tests/test_tui.py",
@@ -53,8 +54,7 @@
     "tests/test_stream_surface.py",
     "tests/test_tool_args_surface.py",
     "tests/test_context_surface.py",
-    "tests/test_search_surface.py",
-    "tests/test_telegram.py"
+    "tests/test_search_surface.py"
   ],
   "excluded": {},
   "not_applicable": {
