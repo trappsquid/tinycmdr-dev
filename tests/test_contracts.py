@@ -164,6 +164,28 @@ def main():
     check("every TINYCMDR_* an installer writes into .env is one the code reads",
           written <= code_env, sorted(written - code_env))
 
+    # ---- 4b. every RELATIVE link in the README resolves on an INSTALLED box ----------
+    # README.md ships in the package; docs/, tests/, AGENTS.md and CHANGELOG.md do not. A
+    # relative link into a folder the package does not carry is a 404 for the reader who
+    # meets the README where it was installed (A-2026-10-11-01). Anything outside the
+    # package is linked by its absolute URL instead, which works in both repositories and
+    # on an installed box.
+    _ship_src = (BASE / "maintenance" / "build-package.py").read_text(encoding="utf-8")
+    _ship = set(ast.literal_eval(re.search(r"(?ms)^SHIP = (\[.*?\n\])",
+                                           _ship_src).group(1)))
+    _readme = (BASE / "README.md").read_text(encoding="utf-8")
+    _bad_links = []
+    for _m in re.finditer(r"\]\(([^)\s]+)", _readme):
+        _target = _m.group(1).strip()
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", _target) or _target.startswith("#"):
+            continue
+        _path = _target.split("#", 1)[0].rstrip("/")
+        if _path in _ship or any(s.startswith(_path + "/") for s in _ship):
+            continue
+        _bad_links.append(_target)
+    check("every relative link in README.md points at something the package ships",
+          not _bad_links, _bad_links)
+
     # ---- 5. no route prefix shadows a later route (both routers) ---------------------
     # '/api/log' matched '/api/login' in the page harness because it was tested first -
     # the probe read as 200 and the token prompt bug stayed invisible. In a router, an

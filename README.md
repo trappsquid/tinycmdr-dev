@@ -235,9 +235,9 @@ checkout `python3 tinycmdr.py doctor` is the check you have, and `tinycmdr docto
 box is the same command.
 
 What it is, measured — surface, budgets, failure handling, comparisons:
-[`docs/tinycmdr-what-it-is.md`](docs/tinycmdr-what-it-is.md). The GUI tool's host notes (TCC
-grants and the stale case, Windows/Linux pitfalls, image routing):
-[`docs/computer-use.md`](docs/computer-use.md).
+[`docs/tinycmdr-what-it-is.md`](https://github.com/trappsquid/tinycmdr-dev/blob/main/docs/tinycmdr-what-it-is.md).
+The GUI tool's host notes (TCC grants and the stale case, Windows/Linux pitfalls, image routing):
+[`docs/computer-use.md`](https://github.com/trappsquid/tinycmdr-dev/blob/main/docs/computer-use.md).
 
 ## History
 

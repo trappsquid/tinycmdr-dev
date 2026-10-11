@@ -109,6 +109,10 @@ SHIP = [
     "config.example.json",
     ".env.example",
     "README.md",
+    # The license travels with every copy - the archive IS a copy, and the README links
+    # `LICENSE` from the installed root (A-2026-10-11-01). The product repo's manifest
+    # already carried it; the archive half did not.
+    "LICENSE",
     # The door a reader actually finds: it sits in the package root, while the installer
     # itself is one level down and the .ps1 beside it is refused by stock Windows (the
     # script execution policy is Restricted there, so that window closes before it can be
