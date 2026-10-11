@@ -253,6 +253,13 @@ DEFAULT_CONFIG = {
         # This entry used to read "temperature": 0.6 — that is where the
         # unexplained 0.6 came from: a default nobody remembered choosing, which
         # applied whenever config.json did not override it.
+        # A per-SEGMENT budget since 2026-10-10 (the peer of agent.max_steps and
+        # max_minutes): when it is reached the harness checkpoints and continues the job
+        # in a fresh segment, so it is runway, not a guillotine. It used to bound the
+        # WHOLE run - the one cap a continuation could not refill - and a
+        # one-call-per-turn model hit it first, with most of the step budget unused and
+        # no report written (measured 2026-10-07). 0 = no turn cap; the total across a
+        # task is bounded by agent.auto_continue_max segments either way.
         "max_turns": 100,
         # The messages budget. "auto" (or 0, or blank) means: ask the endpoint what it serves
         # per request (/v1/models or /props), keep room for the reply and the tool schemas,
@@ -651,10 +658,10 @@ DEFAULT_CONFIG = {
         # mid-job and the operator has to type "continue". The caps only bind when work is
         # unfinished, so they are runway, not a target.
         "max_steps": 250,        # tool calls per SEGMENT (auto_continue adds segments)
-        "max_minutes": 75,      # wall-clock per segment; llm.max_turns bounds the run
-        # auto_continue: a cap is a CHECKPOINT, not the end of the job. When the step or
-        # wall-clock budget runs out with plan steps still open, the run starts a fresh
-        # segment on the same task - plan and carried results intact - instead of
+        "max_minutes": 75,      # wall-clock per segment, like steps and turns
+        # auto_continue: a cap is a CHECKPOINT, not the end of the job. When the step,
+        # turn or wall-clock budget runs out with plan steps still open, the run starts a
+        # fresh segment on the same task - plan and carried results intact - instead of
         # stopping and waiting for the operator to type "continue" (measured 2026-09-17:
         # 17 real runs ended on a cap, and every one of them cost the operator that
         # message). auto_continue_max is how many EXTRA segments one task may have;
@@ -16430,9 +16437,9 @@ def run_block(key):
         if int(st.get("segment") or 1) > 1:
             line += f", segment {int(st['segment'])}"
         if max_turns:
-            line += (f", turn {int(st.get('turn') or 0)} of {max_turns}")
-        line += (" - the harness forces your report at whichever cap is reached first, so "
-                 "land the job inside both.")
+            line += (f", turn {int(st.get('turn') or 0)} of {max_turns} per segment")
+        line += (" - a cap is a CHECKPOINT, not the end: the harness continues the job "
+                 "in a fresh segment (a few at most), so budget the work across them.")
         bits.append(line)
     if st["plan"]:
         bits.append(plan_render(key))
@@ -21737,10 +21744,23 @@ class Agent:
             self.live_usage[session_key] = usage   # readable by check-ins
 
             try:
-                for turn in range(max_turns):
-                    # The loop variable is reused later in this body for the assistant
+                # TURNS ARE A PER-SEGMENT BUDGET since 2026-10-10, like steps and
+                # minutes. `range(max_turns)` made the turn cap the one budget a
+                # continuation could not refill: a one-call-per-turn model hit it at
+                # 100 while two thirds of the step budget sat unused, and that exit had
+                # no report at all (measured 2026-10-07). The check now rides the same
+                # ladder as the other caps; this while is only the backstop behind it.
+                # llm.max_turns 0 = no per-segment turn cap (steps and time still bind).
+                _turns_cap = int(max_turns or 0)
+                _seg_turns = 0
+                _turn_no = 0
+                _turn_ceiling = (((_turns_cap + 1) if _turns_cap else 10 ** 9)
+                                 * (_seg_cap + 1) + 2)
+                while _turn_no < _turn_ceiling:
+                    # The loop counter is reused later in this body for the assistant
                     # message dict, so keep the 1-based turn NUMBER under its own name.
-                    _turn_no = turn + 1
+                    _turn_no += 1
+                    _seg_turns += 1
                     if cancel_event and cancel_event.is_set():
                         status = "cancelled"
                         hist.append({"role": "assistant",
@@ -22690,8 +22710,10 @@ class Agent:
                     steps += len(tool_calls)
                     over_steps = steps >= max_steps
                     over_time = (now_mono() - t0) > max_seconds
-                    if over_steps or over_time or spun or _run.get("idle_stop"):
+                    over_turns = bool(_turns_cap) and _seg_turns >= _turns_cap
+                    if over_steps or over_turns or over_time or spun or _run.get("idle_stop"):
                         why = ("step budget" if over_steps
+                               else "turn budget" if over_turns
                                else "time budget" if over_time
                                else "loop guard" if spun
                                else "no progress")
@@ -22708,19 +22730,12 @@ class Agent:
                         if _run.get("idle_stop"):
                             log.warning("[%s] not continuing: %d idle turn(s) in a row",
                                         session_key, int(_run.get("idle_turns") or 0))
-                        # The TURN budget cannot be refilled: the counter behind `turn` is
-                        # the loop variable of `range(max_turns)`, so a new segment inherits
-                        # what is left while the notice used to promise "a fresh budget"
-                        # (measured 2026-10-07: with one call per turn, 100 turns bind long
-                        # before 250 steps, and a segment entered at turn 99 is a checkpoint
-                        # with nothing behind it). Continue only when a segment can actually
-                        # be used, and say the remaining turns out loud in the same words the
-                        # model reads. `_turn_no` is the 1-based number the loop keeps for
-                        # exactly this reason - `turn` itself is reused below for the
-                        # assistant message dict.
-                        _turns_left = max(0, max_turns - _turn_no + 1)
+                        # The TURN budget is per segment now, like steps and time: a
+                        # continuation refills all three. What still bounds the whole
+                        # task is the SEGMENT count (auto_continue_max), and the notice
+                        # below names both so the model can budget against the truth.
                         if (not spun and not _run.get("idle_stop") and depth == 0
-                                and _segments < _seg_cap and _turns_left > 0
+                                and _segments < _seg_cap
                                 and CONFIG["agent"].get("auto_continue", True)
                                 and (_open or not _st.get("plan"))):
                             _segments += 1
@@ -22745,20 +22760,19 @@ class Agent:
                                     log.debug("continuation notice failed", exc_info=True)
                             messages.append({"role": "user", "content": (
                                 "SYSTEM: that cap is a CHECKPOINT, not the end of the job. "
-                                "This run continues now in a new segment. The STEP and TIME "
-                                "budgets are fresh, and your plan and the carried results "
-                                "from earlier runs are all intact - but the TURN budget "
-                                "belongs to the whole run and %d turn(s) of it remain, so "
-                                "budget your remaining work against that number. Do NOT "
-                                "re-plan from scratch and do NOT write a status report: "
-                                "carry on with the next unfinished step and spend the turns "
-                                "you have on the work that matters most."
-                                % _turns_left
+                                "This run continues now in a new segment (segment %d of %d). "
+                                "The STEP, TURN and TIME budgets are fresh, and your plan "
+                                "and the carried results from earlier runs are all intact. "
+                                "Do NOT re-plan from scratch and do NOT write a status "
+                                "report: carry on with the next unfinished step and spend "
+                                "this segment's budget on the work that matters most."
+                                % (_segments + 1, _seg_cap + 1)
                                 + (" Open steps: "
                                    + "; ".join(f"{i}. {t}" for i, t in _open[:4])
                                    + "." if _open else ""))})
                             t0 = now_mono()
                             steps = 0
+                            _seg_turns = 0
                             continue
                         status = "budget"
                         log.warning("[%s] %s exhausted (%d steps, %ds) — "
@@ -40102,12 +40116,14 @@ def guard_tier_lines():
          % ("on" if ag.get("command_cost_guard", True) else "OFF",
             int(ag.get("search_timeout") or 0)),
          "agent.command_cost_guard, agent.search_timeout"),
-        ("segments", "%s, +%s segment(s) of %s steps / %s min"
+        ("segments", "%s, +%s segment(s) of %s steps / %s min / %s turns each"
          % ("on" if ag.get("auto_continue", True) else "OFF",
-            ag.get("auto_continue_max"), ag.get("max_steps"), ag.get("max_minutes")),
-         "agent.auto_continue, agent.auto_continue_max"),
-        ("turns", "%s turn(s) for the whole run" % llm.get("max_turns"),
-         "llm.max_turns - shared by every segment"),
+            ag.get("auto_continue_max"), ag.get("max_steps"), ag.get("max_minutes"),
+            llm.get("max_turns")),
+         "agent.auto_continue, agent.auto_continue_max, agent.max_steps, "
+         "agent.max_minutes, llm.max_turns"),
+        ("turns", "%s turn(s) per segment" % llm.get("max_turns"),
+         "llm.max_turns - a checkpoint like the other two; 0 = no turn cap"),
         ("stall", "warn %s min, abandon %s min"
          % (ag.get("stall_warn_minutes"), ag.get("stall_abandon_minutes")),
          "agent.stall_warn_minutes, agent.stall_abandon_minutes (0 = off)"),

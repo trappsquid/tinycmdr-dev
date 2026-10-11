@@ -3507,6 +3507,54 @@ def test_the_safety_seatbelt_covers_execute_code_too():
         fb.log.removeHandler(h)
 
 
+def test_the_turn_cap_is_a_checkpoint_not_an_end():
+    """2026-10-10: llm.max_turns used to bound the WHOLE run - the one budget a
+    continuation could not refill - so a one-call-per-turn model hit it with most of
+    the step budget unused and the run ended with no report (the bare "Hit the turn
+    limit" exit). It is a per-segment checkpoint now, like steps and minutes: refill,
+    then the wrap ladder when the segments are spent."""
+    files = []
+    for n in range(1, 5):
+        p = TMP / f"turn_cap_{n}.txt"
+        p.write_text(f"line {n}\n", encoding="utf-8")
+        files.append(p)
+
+    def rd(n):
+        return {"role": "assistant", "content": f"Working (call {n}).",
+                "tool_calls": [{"id": f"t{n}", "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": str(files[n - 1])})}}]}
+
+    scripted = [rd(n) for n in range(1, 5)]
+    scripted.append({"role": "assistant",
+                     "content": "STATE: the first four reads are done."})
+    fb.run_state("spin-session", create=True)["plan"] = []
+    fb.CONFIG["agent"]["max_steps"] = 250
+    fb.CONFIG["agent"]["max_minutes"] = 30
+    fb.CONFIG["agent"]["auto_continue"] = True
+    fb.CONFIG["agent"]["auto_continue_max"] = 1
+    fb.CONFIG["agent"]["plan_from_request"] = False
+    saved_turns = fb.CONFIG["llm"].get("max_turns")
+    fb.CONFIG["llm"]["max_turns"] = 2
+    try:
+        out, calls, payloads = _scripted_run(scripted)
+    finally:
+        fb.CONFIG["llm"]["max_turns"] = saved_turns
+    sent = json.dumps(payloads)
+    check("turn cap: the checkpoint continues in a fresh segment",
+          "continues now in a new segment" in sent, sent[-400:])
+    check("turn cap: the turn budget is named as fresh",
+          "STEP, TURN and TIME budgets are fresh" in sent, sent[-400:])
+    check("turn cap: segments spent -> the wrap ladder asks for the report",
+          "Answer with exactly these" in sent, sent[-400:])
+    check("turn cap: the end names the reason and the way back",
+          "Budget reached" in out and "Send 'continue'" in out, out[:300])
+    check("turn cap: not the old bare turn-limit exit",
+          "Hit the turn limit" not in out, out[:200])
+    check("turn cap: four working turns, one report call, nothing more",
+          calls == 5, f"model calls: {calls}")
+
+
 def test_a_run_that_keeps_announcing_completion_gets_one_reminder():
     """ADVISORY since 2026-10-10. Measured on the live box: a model narrating "pass
     complete" mid-audit had the old demand land at step 51 and the run was wrapped

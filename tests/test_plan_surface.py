@@ -186,12 +186,13 @@ ends up in the REQUEST BODY, and only an end-to-end run can prove those.
             check("12 of" in blk and "tool calls used" in blk,
                   f"the runway line shows position ({blk!r})")
             check("plan_drift_after" not in blk, "no config keys leak into the prompt")
-            # The loop stops at max_turns as well as max_steps, so the runway must name both:
-            # llm.max_turns=100 next to agent.max_steps=250 meant "about N left" promised a step
-            # budget the turn cap could cut off two thirds early.
+            # Every cap is a per-segment CHECKPOINT (2026-10-10), and the runway must
+            # still name the turn cap beside the step cap: llm.max_turns alongside
+            # agent.max_steps, so the model budgets across the segments rather than
+            # believing one endless budget.
             fb.run_state("s1")["turn"] = 3
             blk = fb.run_block("s1")
-            check("turn 3 of" in blk and "whichever cap is reached first" in blk,
+            check("turn 3 of" in blk and "per segment" in blk and "CHECKPOINT" in blk,
                   f"the runway names the turn cap too, not only the step cap ({blk!r})")
             check("left before the harness forces" not in blk,
                   "and stops promising the whole step budget when the turn cap may bind first")
