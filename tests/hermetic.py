@@ -129,6 +129,15 @@ def redirect_repo_files(fb, tmp):
         if not name.is_absolute():
             cfg["atlas_file"] = str(tmp / name.name)
             moved["atlas_file"] = tmp / name.name
+    # The Scheduler CAPTURED its jobs path at construction (`self.jobs_file`), so
+    # rebinding the module global above never reached it and a suite that fired or
+    # added a job wrote jobs.json into the checkout (the pair checks caught it,
+    # 2026-10-11). Same shape as REGISTRY.tools_dir below: the reader holds a copy.
+    sched = getattr(fb, "SCHEDULER", None)
+    jobs_path = moved.get("JOBS_FILE")
+    if sched is not None and jobs_path is not None and getattr(sched, "jobs_file", None):
+        sched.jobs_file = jobs_path
+        moved["SCHEDULER.jobs_file"] = jobs_path
     return moved
 
 

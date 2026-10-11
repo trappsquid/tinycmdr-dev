@@ -9,6 +9,7 @@ that ignores strangers, and the two ways a question gets answered (a button and 
 typed line), both landing in the same slot the reporter reads.
 """
 import atexit
+import json
 import tempfile
 import importlib.util
 import os
@@ -1817,6 +1818,154 @@ finally:
     fb.CONFIG["agent"]["vision"] = _vision_saved2
     _restore_ph()
 
+
+# ---- 2026-10-11: BOTH chat lanes in ONE process (main()'s pair) -------------------
+# The pair process served Mattermost and Telegram together, and both lanes wrote the
+# SAME globals at startup: SCHEDULER.dispatcher and REPORTER were last-writer-wins, so
+# a job made in one lane reported - and asked - through the other service (a Telegram
+# chat id posted through the Mattermost API, and the reverse), and the restart notice
+# could be consumed by the wrong lane and posted to a channel that lane never had.
+# These grade that the lane a job names wins, and that nobody else's.
+class _FakeMM:
+    name = "mattermost"
+
+    def __init__(self):
+        self.posts = []
+
+    def _post(self, channel_id, root_id=None, text="", color=None, touch=True):
+        self.posts.append((channel_id, str(text)))
+        return 1
+
+
+_mm = _FakeMM()
+_tgc = FakeClient()
+_tgd = fb.TelegramDispatcher(_tgc)
+_saved_disp = dict(getattr(fb.SCHEDULER, "dispatchers", None) or {})
+_saved_one = fb.SCHEDULER.dispatcher
+fb.SCHEDULER.dispatchers = {"mattermost": _mm, "telegram": _tgd}
+fb.SCHEDULER.dispatcher = _mm          # the pair: Mattermost starts last, so it wins the old global
+
+
+def _try(fn, *a, **kw):
+    """(result, error-text) for a call a pre-fix build may not have at all.
+
+    The checks below must go RED on such a build, never die mid-suite.
+    """
+    try:
+        return fn(*a, **kw), ""
+    except Exception as e:                                      # noqa: BLE001 - reported
+        return None, "%s: %s" % (type(e).__name__, e)
+
+
+try:
+    _df = getattr(fb.SCHEDULER, "dispatcher_for", None)
+    check("a job's own lane picks its dispatcher",
+          bool(_df) and _df({"lane": "telegram"}) is _tgd
+          and _df({"lane": "mattermost"}) is _mm,
+          (bool(_df), _df({"lane": "telegram"}) if _df else None))
+    check("...and a job with no lane keeps the pre-2026-10-11 default",
+          bool(_df) and _df({}) is _mm)
+
+    # the whole job path: a Telegram job's answer lands in the Telegram chat, not in
+    # the Mattermost dispatcher the pair process left as the global
+    _saved_drive = fb.drive_run
+    fb.drive_run = lambda key, text, reporter, **kw: "done"
+    try:
+        _fired, _ferr = _try(fb.SCHEDULER._run_job, "paircheck",
+                             {"cron": "* * * * *", "task": "t",
+                              "channel_id": 7, "lane": "telegram",
+                              "next": time.time() + 60})
+    finally:
+        fb.drive_run = _saved_drive
+    check("a scheduled job reports into ITS lane, never the other one",
+          not _ferr
+          and any(m["chat"] == 7 and "paircheck" in m["text"] for m in _tgc.messages)
+          and _mm.posts == [],
+          (_ferr, [m["text"][:40] for m in _tgc.messages], _mm.posts))
+    fb.SCHEDULER.tool_action({"action": "remove", "name": "paircheck"}, {})
+
+    # a job's ask_user question: filed in ITS lane's tables and claimed by ITS lane's
+    # reader (the Telegram lane had no reader at all before this)
+    _qc = FakeClient()
+    _qd = fb.TelegramDispatcher(_qc)
+    _qrow, _qerr = _try(fb.SCHEDULER._open_in_channel, 77, "sched-qcheck", "Which one?",
+                        ["alpha", "beta"], 60, _qd)
+    _qp = fb.TelegramPoller(_qc, {"9"})
+    _qp.scheduler = _qd
+    _qp.handle(msg(77, "2", 9, mid=1))
+    check("a scheduled job's question is answered by its own lane",
+          not _qerr and _qrow is not None and _qrow["ev"].is_set()
+          and _qrow["answer"] == "beta",
+          (_qerr, _qrow))
+    check("...with the same receipt the chat lane sends",
+          any("Got it" in m["text"] and "beta" in m["text"] for m in _qc.messages),
+          [m["text"][:60] for m in _qc.messages])
+    if _qrow is not None:
+        fb.SCHEDULER.close_question("sched-qcheck", _qd)
+    fb._ASK_PENDING.pop("sched-qcheck", None)
+
+    # the confirm gate's row (pending), which MattermostDestination.ask parks on
+    _cc = FakeClient()
+    _cd = fb.TelegramDispatcher(_cc)
+    _cbox = {}
+    _cdest = fb.MattermostDestination(_cd, 88, None)
+
+    def _cask():
+        _cbox["answer"], _cbox["err"] = _try(
+            _cdest.ask, "Allow it?", ["session", "always"], 10)
+
+    _t = threading.Thread(target=_cask, daemon=True)
+    _t.start()
+    _dl = time.time() + 5
+    while time.time() < _dl and not _cc.messages:
+        time.sleep(0.02)
+    _cp = fb.TelegramPoller(_cc, {"9"})
+    _cp.scheduler = _cd
+    _cp.handle(msg(88, "1", 9, mid=1))
+    _t.join(5)
+    # The raw words, the way the chat lane's listener hands a confirm answer over:
+    # mapping "1" to the option it names is confirm's own job (it owns the list).
+    check("a scheduled job's confirm question is answered here too",
+          _cbox.get("answer") == "1", _cbox)
+    check("...and it carried the numbered options and how to answer",
+          any("1." in m["text"] and "session" in m["text"] and "/stop" in m["text"]
+              for m in _cc.messages),
+          [m["text"][:90] for m in _cc.messages])
+
+    # the restart notice names its lane: the other lane must neither consume nor post it
+    _mm.posts.clear()
+    _nerr = _try(fb._note_restart, 7, None, "me", lane="telegram")[1]
+    fb.announce_startup(_mm)
+    check("the other lane does not eat a Telegram restart notice",
+          not _nerr and _mm.posts == [] and bool(fb._state().get("announce_restart")),
+          (_nerr, _mm.posts, fb._state().get("announce_restart")))
+    fb.announce_startup(_tgd)
+    check("...the lane it names posts it, in that chat",
+          any(m["chat"] == 7 and "Back up" in m["text"] for m in _tgc.messages)
+          and not (fb._state().get("announce_restart")),
+          [m["text"][:60] for m in _tgc.messages])
+
+    # a job created from a lane records that lane
+    _add = fb.SCHEDULER.tool_action({"action": "add", "name": "lanecheck",
+                                     "cron": "0 3 * * *", "task": "t"},
+                                    {"lane": "telegram", "channel_id": 7})
+    _jj = {}
+    try:
+        # JOBS_FILE is hermetic-redirected into this suite's temp dir; the in-memory
+        # record is read too, so a redirect that moved the write cannot paper over it.
+        _jj = json.loads(Path(fb.JOBS_FILE).read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    check("a job records the lane that made it",
+          _add.startswith("OK")
+          and _jj.get("lanecheck", {}).get("lane") == "telegram"
+          and fb.SCHEDULER.jobs.get("lanecheck", {}).get("lane") == "telegram",
+          (_add[:40], _jj.get("lanecheck"), fb.SCHEDULER.jobs.get("lanecheck")))
+    fb.SCHEDULER.tool_action({"action": "remove", "name": "lanecheck"}, {})
+finally:
+    fb.SCHEDULER.dispatchers.clear()
+    fb.SCHEDULER.dispatchers.update(_saved_disp)
+    fb.SCHEDULER.dispatcher = _saved_one
 
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

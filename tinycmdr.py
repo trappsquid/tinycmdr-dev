@@ -14668,6 +14668,24 @@ def report(channel_id, text):
 REPORTER = None  # set by run_bot()
 
 
+def _job_say(dispatcher, channel_id, text):
+    """One message from a scheduled job, through the LANE that owns its channel.
+
+    report()'s REPORTER is whichever lane started last, which in the pair process
+    (both chat lanes in one process) is the other one, so a job answered into the
+    wrong service. Post through the job's own dispatcher; fall back to report() -
+    and its print() - only when the job has none (2026-10-11).
+    """
+    if dispatcher is not None and channel_id:
+        try:
+            dispatcher._post(channel_id, None, text)
+            return
+        except Exception as e:                                # noqa: BLE001 - reported
+            log.error("scheduled report through the %s lane failed: %s",
+                      getattr(dispatcher, "name", "?"), e)
+    report(channel_id, text)
+
+
 # True in the process that took this folder's single-instance lock - the bot.
 # acquire_single_instance_lock() sets it much further down; it is DECLARED here because
 # the scheduler's loop thread starts at import, long before that function exists, and a
@@ -14767,7 +14785,7 @@ class Scheduler:
                     # at load time the lane may not exist yet.
                     if job.get("channel_id"):
                         self._skipped.append((name, job["channel_id"], overdue_min,
-                                              job["next"]))
+                                              job["next"], job.get("lane")))
                         del self._skipped[:-20]
                 except Exception as e:
                     job["next"] = now + 3600
@@ -14885,6 +14903,12 @@ class Scheduler:
                     "channel_id": args.get("channel_id") or ctx.get("channel_id"),
                     "model": args.get("model") or ctx.get("model"),
                     "next": nxt}
+                _lane = str((ctx or {}).get("lane") or "")
+                if _lane:
+                    # WHICH lane the channel belongs to, recorded with it: in the pair
+                    # process the report must go back through the lane that made the
+                    # job, and that cannot be guessed from the id later (2026-10-11).
+                    record["lane"] = _lane
                 def _put(jobs):
                     jobs[name] = record
                 self._save(_put)
@@ -14920,11 +14944,12 @@ class Scheduler:
         """
         with self.lock:
             pending, self._skipped = self._skipped, []
-        for name, channel, mins, nxt in pending:
-            report(channel,
-                   f"⏰ Scheduled job '{name}' missed a run — the bot was down for it "
-                   f"(overdue ~{mins} min). Skipped, not run late. Next: "
-                   f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(nxt))}.")
+        for name, channel, mins, nxt, lane in pending:
+            _job_say(self.dispatchers.get(str(lane or "")) or self.dispatcher,
+                     channel,
+                     f"⏰ Scheduled job '{name}' missed a run — the bot was down for it "
+                     f"(overdue ~{mins} min). Skipped, not run late. Next: "
+                     f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(nxt))}.")
 
     def _loop(self):
         while not self._stop.is_set():
@@ -14988,49 +15013,55 @@ class Scheduler:
                              daemon=True).start()
         return True
 
-    def _open_in_channel(self, channel_id, key, question, options, timeout):
+    def _open_in_channel(self, channel_id, key, question, options, timeout, disp=None):
         """A scheduled run's question: post it, hand back the row, do NOT wait.
 
         The wait is ask_operator's and it is always bounded, so a job can never hang
-        on a question nobody answers.
+        on a question nobody answers. `disp` is the JOB's lane dispatcher (resolved
+        from the job's own lane), because the row must be filed where THAT lane's
+        reader looks: the pair process has two lanes with two readers, and the
+        global `self.dispatcher` belonged to whichever lane started last (2026-10-11).
         """
+        disp = disp if disp is not None else self.dispatcher
         row = {"ev": threading.Event(), "answer": None, "question": question,
                "options": list(options or []), "opened": time.time()}
         self.pending_asks[key] = row
         _ASK_PENDING[key] = row
-        if self.dispatcher is not None:
-            # The Mattermost listener is the ONE reader that turns a message in a channel
-            # into an answer, and it reads the DISPATCHER's rows - keyed by CHANNEL, mapped
-            # back to the session key through _session_channel. A job's row filed only in
-            # this dict was never claimed: the operator's reply fell through as a new order
-            # in that channel while the job's wait expired and it carried on with its OWN
-            # judgment on exactly the decision it had asked about (measured 2026-10-07:
-            # SCHEDULER.pending_asks held the row, the dispatcher's dict was empty and
-            # reply_ask answered False). File it where the answer is read - and refuse
-            # rather than take a slot a question is already waiting in, so one reply can
-            # never be handed to two runs.
-            held = self.dispatcher.pending_asks.get(channel_id)
+        if disp is not None:
+            # The lane's listener is the reader that turns a message in a channel into
+            # an answer, and it reads the DISPATCHER's rows - keyed by CHANNEL, mapped
+            # back to the session key through _session_channel. A job's row filed only
+            # in this dict was never claimed: the operator's reply fell through as a
+            # new order in that channel while the job's wait expired and it carried on
+            # with its OWN judgment on exactly the decision it had asked about
+            # (measured 2026-10-07: SCHEDULER.pending_asks held the row, the
+            # dispatcher's dict was empty and reply_ask answered False). File it where
+            # the answer is read - and refuse rather than take a slot a question is
+            # already waiting in, so one reply can never be handed to two runs.
+            held = disp.pending_asks.get(channel_id)
             if held is not None and not held["ev"].is_set():
                 self.pending_asks.pop(key, None)
                 _ASK_PENDING.pop(key, None)
                 return None
-            self.dispatcher._session_channel[key] = channel_id
-            self.dispatcher.pending_asks[channel_id] = row
-        report(channel_id, _ask_format(question, options)
-               + "\n_(Answer here — or it waits "
-               f"{max(1, int((timeout or 300) / 60))} min and carries on "
-               f"with its own judgment.)_")
+            disp._session_channel[key] = channel_id
+            disp.pending_asks[channel_id] = row
+        _job_say(disp, channel_id,
+                 _ask_format(question, options)
+                 + "\n_(Answer here — or it waits "
+                 f"{max(1, int((timeout or 300) / 60))} min and carries on "
+                 f"with its own judgment.)_")
         return row
 
-    def close_question(self, key):
+    def close_question(self, key, disp=None):
         row = self.pending_asks.pop(key, None)
-        if self.dispatcher is not None:
+        disp = disp if disp is not None else self.dispatcher
+        if disp is not None:
             # ...and the row the listener reads, or a spent row sits in that dict for ever
             # and reads as "a question is already waiting in this channel". Only OUR row
             # leaves: a chat run that asked in the same channel since owns the slot now.
-            channel = self.dispatcher._session_channel.pop(key, None)
-            if channel and self.dispatcher.pending_asks.get(channel) is row:
-                del self.dispatcher.pending_asks[channel]
+            channel = disp._session_channel.pop(key, None)
+            if channel and disp.pending_asks.get(channel) is row:
+                del disp.pending_asks[channel]
         return True
 
     def _fire(self, name, job):
@@ -15065,16 +15096,19 @@ class Scheduler:
         # Where this job reports is a DESTINATION, resolved once - a channel or
         # nowhere - and the callback list that used to be repeated here now lives
         # in drive_run, so a job cannot be wired differently from a chat turn.
+        # The dispatcher is resolved from the job's own LANE first: in the pair
+        # process one global could only ever be one lane's (2026-10-11).
+        disp = self.dispatcher_for(job)
         token = job.get("channel_id")
-        if self.dispatcher and token:
-            dest = MattermostDestination(self.dispatcher, token, None)
+        if disp and token:
+            dest = MattermostDestination(disp, token, None)
             door = {"label": "answer in this channel",
                     "opener": lambda q, opts, w, l:
-                        SCHEDULER._open_in_channel(token, key, q, opts, w),
+                        SCHEDULER._open_in_channel(token, key, q, opts, w, disp),
                     "post": lambda q, opts, w, l: True,
-                    "post_done": lambda text: report(token, text),
+                    "post_done": lambda text: _job_say(disp, token, text),
                     "close_question": lambda:
-                        SCHEDULER.close_question(key)}
+                        SCHEDULER.close_question(key, disp)}
         else:
             dest, door = NowhereDestination(), None
         rep = RunReporter(dest, key, label="⏰ Working…")
@@ -15090,7 +15124,7 @@ class Scheduler:
         finally:
             AGENT.model_overrides.pop(key, None)
         rep.finish(ok=not failed)
-        report(token, f"⏰ **{name}**\n\n{answer}")
+        _job_say(disp, token, f"⏰ **{name}**\n\n{answer}")
         # The outcome lands in jobs.json, where `list` shows it: a job that has failed
         # every night for a week must not read like a healthy one (A-2026-10-06-297).
         def _record(jobs):
@@ -15103,6 +15137,20 @@ class Scheduler:
             log.debug("could not record the job's outcome", exc_info=True)
 
     dispatcher = None   # set by run_bot so scheduled jobs can report progress
+    # ONE global dispatcher cannot carry TWO lanes: main() serves Mattermost and
+    # Telegram in one process (the pair), each lane registered itself here as the
+    # last writer, and a job created in the other lane reported (and asked) through
+    # the wrong service - a Telegram chat id posted through the Mattermost API, and
+    # vice versa (2026-10-11). Each lane registers under its name; a job carries the
+    # lane it was created in, and `dispatcher_for` resolves it. A job with no lane
+    # (an old jobs.json entry) falls back to `dispatcher`, exactly as before.
+    dispatchers = {}
+
+    def dispatcher_for(self, job):
+        lane = str((job or {}).get("lane") or "")
+        if lane and lane in self.dispatchers:
+            return self.dispatchers[lane]
+        return self.dispatcher
     # sched-<name> -> the row a job is parked on. Only a job WITH a reporting channel
     # gets a door: a job fired with none has nobody to ask and must not wait.
     pending_asks = {}
@@ -21607,6 +21655,7 @@ class Agent:
             narration_cb=None, narration_drop_cb=None, say_cb=None,
             reasoning_cb=None,
             ask_door=None, source="main", send_file_cb=None, render_ui_cb=None,
+            lane=None,
             system_prompt=None, max_seconds=None):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
@@ -21744,6 +21793,13 @@ class Agent:
                    # subtask is visible in every lane instead of silent in all of
                    # them.
                    "source": source,
+                   # WHICH CHAT LANE this run belongs to ("mattermost"/"telegram"), set
+                   # by the lane itself. A tool that records a destination for LATER - a
+                   # scheduled job's channel - needs it: with both lanes in one process
+                   # (main()'s pair), one global dispatcher cannot carry both, and a job
+                   # filed without its lane reported into the wrong service
+                   # (2026-10-11).
+                   "lane": lane,
                    "report": {"say": say_cb, "progress": progress_cb,
                               "note": interim_cb, "narration": narration_cb,
                               "drop": narration_drop_cb,
@@ -24458,7 +24514,7 @@ RUNS = RunRegistry()
 
 def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
               channel_id=None, cancel_event=None, steer_cb=None, ask_door=None,
-              source="main", watch=True, confirm=True):
+              source="main", watch=True, confirm=True, lane=None):
     """Run the agent, wired to ONE reporter. The only place these callbacks live.
 
     Lanes used to build this keyword list separately with different subsets,
@@ -24486,7 +24542,7 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
     try:
         try:
             answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
-                               channel_id=channel_id, source=source,
+                               channel_id=channel_id, source=source, lane=lane,
                                say_cb=_alive(reporter.say),
                              progress_cb=_alive(reporter.progress),
                              interim_cb=_alive(reporter.note),
@@ -33838,6 +33894,12 @@ def ProgressReporter(dispatcher, channel_id, root_id, session_key,
 class MattermostDispatcher:
     """Serializes tasks per channel, posts progress + answers in threads."""
 
+    # The lane's name, the way TelegramDispatcher carries its own: the pair process
+    # registers each lane under this name (SCHEDULER.dispatchers) and the restart
+    # notice carries it, so a message addressed to one lane is never posted through
+    # the other (2026-10-11).
+    name = "mattermost"
+
     def __init__(self):
         self.queues = {}
         self.workers = set()
@@ -33909,7 +33971,8 @@ class MattermostDispatcher:
                 except (TypeError, ValueError):
                     continue
         note = st.get("announce_restart") or {}
-        if note.get("channel_id") and note.get("at"):
+        if note.get("channel_id") and note.get("at") \
+                and str(note.get("lane") or "mattermost") == "mattermost":
             try:
                 seen.setdefault(str(note["channel_id"]), float(note["at"]))
             except (TypeError, ValueError):
@@ -34429,7 +34492,7 @@ class MattermostDispatcher:
                        "♻️ Restarting — back in a few seconds, and I'll confirm here "
                        "when I'm up. Sessions and scheduled jobs survive; config.json "
                        "and tinycmdr.py changes are picked up.")
-            perform_restart(channel_id, None, sender)
+            perform_restart(channel_id, None, sender, lane="mattermost")
             return
         if pend_live:
             # the operator's own words, not a pre-chewed boolean: RunReporter
@@ -34886,7 +34949,7 @@ class MattermostDispatcher:
                        "♻️ Restarting — back in a few seconds, and I'll confirm "
                        "here when I'm up. Sessions and scheduled jobs survive; "
                        "config.json and tinycmdr.py changes are picked up.")
-            perform_restart(channel_id, post_root, sender)
+            perform_restart(channel_id, post_root, sender, lane="mattermost")
             return  # unreachable; the process is replaced
         if low == "/model" or low.startswith("/model "):
             parts = stripped.split(maxsplit=1)
@@ -34928,7 +34991,7 @@ class MattermostDispatcher:
                     and "already up to date" not in str(_out):
                 self._post(channel_id, post_root,
                            "♻️ Restarting onto it now - back in a few seconds.")
-                perform_restart(channel_id, post_root, sender)
+                perform_restart(channel_id, post_root, sender, lane="mattermost")
                 return
             return
         if low == "/retry":
@@ -34970,7 +35033,8 @@ class MattermostDispatcher:
                                        ask_door=self.ask_door_factory(
                                            channel_id, bg_key),
                                        cancel_event=cancel,
-                                       channel_id=channel_id)
+                                       channel_id=channel_id,
+                                       lane="mattermost")
                 except Exception as e:
                     log.exception("background task failed")
                     result = f"⚠️ Background task broke: {e}"
@@ -35117,6 +35181,7 @@ class MattermostDispatcher:
                                ask_door=self.ask_door_factory(channel_id,
                                                               session_key),
                                channel_id=channel_id,
+                               lane="mattermost",
                                # the channel's own watchdog is stronger here: it also
                                # reclaims the wedged worker, so this run is not watched
                                # twice (the record still exists, for /stop and status).
@@ -35738,6 +35803,7 @@ def run_bot():
     bot.driver.options["websocket_kw_args"] = {"heartbeat": 30.0, "receive_timeout": 60.0}
     dispatcher.attach(bot.driver, bot.driver.users.get_user("me")["username"])
     SCHEDULER.dispatcher = dispatcher    # so long jobs can report progress too
+    SCHEDULER.dispatchers["mattermost"] = dispatcher   # the pair process needs both lanes
     REPORTER = lambda cid, text: dispatcher._post(cid, None, text)
     log.info("tinycmdr connected to Mattermost as @%s", dispatcher.bot_username)
     lane_up("mattermost", "connected as @%s" % dispatcher.bot_username)
@@ -37027,6 +37093,10 @@ class TelegramPoller:
 
         self.submit_command = None      # set by run_telegram
 
+        # The lane's scheduler dispatcher (set by run_telegram): where a SCHEDULED
+        # job's question rows live, so this lane's reader can claim the answer.
+        self.scheduler = None
+
         self.live = {}                  # chat_id -> TelegramDestination
 
         self.cancel = {}                # chat_id -> the run's cancel event
@@ -37408,7 +37478,7 @@ class TelegramPoller:
 
                                "config.json and tinycmdr.py changes are picked up.")
 
-            perform_restart(chat_id, None, sender)
+            perform_restart(chat_id, None, sender, lane="telegram")
 
             return True
 
@@ -37430,7 +37500,7 @@ class TelegramPoller:
 
                 self._say(chat_id, "♻️ Restarting onto it now - back in a few seconds.")
 
-                perform_restart(chat_id, None, sender)
+                perform_restart(chat_id, None, sender, lane="telegram")
 
             return True
 
@@ -37472,7 +37542,7 @@ class TelegramPoller:
 
                 result = drive_run(key, task, reporter, cancel_event=cancel,
 
-                                   channel_id=chat_id, ask_door=dest)
+                                   channel_id=chat_id, ask_door=dest, lane="telegram")
 
                 if result:
 
@@ -37513,6 +37583,64 @@ class TelegramPoller:
                          name="tg-bg-%s" % chat_id).start()
 
 
+
+    def claim_scheduler_ask(self, chat_id, text):
+
+        """A question a SCHEDULED job asked in this chat takes the reply.
+
+        Two row shapes live here, both filed by the job's own lane dispatcher: a job's
+        ask_user question (`pending_asks`, the row `_open_in_channel` posts) and the
+        confirm gate's row (`pending`, what MattermostDestination.ask parks on). The
+        Mattermost listener reads the same two tables; this lane had no reader, so a
+        job's question could only time out - the operator's answer arrived as a NEW
+        task (2026-10-11). One claim, the same receipt the chat lane sends.
+        """
+
+        disp = self.scheduler
+
+        if disp is None:
+
+            return False
+
+        row = disp.pending_asks.pop(chat_id, None)
+
+        if row is not None and row.get("ev") is not None and row["ev"].is_set():
+
+            row = None
+
+        if row is None:
+
+            # A confirm row is NOT popped here: the ASKER pops it when its wait
+            # returns (MattermostDestination.ask's own contract), and popping it for
+            # it made the question come back unanswered (caught by the pair check,
+            # 2026-10-11).
+            row = disp.pending.get(chat_id)
+
+            if row is None or (row.get("event") is not None
+
+                               and row["event"].is_set()):
+
+                return False
+
+        row["answer"] = _ask_record_choice(row, text) or text
+
+        for _key in ("ev", "event"):
+
+            _ev = row.get(_key)
+
+            if _ev is not None:
+
+                _ev.set()
+
+        log.info("telegram: answer handed to a parked scheduled job in %s", chat_id)
+
+        said = " ".join(str(row["answer"]).split())
+
+        self._say(chat_id, "✅ Got it: " + said[:160]
+
+                  + ("..." if len(said) > 160 else "") + " — carrying on.")
+
+        return True
 
     def steer(self, chat_id, text, sender=""):
 
@@ -37742,6 +37870,12 @@ class TelegramPoller:
 
             return True
 
+        # A scheduled job's question is the other open question in this chat; a slash
+        # command above still goes to its command, the way the chat lane's asks read.
+        if text and not text.startswith("/") and self.claim_scheduler_ask(chat_id, text):
+
+            return True
+
         if self.paused is not None and not text.startswith("/pause"):
 
             # The Mattermost lane's pause, word for word: new work is held here, while
@@ -37811,16 +37945,57 @@ class TelegramDispatcher:
     def __init__(self, client):
         self.c = client
         self.pending = {}          # chat_id -> ask wait state (MattermostDestination.ask)
+        # The two tables a SCHEDULED job's question is filed in - the same pair the
+        # Mattermost dispatcher keeps: `pending_asks` keyed by chat (the row the
+        # poller's reader claims) and `_session_channel` mapping the job's session key
+        # back to the chat it asked in. Without them a job's question could only time
+        # out, because nothing on this lane read the row (2026-10-11).
+        self.pending_asks = {}
+        self._session_channel = {}
 
-    def _post(self, channel_id, root_id=None, text="", color=None, touch=True):
-        """Post a new message; returns its id (the ref the reporter redraws)."""
-        del root_id, color, touch
+    def _post(self, channel_id, root_id=None, text="", color=None, touch=True,
+              draft_id=None):
+        """Post a new message; returns its id (the ref the reporter redraws).
+
+        `color` and `touch` are inert here (a Telegram post carries no attachment bar
+        and one post is not a stall-clock signal), but they are PART OF THE CONTRACT
+        `MattermostDestination` calls with - and `draft_id` is load-bearing: the run's
+        streamed text lives in one message, and the next colourless line transforms
+        that message in place instead of adding another. The Mattermost dispatcher has
+        had that branch for years; this twin never did, so a scheduled job's first
+        status line raised `TypeError: unexpected keyword argument 'draft_id'` and the
+        job never ran on this lane (found by the pair check, 2026-10-11).
+        """
+        del root_id, touch
+        if color:
+            draft_id = None      # a coloured line is not the answer replacing a draft
+        if draft_id:
+            try:
+                self.c.edit(channel_id, draft_id, tg_html(str(text)))
+                return draft_id
+            except Exception as e:                               # noqa: BLE001 - fresh post
+                log.debug("telegram: the draft could not be transformed (%s); "
+                          "posting the line fresh", e)
         try:
             sent = self.c.send(channel_id, tg_html(str(text)))
         except Exception as e:                                   # noqa: BLE001 - reported
             log.error("telegram: a scheduled post failed: %s", e)
             return None
         return (sent[0] or {}).get("message_id") if sent else None
+
+    def _ask_prompt(self, channel_id, question, options, timeout):
+        """The question as this chat sees it: the Mattermost dispatcher's twin.
+
+        `MattermostDestination.ask` renders whatever this returns, so a scheduled
+        job's confirm gate shows the same numbered options and the same window here;
+        the answer is claimed by the poller (the `pending` row this parks on), which
+        is the reader this lane was missing (2026-10-11).
+        """
+        del channel_id
+        return (_ask_format(question, options)
+                + "\n_(reply in this chat — or `/stop` to cancel this run. Waiting up "
+                f"to {max(1, int((timeout or 300) / 60))} min; if nothing arrives I "
+                "carry on with my own judgment.)_")
 
     def _edit(self, post_id, channel_id, text, color=None):
         del color
@@ -37963,6 +38138,7 @@ def run_telegram():
     # too, so a restart asked for from this chat is answered in it (A-201).
     _tg_disp = TelegramDispatcher(client)
     SCHEDULER.dispatcher = _tg_disp
+    SCHEDULER.dispatchers["telegram"] = _tg_disp   # the pair process needs both lanes
     REPORTER = lambda cid, text: _tg_disp._post(cid, None, text)
     if CONFIG["agent"].get("announce_restart", True):
         announce_startup(_tg_disp)
@@ -37973,6 +38149,8 @@ def run_telegram():
 
 
     poller = TelegramPoller(client, allowed)
+
+    poller.scheduler = _tg_disp
 
     queues, workers, locks = {}, {}, threading.Lock()
 
@@ -38104,6 +38282,8 @@ def run_telegram():
                                    # the watchdog names when it has to speak (A-200).
 
                                    channel_id=chat_id,
+
+                                   lane="telegram",
 
                                    # The lane's own destination is the ask_user door:
 
@@ -40802,22 +40982,29 @@ def _cli_sigint(signum, frame):
 
 
 
-def _note_restart(channel_id, root_id, by):
+def _note_restart(channel_id, root_id, by, lane=None):
     """Record that a restart was asked for, so the NEW process can say it is
     back in the channel that asked.
 
     A channel-less restart (CLI) must NOT stomp a notice already
     queued for a real channel — otherwise the chat only ever hears
-    'restarting…'.
+    'restarting…'. The LANE rides along: with both chat lanes in one process a
+    Telegram chat id posted through the Mattermost dispatcher (or the reverse)
+    reached nobody, so only the lane the note names posts it (2026-10-11).
     """
     def mut(st):
         prev = st.get("announce_restart") or {}
         if channel_id:
             chan, root = channel_id, (root_id or "")
+            ln = str(lane or "")
         else:
             chan, root = prev.get("channel_id"), prev.get("root_id", "")
-        st["announce_restart"] = {"channel_id": chan, "root_id": root,
-                                  "by": by or "operator", "at": time.time()}
+            ln = str(lane or prev.get("lane") or "")
+        note = {"channel_id": chan, "root_id": root,
+                "by": by or "operator", "at": time.time()}
+        if ln:
+            note["lane"] = ln
+        st["announce_restart"] = note
     try:
         _state(mut)
     except Exception as e:
@@ -40826,7 +41013,15 @@ def _note_restart(channel_id, root_id, by):
 
 def announce_startup(dispatcher):
     """Say 'back up' after a restart. Without this the only thing a channel ever
-    hears is 'restarting…' — it never learns the bot returned."""
+    hears is 'restarting…' — it never learns the bot returned.
+
+    Only the lane the note was written for posts it, and only it consumes the
+    one-shot note: in the pair process the OTHER lane used to race here, pop the
+    note and post a channel id its own service has never heard of, so the
+    operator - and the lane - heard nothing (2026-10-11). A note with no lane
+    (web/CLI restart, or one written before lanes were recorded) may be posted
+    by whichever lane gets here first, as before.
+    """
     try:
         st = _state()
     except Exception as e:
@@ -40834,6 +41029,11 @@ def announce_startup(dispatcher):
         return
     note = st.get("announce_restart") or {}
     if not note:
+        return
+    want = str(getattr(dispatcher, "name", "") or "")
+    if note.get("lane") and want and str(note["lane"]) != want:
+        log.info("the restart notice is for the %s lane; the %s lane keeps serving",
+                 note["lane"], want)
         return
     try:
         _state(lambda s: s.pop("announce_restart", None))   # one-shot
@@ -40973,10 +41173,10 @@ def _write_restart_marker(by):
         log.debug("restart marker not written: %s", e)
 
 
-def perform_restart(channel_id=None, root_id=None, by="operator"):
+def perform_restart(channel_id=None, root_id=None, by="operator", lane=None):
     """Restart the bot, whoever owns its lifecycle. Does not return."""
     owner = restart_owner()
-    _note_restart(channel_id, root_id, by)
+    _note_restart(channel_id, root_id, by, lane=lane)
     log.info("restarting (requested by %s; %s starts it again)", by, owner)
     time.sleep(1.0)          # let the reply post / the HTTP response flush
     time.sleep(0.5)          # let the log queue drain
