@@ -5,7 +5,12 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.4] - 2026-10-11
+
+### Fixed
+- **The page is probed before any door names a URL:** `--web` beside a running instance hands over the running page's link (or names the lane record's reason and the restart door), and `tinycmdr web` and `doctor` probe `/api/health` before printing - doctor reports a page that is on but not answering while the instance runs (tests/test_webui.py, tests/test_lane_surface.py).
+- **The setup wizard offers the restart its own answers need:** a changed page bind or token is applied to the running service by offering the restart right there, instead of saving answers the process will not read (tests/test_model_surface.py).
+- **Every installer proves the page and names the box's own port:** after starting the service each installer polls `/api/health` and prints the page's real address (the box's LAN address included), a redo reads the config's kept port before printing or opening the firewall - the rule used to be built for the flag default while the box served another port - and the Windows elevated run reports its outcome from a log instead of a silent window (tests/test_installer_unix.py, tests/test_installer_windows.py, maintenance/smoke-install.py).
 
 ## [1.1.3] - 2026-10-10
 

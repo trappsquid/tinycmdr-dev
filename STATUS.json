@@ -2721,6 +2721,17 @@
       },
       "detail": "`tinycmdr setup` answered \"reachable from other machines?\" with advice only: nothing was opened, nothing was checked, and where the probes found no firewall it said nothing at all; the link it printed read the config on disk, so answering LAN still showed a loopback link. The wizard now completes the answer the way the installers do - the run itself with root or an elevated shell, one sudo or UAC offer at a terminal, the exact command otherwise - judges the result against the tool's own state (Defender's rule, ALF's app list, ufw's status, firewalld's query-port) and prints it - opened, nothing to open, or still closed with the command - and the link and summary name the address the answer chose.",
       "gate": "RED on the pre-fix build: 12 checks in tests/test_verbs.py and 2 in tests/test_model_surface.py (_firewall_complete did not exist, the summary printed http://0.0.0.0:8790, and no firewall state was printed); green on the batch"
+    },
+    {
+      "id": "page-probed-before-named",
+      "title": "every door proves the page before it hands out a URL",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "52f4c37",
+        "expect": "untagged"
+      },
+      "detail": "`tinycmdr --web` beside a running instance refused with \"already running\" without ever looking at the page, `tinycmdr web` and doctor printed or implied a URL they had not probed, `setup` saved answers a running service would never read, and every installer finished on a page URL it had not checked while the firewall offer built its rule from the flag default instead of the port the config keeps; the doors now probe /api/health first, name the port and address the box actually serves, read a redo's kept port before printing or firewalling, and the Windows elevated firewall run reports its outcome from a log.",
+      "gate": "RED on the pre-fix build: the dark-page verb and reason checks in tests/test_webui.py, the --web announce/refuse checks in tests/test_lane_surface.py, the restart offer in tests/test_model_surface.py, and 6 + 8 checks across the two installer suites run in a worktree at the pre-fix revision; green on the batch"
     }
   ]
 }
