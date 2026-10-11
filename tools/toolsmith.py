@@ -221,8 +221,13 @@ def _load_check(target, ctx):
         # An argv LIST, never a shell string: a quoted interpreter path with spaces is
         # mangled by the platform's parser (measured on Windows: PowerShell answered
         # "Unexpected token 'C:\Users\...'" and the check reported no verdict at all).
+        # The probe imports the whole build, and importing it MATERIALIZES host files
+        # (soul.md, theme.toml from their shipped seeds) into the tree beside it - right
+        # for a real start, and exactly the dirt a check against a fresh checkout must
+        # not create (A-2026-10-11-05); the guard the suites use rides in explicitly.
         proc = subprocess.run([sys.executable, tmp], capture_output=True, text=True,
-                              timeout=120)
+                              timeout=120,
+                              env={**os.environ, "TINYCMDR_NO_MATERIALIZE": "1"})
         out = (proc.stdout or "") + (proc.stderr or "")
     except Exception as exc:
         return "check failed to run: %s" % exc

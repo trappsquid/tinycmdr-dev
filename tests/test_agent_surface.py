@@ -122,6 +122,40 @@ write verifier both use, so "OK" is the loader's verdict and not this tool's opi
     out = run(action="check", name="syntaxbad")
     check("check reports a file that does not parse", "REFUSED" in out or "parse" in out, out[:200])
 
+    # ---- the check probe must not materialize host state into the tree it checks -------
+    # `check` answers with the LOADER's verdict, and its probe imports the whole build -
+    # which materializes soul.md/theme.toml from the shipped seeds when they are missing.
+    # A real bot (no suite guard in its env) checking a tool in a fresh checkout wrote the
+    # host's persona and theme into it (A-2026-10-11-05). The isolated checkout below
+    # carries the seeds so the damage would show; the env drops the suites' guard on
+    # purpose, which is the shape a real invocation has.
+    import subprocess as _subprocess
+    iso = Path(tempfile.mkdtemp(prefix="fbtoolsmith-iso-"))
+    try:
+        shutil.copy2(fb.__file__, iso / "tinycmdr.py")
+        (iso / "tools").mkdir()
+        shutil.copy2(Path(fb.REGISTRY.tools_dir) / "toolsmith.py",
+                     iso / "tools" / "toolsmith.py")
+        for _seed in ("soul.example.md", "theme.default.toml"):
+            if (BASE / _seed).exists():
+                shutil.copy2(BASE / _seed, iso / _seed)
+        (iso / "tools" / "zz_probe.py").write_text(
+            "NAME = 'zz_probe'\nDESCRIPTION = 'x'\nSCHEMA = {'type': 'object', "
+            "'properties': {}}\nMUTATES = False\ndef run(args, ctx):\n    return 'ok'\n",
+            encoding="utf-8")
+        _env = {k: v for k, v in os.environ.items() if k != "TINYCMDR_NO_MATERIALIZE"}
+        _proc = _subprocess.run(
+            [sys.executable, str(iso / "tools" / "toolsmith.py"),
+             "action=check", "name=zz_probe"],
+            capture_output=True, text=True, timeout=180, cwd=str(iso), env=_env)
+        check("the check verdict comes back", "OK: the loader registers zz_probe" in _proc.stdout,
+              (_proc.stdout + _proc.stderr)[:250])
+        check("...and the probe wrote no host state into the tree it checked",
+              not (iso / "soul.md").exists() and not (iso / "theme.toml").exists(),
+              sorted(p.name for p in iso.iterdir()))
+    finally:
+        shutil.rmtree(iso, ignore_errors=True)
+
     # ---- importing an existing script (the portable shape) -----------------------------
     script = work / "greet.sh"
     script.write_text("echo hi\n", encoding="utf-8")
