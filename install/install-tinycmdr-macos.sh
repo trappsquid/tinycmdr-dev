@@ -1323,7 +1323,14 @@ if [ "$WEB_ON" = 1 ]; then
         WEB_HOST="$WEB_HOST_ARG"; WEB_HOST_GIVEN=1
     elif [ "$ASK" = 1 ]; then
         WEB_HOST_GIVEN=1
-        if ask_yes "Should the page be reachable from other machines on your network?" n; then
+        # The default answer is the bind the config already has: pressing Enter
+        # through a redo must not quietly turn a LAN page back into a loopback one.
+        _cur_host="$("$VPY" -c 'import json,sys
+d=json.load(open(sys.argv[1],encoding="utf-8"))
+print(((d.get("web") or {}).get("host") or ""))' "$INSTALL_DIR/config.json" 2>/dev/null || true)"
+        _dflt=n
+        if [ "$_cur_host" = "0.0.0.0" ]; then _dflt=y; fi
+        if ask_yes "Should the page be reachable from other machines on your network?" "$_dflt"; then
             WEB_HOST="0.0.0.0"
         fi
     fi
@@ -1339,18 +1346,6 @@ if [ "$WEB_ON" = 1 ]; then
         WEB_TOKEN_ARG="$(ask_secret "Web UI token (Enter = keep this host's own, or mint one)")"
     fi
     if [ "$WEB_HOST" = "0.0.0.0" ]; then
-    # The bind needs no root; the FIREWALL hole does. A launchd agent cannot answer
-    # macOS's "allow incoming connections?" prompt, so say the one command that can.
-    _alf="$(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null || true)"
-    case "$_alf" in
-        *enabled*)
-            warn "the macOS firewall is ON. If the page does not answer from another"
-            warn "machine, allow the interpreter once (it asks for your password):"
-            warn "  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add $INSTALL_DIR/venv/bin/python"
-            warn "  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp $INSTALL_DIR/venv/bin/python"
-            warn "or skip the firewall entirely with a tunnel:"
-            warn "  ssh -N -L $WEB_PORT:127.0.0.1:$WEB_PORT <user>@<this-box>" ;;
-    esac
         info "page         : 0.0.0.0:$WEB_PORT - any machine on your network can open it;"
         info "               the token travels in cleartext there, so trust the network"
     else
@@ -1834,6 +1829,37 @@ if [ "$SERVE" = 1 ]; then
     if [ "$WEB_ON" = 1 ]; then
         if [ "$WEB_HOST" = "0.0.0.0" ]; then
             info "page        : http://<this-host>:$WEB_PORT - any machine on your network; token in .env"
+            # The bind needs no root; the FIREWALL hole does. ALF refuses inbound for an
+            # app nobody allowed, and a launchd agent cannot answer its prompt - so the
+            # LAN answer COMPLETES here: run it as root, offer it at a terminal, and say
+            # exactly what is left otherwise.
+            _alf="$(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null || true)"
+            case "$_alf" in
+                *enabled*)
+                    _fw_py="$INSTALL_DIR/venv/bin/python"
+                    _fw_ok=0
+                    if [ "$(id -u)" = 0 ]; then
+                        if /usr/libexec/ApplicationFirewall/socketfilterfw --add "$_fw_py" >/dev/null 2>&1 \
+                           && /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$_fw_py" >/dev/null 2>&1; then
+                            _fw_ok=1
+                        fi
+                    elif [ "$ASK" = 1 ] && ask_yes "Open the macOS firewall for the page now (asks for your password)?" n; then
+                        if sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$_fw_py" >/dev/null 2>&1 \
+                           && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp "$_fw_py" >/dev/null 2>&1; then
+                            _fw_ok=1
+                        fi
+                    fi
+                    if [ "$_fw_ok" = 1 ]; then
+                        info "firewall    : allowed $INSTALL_DIR/venv/bin/python (the firewall is ON)"
+                    else
+                        warn "the macOS firewall is ON: if the page does not answer from"
+                        warn "another machine, allow the interpreter once:"
+                        warn "  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add $_fw_py"
+                        warn "  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp $_fw_py"
+                        warn "or skip the firewall with a tunnel:"
+                        warn "  ssh -N -L $WEB_PORT:127.0.0.1:$WEB_PORT <user>@<this-box>"
+                    fi ;;
+            esac
         else
             info "page        : http://127.0.0.1:$WEB_PORT - token in .env (tinycmdr web prints the link)"
         fi

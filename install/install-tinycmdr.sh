@@ -1426,7 +1426,14 @@ if [ "$WEB_ON" = 1 ]; then
         WEB_HOST="$WEB_HOST_ARG"; WEB_HOST_GIVEN=1
     elif [ "$ASK_Q" = 1 ]; then
         WEB_HOST_GIVEN=1
-        if ask_yes "Should the page be reachable from other machines on your network?" n; then
+        # The default answer is the bind the config already has: pressing Enter
+        # through a redo must not quietly turn a LAN page back into a loopback one.
+        _cur_host="$("$PY" -c 'import json,sys
+d=json.load(open(sys.argv[1],encoding="utf-8"))
+print(((d.get("web") or {}).get("host") or ""))' "$INSTALL_DIR/config.json" 2>/dev/null || true)"
+        _dflt=n
+        if [ "$_cur_host" = "0.0.0.0" ]; then _dflt=y; fi
+        if ask_yes "Should the page be reachable from other machines on your network?" "$_dflt"; then
             WEB_HOST="0.0.0.0"
         fi
     fi
@@ -1443,16 +1450,6 @@ if [ "$WEB_ON" = 1 ]; then
         WEB_TOKEN_ARG="$(ask_secret "Web UI token (Enter = keep this host's own, or mint one)")"
     fi
     if [ "$WEB_HOST" = "0.0.0.0" ]; then
-    # The bind needs no root; the FIREWALL hole does. ufw/firewalld are common on servers
-    # and both refuse inbound by default, so name the command that opens it.
-    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
-        warn "ufw is active: allow the page once (needs root):"
-        warn "  sudo ufw allow ${WEB_PORT}/tcp"
-    fi
-    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-        warn "firewalld is running: open the port with"
-        warn "  sudo firewall-cmd --permanent --add-port=${WEB_PORT}/tcp && sudo firewall-cmd --reload"
-    fi
         info "page         : 0.0.0.0:$WEB_PORT - any machine on your network can open it;"
         info "               the token travels in cleartext there, so trust the network"
     else
@@ -2046,4 +2043,46 @@ nothing runs as a service).
   verify   : bash $INSTALL_DIR/install/install-tinycmdr.sh --verify-only --mode $INSTALL_MODE
   remove   : ${SUDO_IF_ROOT}bash $INSTALL_DIR/install/install-tinycmdr.sh --uninstall --mode $INSTALL_MODE
 EOF
+fi
+
+# The bind needs no root; the FIREWALL hole does. ufw/firewalld refuse inbound by
+# default, so the LAN answer COMPLETES here: run the rule when this run is root and
+# say exactly what is left when it is not. The non-root detection cannot ask ufw
+# itself (it refuses status without root), so ufw.conf's ENABLED line stands in.
+if [ "$WEB_ON" = 1 ] && [ "$WEB_HOST" = "0.0.0.0" ]; then
+    _ufw_active=0
+    if command -v ufw >/dev/null 2>&1; then
+        if ufw status 2>/dev/null | grep -qi '^Status: active'; then _ufw_active=1
+        elif grep -qi '^ENABLED=yes' /etc/ufw/ufw.conf 2>/dev/null; then _ufw_active=1; fi
+    fi
+    if [ "$_ufw_active" = 1 ]; then
+        if [ "$(id -u)" = 0 ]; then
+            if ufw allow "${WEB_PORT}/tcp" >/dev/null 2>&1; then
+                info "firewall    : ufw allowed ${WEB_PORT}/tcp"
+            else
+                warn "ufw refused the rule; open the port by hand:  sudo ufw allow ${WEB_PORT}/tcp"
+            fi
+        else
+            warn "ufw is active - open the port once:  sudo ufw allow ${WEB_PORT}/tcp"
+        fi
+    fi
+    _fwd_active=0
+    if command -v firewall-cmd >/dev/null 2>&1; then
+        if firewall-cmd --state >/dev/null 2>&1; then _fwd_active=1
+        elif systemctl is-active --quiet firewalld 2>/dev/null; then _fwd_active=1; fi
+    fi
+    if [ "$_fwd_active" = 1 ]; then
+        if [ "$(id -u)" = 0 ]; then
+            if firewall-cmd --permanent --add-port="${WEB_PORT}/tcp" >/dev/null 2>&1 \
+               && firewall-cmd --reload >/dev/null 2>&1; then
+                info "firewall    : firewalld opened ${WEB_PORT}/tcp"
+            else
+                warn "firewalld refused; open it by hand:"
+                warn "  sudo firewall-cmd --permanent --add-port=${WEB_PORT}/tcp && sudo firewall-cmd --reload"
+            fi
+        else
+            warn "firewalld is running - open the port with"
+            warn "  sudo firewall-cmd --permanent --add-port=${WEB_PORT}/tcp && sudo firewall-cmd --reload"
+        fi
+    fi
 fi

@@ -709,6 +709,28 @@ def main():
           "$cfg.telegram.allowed_users" in ps1 and "-not $TelegramIds" in ps1,
           "the token-with-no-id guard would refuse a valid kept install")
 
+    print("\n== the page's LAN answer completes: the firewall step, and the kept bind ==")
+    check("the reachability question runs only when there is a terminal",
+          "if (-not $WebHost -and $Ask) {" in ps1,
+          "a scripted run answered its default and rewrote a kept 0.0.0.0 bind")
+    check("...and its default answer is the bind the config already has",
+          '$curHost = [string](Get-Content (Join-Path $InstallDir "config.json") -Raw |' in ps1
+          and '($curHost -eq "0.0.0.0")' in ps1)
+    check("one rule text serves the run, the offer and still-to-do",
+          ps1.count("New-NetFirewallRule -DisplayName 'tinycmdr page'") == 1
+          and "function Get-TinycmdrFirewallCommand" in ps1)
+    check("an elevated shell runs the rule itself",
+          between(ps1, "} elseif ($IsAdmin) {", "} elseif ($Ask -and (Ask-Yes").count(
+              'New-NetFirewallRule -DisplayName "tinycmdr page"') == 1)
+    check("a terminal is offered one UAC prompt (default no), named on the command line",
+          "(Ask-Yes \"Open the port now (one Administrator prompt)?\" $false)" in ps1
+          and "-Verb RunAs -Wait" in ps1
+          and '-ArgumentList @("-NoProfile", "-Command", (Get-TinycmdrFirewallCommand -Port $WebPort))' in ps1)
+    check("still-to-do carries the exact command when the port stayed closed",
+          'if (-not $NoWeb -and $WebHost -eq "0.0.0.0" -and -not (Test-TinycmdrFirewallRule)) {' in ps1
+          and '$todo += "firewall' in ps1
+          and ' + (Get-TinycmdrFirewallCommand -Port $WebPort)' in ps1)
+
     print("\n== the updater path: exit codes, TLS, the release base, path boundaries ==")
     update_ps1 = source("update.ps1")
     restart_ps1 = source("maintenance/restart-tinycmdr.ps1")

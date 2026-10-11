@@ -1263,6 +1263,102 @@ def case_macos_cloud_key(sb, pkg, bindir, user, py):
         srv.server_close()
 
 
+def case_lan_reachability(sb, pkg, bindir, user, py):
+    """The page's LAN answer COMPLETES: a wizard re-run keeps a kept 0.0.0.0 bind
+    (all-Enter means the question's default is the bind the config has), and the
+    firewall step sits in the closing summary - the allow commands on a Mac whose
+    firewall is ON, and the ufw line where the reader ends up on Linux. The elevated
+    branches (root's ufw/firewalld run, Administrator's firewall rule) are pinned by
+    shape at the end of main(): a suite cannot become root without lying to the
+    installer about who is running it."""
+    log = sb / "logs" / "lan.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+
+    def stage_kept_install(path):
+        fake_venv(path, py)
+        (path / "config.json").write_text(json.dumps({
+            "web": {"enabled": True, "host": "0.0.0.0", "port": 8790},
+            "agent": {"bot_name": "lan"},
+            "llm": {"base_url": "http://127.0.0.1:1/v1", "model": "main",
+                    "api_key": "none"},
+        }, indent=1), encoding="utf-8")
+
+    # -- Linux: the wizard re-run keeps the bind, and a live ufw is acted on ---------
+    lanbin = sb / "lan-bin"
+    shutil.copytree(bindir, lanbin)
+    ufw_log = sb / "ufw-calls"
+    (lanbin / "ufw").write_text(
+        '#!/bin/sh\ncase "$*" in\n'
+        '  status*) echo "Status: active" ;;\n'
+        '  allow*) echo "$*" >> "' + str(ufw_log) + '" ;;\n'
+        'esac\nexit 0\n', encoding="utf-8")
+    (lanbin / "ufw").chmod(0o755)
+    lin = sb / "lan-lin"
+    stage_kept_install(lin)
+    lin_env = sandbox_home_env(sb, lanbin, log, user,
+                               {"TINYCMDR_PYTHON": py, "TINYCMDR_ASK": "1"})
+    got = subprocess.run([str(x) for x in (
+        "bash", pkg / "install" / "install-tinycmdr.sh", "--mode", "user",
+        "--no-deps", "--no-sudoers", "--no-start", "--mattermost-url", "chat.invalid",
+        "--token", "0123456789abcdef0123456789abcdef", "--install-dir", lin)],
+        env=lin_env, cwd=str(pkg), text=True, capture_output=True,
+        input="\n" * 8, timeout=300)
+    out = got.stdout + got.stderr
+    check("the Linux wizard re-run exits 0", got.returncode == 0,
+          f"rc={got.returncode}; {out[-300:]}")
+    conf = json.loads((lin / "config.json").read_text(encoding="utf-8"))
+    check("all-Enter keeps the kept 0.0.0.0 page bind on Linux",
+          (conf.get("web") or {}).get("host") == "0.0.0.0",
+          f"web.host is {(conf.get('web') or {}).get('host')!r}")
+    if os.geteuid() == 0:
+        # The gate's container runs as root: the run OPENED the port itself.
+        check("root: a live ufw is opened by the run (the stub was called)",
+              ufw_log.exists() and "allow 8790/tcp" in ufw_log.read_text(encoding="utf-8"),
+              "ufw calls: " + (ufw_log.read_text(encoding="utf-8")
+                               if ufw_log.exists() else "(none)"))
+    else:
+        _sum = out.find("tinycmdr is installed.")
+        check("a live ufw is named where the reader ends up, with the exact command",
+              _sum != -1 and _sum < out.find("ufw is active")
+              and "sudo ufw allow 8790/tcp" in out[_sum:], out[-260:])
+
+    # -- macOS: same keep, and the firewall allow sits in the closing summary --------
+    on_mac = os.uname().sysname == "Darwin"
+    mac = sb / "lan-mac"
+    stage_kept_install(mac)
+    mac_env = sandbox_home_env(sb, bindir, log, user,
+                               {"TINYCMDR_PYTHON": py, "TINYCMDR_ASK": "1"})
+    mac_args = ["bash", pkg / "install" / "install-tinycmdr-macos.sh", "--no-start",
+                "--no-path", "--python", py, "--label", "com.tinycmdr.lan",
+                "--install-dir", mac]
+    if not on_mac:
+        mac_args.insert(3, "--no-launchd")
+    got = subprocess.run([str(x) for x in mac_args], env=mac_env, cwd=str(pkg),
+                         text=True, capture_output=True, input="\n" * 8, timeout=300)
+    out = got.stdout + got.stderr
+    check("the macOS wizard re-run exits 0", got.returncode == 0,
+          f"rc={got.returncode}; {out[-300:]}")
+    conf = json.loads((mac / "config.json").read_text(encoding="utf-8"))
+    check("all-Enter keeps the kept 0.0.0.0 page bind on macOS",
+          (conf.get("web") or {}).get("host") == "0.0.0.0",
+          f"web.host is {(conf.get('web') or {}).get('host')!r}")
+    if on_mac:
+        st = subprocess.run(["/usr/libexec/ApplicationFirewall/socketfilterfw",
+                             "--getglobalstate"], capture_output=True, text=True)
+        if "enabled" in (st.stdout + st.stderr).lower() and os.geteuid() != 0:
+            tail = out[out.rfind("=== done"):]
+            check("the macOS firewall allow is offered in the closing summary",
+                  "Open the macOS firewall for the page now" in tail, tail[-260:])
+            check("...and the closing commands name the install's own interpreter",
+                  "socketfilterfw --add" in tail and "--unblockapp" in tail
+                  and "venv/bin/python" in tail, tail[-260:])
+        else:
+            print("SKIP the macOS firewall-text half: firewall off, root, or not a Mac")
+    else:
+        print("SKIP the macOS firewall-text half: not a Mac")
+    return lin
+
+
 def main():
     if os.name == "nt":
         # This suite drives the UNIX installer under bash and inspects systemd semantics and
@@ -1312,6 +1408,7 @@ def main():
         case_installer_token_and_allowlist_default(sb, pkg, bindir, user, py)
         case_linux_without_systemd(sb, pkg, bindir, user, py)
         case_web_port_validation(sb, pkg, bindir, user, py)
+        case_lan_reachability(sb, pkg, bindir, user, py)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
     print("\n== a re-run over a configured install keeps it, and asks once ==")
@@ -1338,6 +1435,23 @@ def main():
               "SEARCH_SPECS" in _src and '_search["providers"] = _rows' in _src)
         check("%s: a typed key goes to .env, and only its NAME reaches config" % _label,
               "SEARCH_ENV_LINES" in _src and "TINYCMDR_SEARCH${_sn}_API_KEY" in _src)
+    print("\n== the LAN answer completes: the elevated branches, pinned by shape ==")
+    _lmac = (BASE / "install" / "install-tinycmdr-macos.sh").read_text(encoding="utf-8")
+    _llin = (BASE / "install" / "install-tinycmdr.sh").read_text(encoding="utf-8")
+    for _label, _src in (("macOS", _lmac), ("Linux", _llin)):
+        check("%s: the reachability question defaults to the bind the config has"
+              % _label,
+              "_cur_host" in _src and "_dflt=y" in _src
+              and 'get("host") or ""' in _src,
+              "a redo can still silently reset a kept 0.0.0.0 bind")
+    check("macOS: a root run opens the allow itself",
+          'if [ "$(id -u)" = 0 ]; then' in _lmac
+          and 'socketfilterfw --add "$_fw_py"' in _lmac)
+    check("Linux: a root run opens ufw and firewalld itself",
+          'ufw allow "${WEB_PORT}/tcp"' in _llin
+          and 'firewall-cmd --permanent --add-port="${WEB_PORT}/tcp"' in _llin)
+    check("Linux: a non-root run can still SEE an active ufw (the conf fallback)",
+          "/etc/ufw/ufw.conf" in _llin and "ENABLED=yes" in _llin)
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed:")

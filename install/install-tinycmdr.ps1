@@ -542,6 +542,21 @@ function Remove-TinycmdrFolder {
 }
 
 function Say  ($m) { Write-Host "  $m" }
+function Test-TinycmdrFirewallRule {
+    # Is the page's inbound rule already there? READING firewall rules needs no
+    # Administrator; a box that refuses even the read answers $false, never a crash.
+    try { return [bool](Get-NetFirewallRule -DisplayName "tinycmdr page" -ErrorAction Stop) }
+    catch { return $false }
+}
+function Get-TinycmdrFirewallCommand {
+    param([int] $Port)
+    # ONE command text: what the elevated child runs, what a declined offer prints and
+    # what "still to do" carries cannot drift apart then. Opening the port is a
+    # system-level change, and Windows requires Administrator for it - an unelevated
+    # installer can only ask for the one UAC prompt or hand the line over.
+    return "Remove-NetFirewallRule -DisplayName 'tinycmdr page' -ErrorAction SilentlyContinue; " +
+           "New-NetFirewallRule -DisplayName 'tinycmdr page' -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow"
+}
 function Head ($m) { Write-Host "`n== $m" -ForegroundColor Cyan }
 function Fail ($m) {
     Write-Host "`nFAILED: $m" -ForegroundColor Red
@@ -1337,8 +1352,17 @@ if ($Ask -and -not $KeepConn) {
             Write-Warning "  re-run elevated, or pass -WebPort 8790 (or any port above 1024), if you really need $WebPort."
             $WebPort = 8790
         }
-        if (-not $WebHost) {
-            if (Ask-Yes "Should the page be reachable from other machines on your network?" $false) {
+        if (-not $WebHost -and $Ask) {
+            # Asked only when there is a terminal. This question used to run even on a
+            # scripted run: stdin at EOF answered its "n" default, and a redo silently
+            # rewrote a kept 0.0.0.0 bind back to loopback. The default answer is the
+            # bind the config already has, so Enter-through keeps yesterdays choice.
+            $curHost = ""
+            try {
+                $curHost = [string](Get-Content (Join-Path $InstallDir "config.json") -Raw |
+                                    ConvertFrom-Json).web.host
+            } catch { }
+            if (Ask-Yes "Should the page be reachable from other machines on your network?" ($curHost -eq "0.0.0.0")) {
                 $WebHost = "0.0.0.0"
             } else {
                 $WebHost = "127.0.0.1"
@@ -1356,13 +1380,43 @@ if ($Ask -and -not $KeepConn) {
         if ($WebHost -eq "0.0.0.0") {
             Write-Host "  page        : 0.0.0.0`:$WebPort - any machine on your network can open it"
             Write-Host "                the token travels in cleartext there, so trust the network"
-            # The bind needs no Administrator; the FIREWALL hole does. Windows Defender
-            # Firewall refuses inbound by default, so name the command that opens it.
-            Write-Host "  firewall    : if the page is unreachable, open the port once in an"
-            Write-Host "                ELEVATED PowerShell:"
-            Write-Host "                  New-NetFirewallRule -DisplayName 'tinycmdr page' -Direction Inbound -Protocol TCP -LocalPort $WebPort -Action Allow"
-            Write-Host "                or skip the firewall with a tunnel:"
-            Write-Host "                  ssh -N -L ${WebPort}:127.0.0.1:${WebPort} <user>@<this-box>"
+            # The bind needs no Administrator; the FIREWALL hole does, and Defender
+            # Firewall refuses inbound by default - so the LAN answer COMPLETES here
+            # instead of leaving the port for "if the page is unreachable": run the
+            # rule when this shell already has the rights, offer the one UAC prompt
+            # when it does not, and carry the exact command in "still to do" when
+            # neither happened.
+            if (Test-TinycmdrFirewallRule) {
+                Write-Host "  firewall    : port $WebPort open already (rule 'tinycmdr page')"
+            } elseif ($IsAdmin) {
+                try {
+                    Remove-NetFirewallRule -DisplayName "tinycmdr page" -ErrorAction SilentlyContinue
+                    New-NetFirewallRule -DisplayName "tinycmdr page" -Direction Inbound -Protocol TCP -LocalPort $WebPort -Action Allow | Out-Null
+                } catch { }
+                if (Test-TinycmdrFirewallRule) {
+                    Write-Host "  firewall    : opened port $WebPort (rule 'tinycmdr page')"
+                } else {
+                    Write-Warning "could not open port $WebPort; run in an elevated PowerShell:"
+                    Write-Host "                  $(Get-TinycmdrFirewallCommand -Port $WebPort)"
+                }
+            } elseif ($Ask -and (Ask-Yes "Open the port now (one Administrator prompt)?" $false)) {
+                try {
+                    Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait `
+                        -ArgumentList @("-NoProfile", "-Command", (Get-TinycmdrFirewallCommand -Port $WebPort)) | Out-Null
+                } catch { }        # a cancelled UAC prompt is an answer, not an error
+                if (Test-TinycmdrFirewallRule) {
+                    Write-Host "  firewall    : opened port $WebPort (rule 'tinycmdr page')"
+                } else {
+                    Write-Warning "the port is still closed; run in an elevated PowerShell:"
+                    Write-Host "                  $(Get-TinycmdrFirewallCommand -Port $WebPort)"
+                }
+            } else {
+                Write-Host "  firewall    : this shell cannot open the port (no Administrator);"
+                Write-Host "                one elevated PowerShell:"
+                Write-Host "                  $(Get-TinycmdrFirewallCommand -Port $WebPort)"
+                Write-Host "                or skip the firewall with a tunnel:"
+                Write-Host "                  ssh -N -L ${WebPort}:127.0.0.1:${WebPort} <user>@<this-box>"
+            }
         } else {
             Write-Host "  page        : $WebHost`:$WebPort - this machine only"
         }
@@ -2257,6 +2311,9 @@ if ($TgLane -and -not $ChatLane) {
     Say "Add a Telegram DM whenever you want one:"
     Say "  install-tinycmdr.cmd -Force -TelegramToken <token> -TelegramIds <your numeric id>"
     Say ""
+}
+if (-not $NoWeb -and $WebHost -eq "0.0.0.0" -and -not (Test-TinycmdrFirewallRule)) {
+    $todo += "firewall            -> one elevated PowerShell:  " + (Get-TinycmdrFirewallCommand -Port $WebPort)
 }
 if (-not $MattermostToken) { $todo += "optional: Mattermost bot token -> $envPath  (TINYCMDR_MM_TOKEN=...)" }
 if (-not $AllowedUser)     { $todo += "optional: allowed_users -> $cfgPath  (your Mattermost user id)" }

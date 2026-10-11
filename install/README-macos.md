@@ -69,7 +69,12 @@ answer `Install now?`:
     Install now? [Y/n]
 
 After `Install now?` it asks about the page once: this machine only or reachable from
-your network, and the access token (Enter keeps the host's own or mints one).
+your network, and the access token (Enter keeps the host's own or mints one). The
+question's default is the bind the config already has, so pressing Enter through a
+re-run never turns a LAN page back into a loopback one. A "reachable" answer finishes
+in the closing summary: if the macOS firewall is on, the installer offers to allow the
+interpreter once (it asks for your password), and when that cannot happen it prints the
+two `socketfilterfw` commands to run by hand.
 
 Press Enter to take the value in brackets. Skipping the token installs the files with
 **no chat account**: a session (`--cli`) and a one-shot (`--once`) work right away, but
