@@ -2776,6 +2776,17 @@
       },
       "detail": "`update.sh`'s fetch carried neither a connect timeout nor retries while `install.sh` has both, so a black-holed route hung `tinycmdr update` with no clock; both fetches carry the same bounds now (wget's own timeout and try count on the fallback). And when the installed VERSION could not be read, the never-downgrade guard skipped itself silently - on the one tree the updater exists to repair; it compares as 0.0.0 and says so, in `update.sh` and its `.ps1` twin.",
       "gate": "RED on the pre-fix build: the fetch flags observed through a PATH wrapper and the damaged-VERSION message in tests/test_update_script.py against the pre-fix script; the `.ps1` twin graded in tests/test_installer_windows.py; green on the batch"
+    },
+    {
+      "id": "quoted-command-runs-on-windows",
+      "title": "a command whose interpreter path is quoted runs on Windows",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "09e0004",
+        "expect": "untagged"
+      },
+      "detail": "PowerShell reads a line that STARTS with a quoted string as an expression - the path became a string and the token after it an operator - so `\"C:\\...\\python.exe\" script.py` never ran and the Windows shell answered exit 1 with a ParserError. The harness now puts PowerShell's call operator in front of exactly that shape and leaves every other line byte-identical.",
+      "gate": "RED on the pre-fix build: the translation helper is absent and its check fails in tests/test_guard_battery.py; reproduced end-to-end under pwsh with the Windows shell wrapper - exit 1 and nothing deleted before the fix, exit 0 and the target gone after; green on the batch"
     }
   ]
 }

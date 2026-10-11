@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The supervisor's logs are bounded:** `supervisor.log` and `bot-stdout.log` grew without limit; each rotates at 5 MB with one predecessor (tests/test_process_surface.py).
 - **The Telegram lane answers the chat lane's commands:** `/status`, `/model`, `/reasoning`, `/plan`, `/fork`, `/undo`, `/retry`, `/save`, `/bg`, `/pause`, `/restart [force]`, `/version` and the `/tinycmdr` management verbs were handed to the model as tasks - `/restart` got an answer about restarting while the bot kept running - so the lane runs them through the same helpers the Mattermost lane uses, refuses an unknown `/word` locally, and a message carrying a photo, document or voice note is downloaded into the run (image content when vision is on) instead of "I can only read text here" (tests/test_telegram.py).
 - **The updater's fetch is bounded, and a damaged VERSION is named:** `update.sh` fetched with neither a connect timeout nor retries while `install.sh` had both, and an unreadable installed VERSION made the never-downgrade guard skip itself silently - the guard compares as 0.0.0 and says so, in both updaters (tests/test_update_script.py, tests/test_installer_windows.py).
+- **A quoted command runs on Windows:** PowerShell reads a line that starts with a quoted string as an expression, so `"C:\...\python.exe" script.py` never ran - exit 1 with a ParserError on every Windows command whose interpreter path was quoted (tests/test_guard_battery.py).
 
 ## [1.1.4] - 2026-10-11
 
