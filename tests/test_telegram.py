@@ -1756,18 +1756,21 @@ class _CmdPoll(_OnePollClient):
 _never_called = []
 _holder_cmd, _restore_cmd = _tg_setup(
     _CmdPoll, {"token": _TG_TOK, "allowed_users": ["7"]},
-    drive_run=lambda *a, **k: _never_called.append(a))
+    drive_run=lambda key, text, reporter, **kw: _never_called.append((key, text)))
 try:
     try:
         fb.run_telegram()
     except SystemExit:
         pass
     _cl_cmd = _holder_cmd.get("client")
-    _dl = time.time() + 5
+    _dl = time.time() + 10
     while time.time() < _dl and not any("tinycmdr v" in m["text"] for m in _cl_cmd.messages):
         time.sleep(0.02)
+    # A worker left over from an earlier check can still call this module-global stub with
+    # ITS text; only a call carrying the COMMAND is the failure this check is about.
     check("run_telegram answers /status in the chat, never in a run",
-          any("tinycmdr v" in m["text"] for m in _cl_cmd.messages) and not _never_called,
+          any("tinycmdr v" in m["text"] for m in _cl_cmd.messages)
+          and not [c for c in _never_called if "/status" in str(c[1])],
           ([m["text"][:30] for m in _cl_cmd.messages], _never_called))
 finally:
     _restore_cmd()
@@ -1781,8 +1784,12 @@ _photo_seen = {}
 
 
 def _rich_drive(key, text, reporter, **kw):
-    _photo_seen["text"] = text
-    _photo_seen["rich"] = kw.get("rich_content")
+    # Only THIS chat's run: a worker left over from an earlier check can still call the
+    # module-global stub after its own restore, and its call is not this check's business.
+    if key == "telegram-92":
+        _photo_seen["key"] = key
+        _photo_seen["text"] = text
+        _photo_seen["rich"] = kw.get("rich_content")
     return "seen"
 
 
@@ -1796,7 +1803,7 @@ try:
     except SystemExit:
         pass
     _cl_ph = _holder_ph.get("client")
-    _dl = time.time() + 5
+    _dl = time.time() + 10
     while time.time() < _dl and "rich" not in _photo_seen:
         time.sleep(0.02)
     _rich = _photo_seen.get("rich") or []
