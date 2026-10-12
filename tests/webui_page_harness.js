@@ -188,6 +188,10 @@ const uploads = [];
 let healthFetches = 0;
 let legionFetches = 0;
 const legionAdds = [];                 // every add-remote POST body the page sent
+const modelPosts = [];                 // every model switch the header control sent
+let modelCurrent = null;               // what /api/models calls current (the POST moves it)
+const ROSTER_MAIN = { name: 'main', url: 'http://127.0.0.1:1/v1', local: true,
+                      alias: false, send_as: 'main' };
 // Does a node or any descendant carry this class? (`dot`/`work`/`bad`/`tabdot` sit
 // on children of the rail rows and the tabs, and the report serializes the parent.)
 function deepHas(n, cls) {
@@ -378,6 +382,20 @@ function fetchShim(url, opts) {
     return jres({ commands: [{ cmd: '/new', help: 'fresh conversation' },
                              { cmd: '/status', help: 'this host' }] });
   }
+  if (url.indexOf('/api/models') === 0) {
+    // the header's model control: the GET fills it, the POST switches (the page sends
+    // {name, global, session}) - the scenario carries the roster, and the switch moves
+    // `current` the way the real route does after config.json is written
+    if (opts && opts.method === 'POST') {
+      modelPosts.push(body);
+      modelCurrent = body.name;
+      return jres({ reply: 'Global model for ALL conversations: `' + body.name
+                           + '` — saved to config.json.', session: body.session });
+    }
+    const roster = scenario.models || { models: [ROSTER_MAIN] };
+    return jres({ current: modelCurrent || roster.current || 'main',
+                  models: roster.models || [ROSTER_MAIN] });
+  }
   if (url.indexOf('/api/tasks') === 0) { return jres({ items: [], next_id: 1 }); }
   if (url.indexOf('/api/jobs') === 0) { return jres({ jobs: [], scheduler: false }); }
   if (url.indexOf('/api/login') === 0) {
@@ -542,7 +560,7 @@ async function tick() {
 const EXPORTS = "\n;globalThis.__page={send:send,stop:stop,"
   + "newConversation:newConversation,openSession:openSession,fetchFile:fetchFile,"
   + "uploadFiles:uploadFiles,versionCheck:versionCheck,openChannel:openChannel,"
-  + "closeChannel:closeChannel,"
+  + "closeChannel:closeChannel,switchModel:switchModel,loadModels:loadModels,"
   + "renameSession:renameSession,state:function(){return {sessionKey:sessionKey,"
   + "sessions:sessions,legion:{active:legion.active,on:legion.on,"
   + "cohorts:legion.cohorts,tabs:legion.tabs,seen:legion.seen}};}};";
@@ -625,6 +643,16 @@ async function main() {
         if (typeof el.oninput === 'function') { await el.oninput({}); }
         for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
       }
+    } else if (step.kind === 'change') {
+      // a select's change: set the value and fire the handler a browser would (the
+      // header's model control is the one such element)
+      const el = byId[step.id] || globalThis.document.getElementById(step.id);
+      if (!el) { errors.push('change step: no element #' + step.id); }
+      else {
+        el.value = step.value;
+        if (typeof el.onchange === 'function') { await el.onchange({}); }
+        for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
+      }
     } else if (step.kind === 'click') {
       // click an element by id: either wiring works (`onclick=`, or addEventListener)
       const el = byId[step.id] || globalThis.document.getElementById(step.id);
@@ -697,6 +725,9 @@ async function main() {
     auth: authSeen,
     token: store.fb_token,
     uploads: uploads,
+    modelPosts: modelPosts,
+    modelValues: (byId.model && byId.model.children || []).map((o) => o.value),
+    modelValue: (byId.model || {}).value || '',
     downloads: (globalThis.__downloads || []),
     composer: byId.in.value,
     ver: { cls: byId.ver.className, title: byId.ver.title },

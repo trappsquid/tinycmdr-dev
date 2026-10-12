@@ -192,6 +192,51 @@ textarea:focus-visible {
   letter-spacing: 0.22em;
 }
 
+/* The header's model control: the model name IS the button. A hairline appears on
+   hover/focus so it reads as one, and the caret is drawn (not a data-uri - the page's
+   CSP has no img-src for one). */
+.model-ctl {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.model-ctl::after {
+  content: "\25be";
+  position: absolute;
+  right: 7px;
+  pointer-events: none;
+  opacity: 0.65;
+  font-size: 0.7rem;
+}
+
+#model {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 360px;
+  padding: 5px 22px 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+#model:hover,
+#model:focus {
+  border-color: var(--line);
+  color: var(--ivory);
+}
+
+#model option {
+  background: var(--bg-raised);
+  color: var(--ivory);
+  letter-spacing: normal;
+}
+
 .icon-button {
   display: grid;
   width: 38px;

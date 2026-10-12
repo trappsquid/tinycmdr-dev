@@ -648,6 +648,20 @@ is offered now, the configured one first and marked current.
             check(pick.picked() == "local-gguf-27b",
                   "the picker opens ON the configured model, not on the ADD row",
                   pick.picked())
+            # ...and a configured ALIAS is not shadowed by the configured-model row: its
+            # entry must stay the fallback's (url and send_as), or a global switch to
+            # the alias would route the call to the primary
+            mod8 = stage(work / "aliaskeep")
+            mod8.CONFIG["llm"]["base_url"] = base
+            mod8.CONFIG["llm"]["model"] = "cm"
+            mod8.CONFIG["llm"]["api_key"] = "sk-good"
+            mod8.CONFIG["llm"]["fallbacks"] = [
+                {"base_url": base, "model": "team-a", "alias": "cm",
+                 "api_key": "sk-good"}]
+            hit = mod8.model_entry("cm")
+            check(bool(hit) and not hit["local"] and hit["send_as"] == "team-a",
+                  "a configured alias still routes to its fallback, not the primary",
+                  hit)
             opened = {}
             mod4.pick_terminal_ready = lambda: True
 
@@ -711,6 +725,20 @@ is offered now, the configured one first and marked current.
             check("Set up a local or cloud model now?" in buf.getvalue(),
                   "...while a one-row list still asks the question",
                   buf.getvalue()[-200:])
+
+            # the chat door every messaging lane runs (`/model <name>` in Mattermost,
+            # Telegram and the page all land in model_command) offers the configured
+            # model too (reported 2026-10-12)
+            mod7 = stage(work / "chatdoor")
+            mod7.CONFIG["llm"]["base_url"] = base
+            mod7.CONFIG["llm"]["model"] = "local-gguf-27b"
+            mod7.CONFIG["llm"]["api_key"] = "sk-good"
+            listing = mod7.model_command("mattermost:suite", "list")
+            check("local-gguf-27b" in listing,
+                  "the chat /model list offers the configured model", listing[:300])
+            reply = mod7.model_command("mattermost:suite", "local-gguf-27b")
+            check("Nothing switched" not in reply and "local-gguf-27b" in reply,
+                  "...and switching to it is not refused", reply[:300])
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

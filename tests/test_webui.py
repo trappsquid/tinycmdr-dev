@@ -779,6 +779,54 @@ def main():
           "the page answers /plan", out)
     fb._web_command("/plan off", "web")
 
+    # ---- the header's model control: /api/models ----------------------------
+    code, body, _ = req("GET", "/api/models", TOK)
+    listed = json.loads(body) if code == 200 else {}
+    check(code == 200 and [m.get("name") for m in listed.get("models") or []] == ["main"]
+          and listed.get("current"),
+          "GET /api/models offers the configured model, and names the current one",
+          (code, listed))
+    check(req("GET", "/api/models", None)[0] == 401,
+          "the catalog needs the token like every other route")
+    # the switch runs the chat door's model_command: a name no endpoint offers is
+    # refused with the same sentence Mattermost prints, and a real one writes
+    # config.json + every conversation
+    cfg_path = STAGE / "config.json"
+    _cfg_before = cfg_path.read_text(encoding="utf-8")
+    _model_before = fb.CONFIG["llm"].get("model")
+    _ov_before = dict(fb.AGENT.model_overrides)
+    try:
+        fb.CONFIG["llm"]["fallbacks"] = [{"base_url": "http://127.0.0.1:1/v1",
+                                          "model": "cloud-b", "alias": "cb"}]
+        fb._MODEL_CACHE["at"] = 0.0
+        code, body, _ = req("POST", "/api/models",
+                            {**TOK, "Content-Type": "application/json"},
+                            b'{"name":"junk-model","global":true}')
+        check(code == 200 and b"Nothing switched" in body,
+              "a name nothing offers is refused by the chat door's own sentence",
+              body[:200])
+        code, body, _ = req("POST", "/api/models",
+                            {**TOK, "Content-Type": "application/json"},
+                            b'{"name":"cloud-b","global":true}')
+        cfg_after = json.loads(cfg_path.read_text(encoding="utf-8"))
+        check(code == 200 and b"Global model for ALL conversations" in body
+              and cfg_after["llm"]["model"] == "cloud-b",
+              "a real switch writes config.json and answers with the scope",
+              (code, body[:200], cfg_after["llm"].get("model")))
+        check(req("POST", "/api/models", {**TOK, "Content-Type": "application/json"},
+                  b"{}")[0] == 400,
+              "an empty POST body names what is missing: 400")
+        check(req("POST", "/api/models", {"Content-Type": "application/json"},
+                  b'{"name":"x"}')[0] == 401,
+              "and the switch without a token: 401")
+    finally:
+        fb.CONFIG["llm"]["fallbacks"] = []
+        fb.CONFIG["llm"]["model"] = _model_before
+        cfg_path.write_text(_cfg_before, encoding="utf-8")
+        fb.AGENT.model_overrides.clear()
+        fb.AGENT.model_overrides.update(_ov_before)
+        fb._MODEL_CACHE["at"] = 0.0
+
     # ---- the body cap is checked BEFORE the read ----------------------------
     big = b"x" * (fb.WEB_BODY_MAX + 64)
     code, body, _ = req("POST", "/api/run", {**TOK, "Content-Type": "application/json"},

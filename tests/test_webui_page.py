@@ -279,6 +279,28 @@ def main():
           f"({(res.get('hits') or '')[:60]!r})")
     check("TINYCMDR_WEB_TOKEN" in res.get("hits", ""), "with the matching snippet")
 
+    # -- 1g. the header's model control: the roster fills the select, picking one
+    # switches it (the page could change the model only by typing a command) --------
+    sc = {"runs": [],
+          "models": {"current": "main",
+                     "models": [{"name": "main", "url": "http://127.0.0.1:1/v1",
+                                 "local": True, "alias": False, "send_as": "main"},
+                                {"name": "cloud-b", "url": "https://api.example.com/v1",
+                                 "local": False, "alias": False, "send_as": "cloud-b"}]},
+          "steps": [{"kind": "polls", "n": 3},
+                    {"kind": "change", "id": "model", "value": "cloud-b", "polls": 6}]}
+    res = run_page(sc, script)
+    check(not res["errors"], f"the page script runs clean ({res['errors'][:1]})")
+    check(res["modelValues"] == ["main", "cloud-b"],
+          f"the catalog fills the header control ({res['modelValues']})")
+    key = (res.get("state") or {}).get("sessionKey")
+    check(res["modelPosts"] == [{"name": "cloud-b", "global": True, "session": key}],
+          f"picking a model switches it for every conversation ({res['modelPosts']})")
+    check(has(res, "Global model for ALL conversations"),
+          "and the server's reply is drawn in the transcript")
+    check(res.get("modelValue") == "cloud-b",
+          f"the control follows the switch ({res.get('modelValue')!r})")
+
     # -- 2. a line that grows in place must reach its final text --------------
     full = "The sky is blue because of Rayleigh scattering."
     sc = {

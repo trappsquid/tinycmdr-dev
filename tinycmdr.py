@@ -23464,15 +23464,8 @@ def model_catalog(force=False):
             return []
 
     primary_ids = _ids(primary, primary_key)
-    # What config.json says the model IS stays the FIRST entry, whether or not the
-    # endpoint still advertises that id: a local box advertises only what is loaded, so
-    # a configured name the endpoint no longer lists lost its row AND its "current"
-    # mark, and the picker's cursor landed on the add-endpoint row - ENTER then walked
-    # into the add-endpoint interview instead of keeping the model (measured
-    # 2026-10-12: the local box advertised only its loaded model, not the configured one).
-    model_name = str(CONFIG["llm"]["model"] or "").strip()
-    entries = ([{"name": model_name, "url": primary, "local": True, "alias": False,
-                 "send_as": model_name, "key": primary_key}] if model_name else [])
+    configured = str(CONFIG["llm"]["model"] or "").strip()
+    entries = []
     _MODEL_CACHE["live"] = bool(primary_ids)
     for i in primary_ids:
         entries.append({"name": i, "url": primary, "local": True, "alias": False,
@@ -23492,6 +23485,18 @@ def model_catalog(force=False):
             if i.lower() not in have:
                 entries.append({"name": i, "url": url, "local": False,
                                 "alias": False, "send_as": i, "key": key})
+    # The configured model is OFFERED even when the endpoint does not advertise that id
+    # (a local box advertises only what is loaded, so a configured name the endpoint no
+    # longer lists lost its row AND its "current" mark, and the picker's cursor landed
+    # on the add-endpoint row - ENTER then walked into the add-endpoint interview
+    # instead of keeping the model; measured 2026-10-12: the local box advertised only
+    # its loaded model, not the configured one). FIRST row - unless another entry
+    # already carries the name: a configured alias IS its fallback's row, and shadowing
+    # it with a primary-url copy would route the call to the wrong endpoint.
+    if configured and configured.lower() not in {e["name"].lower() for e in entries}:
+        entries.insert(0, {"name": configured, "url": primary, "local": True,
+                           "alias": False, "send_as": configured,
+                           "key": primary_key})
     # an endpoint's advertised id can equal a configured model name — keep the
     # first (configured) entry so /model list stays readable
     deduped, seen_names = [], set()
@@ -29679,7 +29684,7 @@ WEB_PAGE = """
     <div class="brand-medallion"><img id=medallionimg src="/mark.png?v={{VERSION}}" alt="tinycmdr badge"></div>
     <div class="brand-copy"><span class="brand-name">tinycmdr</span><a id=ver class="brand-version" href="{{RELEASE_URL}}" target="_blank" rel="noopener" title="release notes"></a></div>
   </div>
-  <div class="header-center"><span id=model></span></div>
+  <div class="header-center"><span class="model-ctl"><select id=model aria-label="model" title="switch the model for every conversation (saved to config.json)"></select></span></div>
   <div class="header-right">
     <button id=tools class="icon-button" aria-label="tasks, jobs, log, inventory"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /> <circle cx="12" cy="12" r="3" /> </svg></button>
     <button id=stop>Stop</button>
@@ -30276,7 +30281,7 @@ function renderRail(){
  meterFill.style.width=(budget?Math.min(100,Math.round(100*used/budget)):0)+'%';
  statContext.textContent=(budget?Math.round(100*used/budget)+'%':'\u2014');
  meterFill.style.background=used>budget*0.8?'var(--bad)':'var(--accent)';
- modelEl.textContent=cur?(cur.model||''):'';
+ syncModelControl(cur?(cur.model||''):'');
  statModel.textContent=cur?(cur.model||''):'\u2014';
  // The hero's "resume" action needs a campaign with something IN it: the newest row is
  // often the empty conversation the New Campaign button just made (found live,
@@ -30746,6 +30751,50 @@ async function post(path,payload){
  const j=await r.json().catch(function(){return {};});
  return {status:r.status,j:j};
 }
+// The header's model control: one <select> fed from /api/models - the same catalog the
+// terminal picker and the chat `/model list` read (the configured model first, then
+// every endpoint's). Picking one switches the way the shell picker's ENTER does: for
+// every conversation, saved to config.json. A typed `/model <name>` stays the
+// per-conversation switch.
+let modelRoster=[];
+async function loadModels(){
+ try{
+  const r=await fetch('/api/models',{headers:H()});
+  if(!r.ok)return;
+  const j=await r.json();
+  modelRoster=[];
+  modelEl.textContent='';
+  (j.models||[]).forEach(function(m){
+   if(!m.name)return;
+   const o=document.createElement('option');
+   o.value=m.name;
+   o.textContent=m.name+(m.url?'  \u00b7  '+(m.local?'local ':'')+m.url:'');
+   o.title=m.name+(m.send_as&&m.send_as!==m.name?' (sends as '+m.send_as+')':'');
+   modelEl.appendChild(o);modelRoster.push(m.name);});
+  if(j.current)syncModelControl(j.current);
+ }catch(e){}
+}
+function syncModelControl(name){
+ const v=name||'';if(!v||!modelEl)return;
+ if(modelRoster.indexOf(v)<0){
+  // the model this conversation runs is not in the catalog (the config changed under
+  // us): show it anyway, or the control would lie about what is running
+  const o=document.createElement('option');o.value=v;o.textContent=v;
+  modelEl.insertBefore(o,modelEl.children[0]||null);modelRoster.unshift(v);}
+ modelEl.value=v;
+}
+async function switchModel(name){
+ if(!name)return;
+ modelEl.disabled=true;
+ const {status:code,j}=await post('/api/models',
+   {name:name,global:true,session:sessionKey});
+ modelEl.disabled=false;
+ if(code!==200){note('could not switch the model: '+(j.error||code));return;}
+ note('');
+ localRun('say',j.reply||('model: '+name));
+ loadModels();
+}
+modelEl.onchange=function(){switchModel(modelEl.value);};
 async function send(){
  const t=inp.value.trim();if(!t)return;
  palEl.classList.add('hide');
@@ -31089,6 +31138,7 @@ emptyLast.onclick=function(){
   await openChannel(legion.active);
  }else if(want&&have){await openSession(want,true);}
  else{await openSession(sessionKey||'web',true);}
+ await loadModels();
  setInterval(versionCheck,20000);
  setInterval(loadSessions,5000);
  window.addEventListener('focus',function(){versionCheck();loadSessions();});
@@ -32601,6 +32651,27 @@ def run_webui():
                 q = self._query()
                 self._json({"commands": web_commands(q.get("prefix")),
                             "session": web_resolve_session(client, q.get("session"))})
+            elif self.path.startswith("/api/models"):
+                # The header's model control: the same catalog the terminal picker and
+                # the chat `/model list` read (the configured model first, then every
+                # endpoint's), resolved live like the picker does.
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                client = _web_client(self.headers)
+                q = self._query()
+                key = web_resolve_session(client, q.get("session"))
+                self._json({
+                    "current": (AGENT.model_overrides.get(key)
+                                or CONFIG["llm"]["model"]),
+                    "config": CONFIG["llm"]["model"],
+                    "models": [{"name": e.get("name") or "",
+                                "url": e.get("url") or "",
+                                "local": bool(e.get("local")),
+                                "alias": bool(e.get("alias")),
+                                "send_as": e.get("send_as") or e.get("name") or ""}
+                               for e in model_catalog(force=True)
+                               if e.get("name")]})
             elif self.path.startswith("/api/tasks"):
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
@@ -33035,6 +33106,32 @@ def run_webui():
                     return
                 web_set_open(client, key)
                 self._start_run(payload, key, client)
+                return
+            if self.path.startswith("/api/models"):
+                # The header's model control. The switch runs the SAME door the chat
+                # lanes' `/model` runs, so the page and a typed command can never
+                # drift; `global` is the shell picker's semantics (config.json, every
+                # conversation), and the reply says which happened.
+                if not self._auth_ok():
+                    self._drain()
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                body = self._need_body()
+                if body is None:
+                    return
+                name = str(body.get("name") or "").strip()
+                if not name:
+                    self._json({"error": "which model? `name` is required"}, 400)
+                    return
+                client = _web_client(self.headers)
+                key = web_resolve_session(client, body.get("session"))
+                if web_owned_by_other(key, client):
+                    self._json({"error": "that conversation belongs to another "
+                                         "browser on this host - you may read it in "
+                                         "the shared view, not change it"}, 403)
+                    return
+                arg = name + (" --global" if body.get("global") else "")
+                self._json({"reply": model_command(key, arg), "session": key})
                 return
             if self.path.startswith("/api/upload"):
                 if not self._auth_ok():
