@@ -31667,6 +31667,45 @@ def run_webui():
         def log_message(self, *a):
             pass
 
+        # The Server header is a fingerprint: the stock value is "BaseHTTP/0.6
+        # Python/3.12.10", which names the stdlib and this box's exact interpreter
+        # patch level to anything that reads a banner. A cookie is all a client needs
+        # (A-2026-10-12-04). version_string() is what send_response() writes, so the
+        # override covers every reply, the stock error pages included.
+        server_version = "tinycmdr"
+        sys_version = ""
+
+        def version_string(self):
+            return self.server_version
+
+        # A browser posture on EVERY reply, from the one point every response passes
+        # through: the page, an asset, a JSON poll, a download, a stock error page and
+        # the 405 the API sends all leave via end_headers(), so a route added later
+        # cannot forget them. The page is the shell-execution door - framing it inside
+        # another origin is a click on this box's shell - and a sniffed Content-Type is
+        # the same door a second way (A-2026-10-05-41).
+        #
+        # CSP: the page's script and its first style block are INLINE in its own HTML
+        # (WEB_PAGE), so script-src/style-src each need 'unsafe-inline' or the page
+        # stops dead; everything else it loads - the stylesheet, the art, the fonts,
+        # every fetch - is same-origin, which is what default-src 'self' allows.
+        # frame-ancestors 'none' is the header form of X-Frame-Options: DENY, and
+        # base-uri 'none' stops an injected <base> from re-pointing relative URLs.
+        _SECURITY_HEADERS = (
+            ("Content-Security-Policy",
+             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+             "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; "
+             "base-uri 'none'"),
+            ("X-Frame-Options", "DENY"),
+            ("X-Content-Type-Options", "nosniff"),
+            ("Referrer-Policy", "no-referrer"),
+        )
+
+        def end_headers(self):
+            for name, value in self._SECURITY_HEADERS:
+                self.send_header(name, value)
+            super().end_headers()
+
         def _write(self, data):
             """The response body, dropped for HEAD.
 

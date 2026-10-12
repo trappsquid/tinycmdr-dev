@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The page that carries shell access is hardened:** WebUI responses carried no frame policy, no MIME-sniff guard and no referrer policy, and every response advertised the exact Python build (`Server: BaseHTTP/0.6 Python/3.12.10`) - the handler now sends `Content-Security-Policy` (`frame-ancestors 'none'`, `base-uri 'none'`, `default-src 'self'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` on every reply, and names itself `tinycmdr` with no interpreter version (tests/test_fix_webheaders.py).
+- **`/api/health` stops describing the box to strangers:** the auth-free route carried the pid, every lane's state and the config-drift flag to any caller - a non-loopback, unauthenticated reader now gets `ok`/`version` only, while loopback and token-holding callers keep the full payload the page and monitors read (tests/test_fix_health.py).
+- **Two uploads in the same second cannot overwrite each other:** every attachment door named its file with bare seconds resolution - the web page, the Mattermost lane and the Telegram lane now append a random suffix, and `uploads/` is bounded by a new `agent.uploads_keep_days` prune (30 by default, hand-placed files untouched) (tests/test_webui.py).
+- **Uploaded and recorded files are owner-only at rest:** `/api/upload`, the chat-lane intake and `sessions/*.events.jsonl` (plus the transcript sidecar and every roll) were created through the umask, so a shared host could read them - uploads/ and sessions/ are now 0700 and their files 0600, tightened on the next write even for files an older build left loose (tests/test_fix_perms.py, tests/test_webui.py).
+- **A config.json from an older build stops warning about keys that build read:** eight retired names (`agent.notes_keep_entries`, `agent.tasks_max_open` and their neighbours) fired "not a key the harness reads" on every start and every verb - they are named as retired in one table now, a genuine typo still warns, and a secret-named value under an unknown key joins the mask so a raw read of the file cannot surface it (tests/test_fix_config.py).
+- **`.env` follows the dotenv inline-comment rule:** `TOKEN=value # note` stored `value # note`, so every lane authenticated with a corrupted token and the remote answered a bare 401 - an unquoted ` #` comment is stripped now, while a `#` inside quotes or with no space before it stays part of the value (tests/test_fix_env.py).
+- **The Python fallback pins a released installer and checks its signature:** the Windows installer downloaded 3.12.8 over TLS with no integrity check - it pins 3.12.10 (the newest 3.12 that still ships Windows installers) and verifies the download's Authenticode signature before running it (tests/test_installer_windows.py).
+- **A 429's `Retry-After` is honoured in both RFC 9110 forms:** the HTTP-date form was discarded as "no hint" and the capped backoff decided instead - both forms are read and clamped to the configured cap (tests/test_fix_retry.py).
+- **A blocked command's question names the target, not the shell's glue:** `(rm -rf ~)` reported "a recursive delete of ~)" - the closing bracket is stripped before the operator sees it (tests/test_guard_battery.py).
+
 ## [1.1.6] - 2026-10-11
 
 ### Fixed
