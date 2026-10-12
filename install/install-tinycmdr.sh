@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #
 # install-tinycmdr.sh - install tinycmdr on a Debian/Ubuntu host, run by systemd.
+# Supported: Debian-shaped hosts (apt-get, systemd). On another distribution the install
+# proceeds whenever python3 has venv support; when it does not, the messages say so and
+# name the door (--python) - this script never guesses another package manager's names.
 #
 # On a fleet host this is the whole job:
 #
@@ -55,6 +58,8 @@
 #   --bot-name <n>        agent.bot_name (default: this hostname)
 #   --model-base-url <u>  llm.base_url (default: install/fleet-defaults.json)
 #   --model <m>           llm.model (default: install/fleet-defaults.json)
+#   --python <path>       build the venv from this interpreter (default: python3;
+#                         TINYCMDR_PYTHON is the env twin for a fleet push)
 #   --force               reinstall in place (stops the running service first)
 #   --no-start            install and enable, do not start it now
 #   --no-service          files only: write no systemd unit (macOS's --no-launchd)
@@ -107,6 +112,9 @@ DEFAULT_INSTALL_DIR="$INSTALL_DIR"
 UNIT=""
 WRAPPER=""
 LOG="${TINYCMDR_INSTALL_LOG:-/tmp/tinycmdr-install.log}"
+# --python is the switch twin of TINYCMDR_PYTHON. There is no macOS-style
+# --install-python here: on Debian-shaped hosts python3 comes from the distribution (apt
+# below installs only the venv support), so there is no private interpreter to fetch.
 PY="${TINYCMDR_PYTHON:-python3}"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""; MM_URL_ARG=""
@@ -163,6 +171,7 @@ while [ $# -gt 0 ]; do
         --mattermost-url)   MM_URL_ARG="$2"; shift 2 ;;
         --model-base-url)   MODEL_BASE_URL="$2"; shift 2 ;;
         --model)            MODEL="$2"; shift 2 ;;
+        --python)           PY="$2"; shift 2 ;;
         --force)            FORCE=1; shift ;;
         --no-start)         NO_START=1; shift ;;
         --no-service)       NO_SERVICE=1; shift ;;
@@ -515,13 +524,14 @@ if ! command -v "$PY" >/dev/null 2>&1 && [ ! -x "$PY" ]; then
      Debian/Ubuntu:  sudo apt-get install -y python3 python3-venv
      (where the distro's python3 is older than 3.10, install 3.12 from your distro,
       a backport or python.org)
-     ...or point this run at one:  TINYCMDR_PYTHON=/usr/bin/python3.12 bash $SELF ..."
+     ...or point this run at one:  bash $SELF --python /usr/bin/python3.12
+     (TINYCMDR_PYTHON=/usr/bin/python3.12 is the env twin)"
 fi
 "$PY" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 12) else 1)' \
     || die "$PY is $("$PY" -V 2>&1); tinycmdr runs on Python 3.10-3.12.
 python3.13 and newer resolve a broken mmpy_bot; 3.9 predates write_text(newline=...).
 Install one the distro carries (python3.12 where available), or point this run at one:
-TINYCMDR_PYTHON=/usr/bin/python3.12 bash $SELF ..."
+bash $SELF --python /usr/bin/python3.12   (TINYCMDR_PYTHON=... is the env twin)"
 # Debian/Ubuntu ship python3 without ensurepip until python3-venv is installed, and
 # that fix needs root while this door's default is a no-root USER install: say it
 # HERE, before a file is written (measured 2026-10-10: the run copied everything,
@@ -529,9 +539,12 @@ TINYCMDR_PYTHON=/usr/bin/python3.12 bash $SELF ..."
 if { [ ! -x "$INSTALL_DIR/venv/bin/python" ] || [ "$FORCE" = 1 ]; } \
    && [ "$(id -u)" != 0 ] \
    && ! "$PY" -c 'import ensurepip' >/dev/null 2>&1; then
-    die "$(command -v "$PY" || echo "$PY") cannot build venvs yet (python3-venv is not installed),
-and that fix needs root. Run it once, then re-run the installer exactly as before:
+    die "$(command -v "$PY" || echo "$PY") cannot build venvs yet (ensurepip is missing).
+On Debian/Ubuntu the fix is one root command - run it, then re-run exactly as before:
      sudo apt-get install -y python3-venv
+On any other distribution, install your python3's venv support (this installer packages
+for Debian-shaped hosts and does not guess another package manager's names), or point
+the run at an interpreter that has it:  bash $SELF --python /usr/bin/python3.12
      ...or install system-wide, which does this for you:  sudo bash $SELF --mode system"
 fi
 info "python       : $($PY -V 2>&1)  ($(command -v "$PY"))"
@@ -1378,8 +1391,14 @@ if [ ! -x "$INSTALL_DIR/venv/bin/python" ] || [ "$FORCE" = 1 ]; then
         # Non-root is refused in pre-flight; here root fixes it for the whole host.
         if [ "$NO_DEPS" = 1 ]; then
             die "python3-venv is missing and --no-deps was given - install it and re-run:
-  sudo apt-get install -y python3-venv"
+  sudo apt-get install -y python3-venv   (on Debian/Ubuntu; on other distributions
+  install your python3's venv support, then re-run with --python /path/to/python3.12)"
         fi
+        command -v apt-get >/dev/null 2>&1 \
+            || die "ensurepip is missing from $PY, and this installer only knows the
+Debian/Ubuntu fix. Install your distribution's python3 venv support, then re-run
+pointing at an interpreter that has it:
+  bash $SELF --python /path/to/python3.12"
         info "installing python3-venv (apt)"
         DEBIAN_FRONTEND=noninteractive apt-get install -y -q python3-venv \
             || die "apt-get install python3-venv failed - run it by hand to see why:

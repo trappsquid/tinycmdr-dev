@@ -584,6 +584,37 @@ def case_macos_install(sb, pkg, bindir, user, py):
           got_broken.returncode == 1
           and "--install-python" in got_broken.stdout + got_broken.stderr,
           f"rc={got_broken.returncode}; out={got_broken.stdout[-200:]}{got_broken.stderr[-200:]}")
+
+    # The Linux door takes --python too (the switch twin of TINYCMDR_PYTHON), and the
+    # FLAG wins over the env twin: a missing interpreter is refused by name, with the
+    # flag spelled out. Red before this: --python was an unknown switch on Linux.
+    missing_py = sb / "not-a-python-linux"
+    missing_py.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    env_lp = sandbox_home_env(sb, bindir, sb / "logs" / "lin-python.log", user,
+                              {"TINYCMDR_PYTHON": py})
+    got_lp = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                  "--no-deps", "--no-sudoers", "--python", str(missing_py),
+                  "--install-dir", sb / "lin-python"], env_lp, pkg)
+    out_lp = got_lp.stdout + got_lp.stderr
+    check("Linux: a --python that cannot run is refused by name, and beats the env twin",
+          got_lp.returncode == 1 and "no python found" in out_lp and "--python" in out_lp,
+          f"rc={got_lp.returncode}; {out_lp[-300:]}")
+
+    # A python that cannot build venvs gets the exact fix - and the message stops
+    # guessing at package managers: non-root dies in pre-flight, root at the venv
+    # step, and both name --python as the way through.
+    nv_py = sb / "no-venv-python"
+    nv_py.write_text("#!/bin/sh\ncase \"$*\" in *ensurepip*) exit 1;; esac\nexit 0\n",
+                     encoding="utf-8")
+    nv_py.chmod(0o755)
+    env_nv = sandbox_home_env(sb, bindir, sb / "logs" / "lin-novenv.log", user)
+    got_nv = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                  "--no-deps", "--no-sudoers", "--python", str(nv_py),
+                  "--install-dir", sb / "lin-novenv"], env_nv, pkg)
+    out_nv = got_nv.stdout + got_nv.stderr
+    check("Linux: a python without venv support gets the fix named, and --python",
+          got_nv.returncode == 1 and "venv" in out_nv and "--python" in out_nv,
+          f"rc={got_nv.returncode}; {out_nv[-400:]}")
     # An install dir with a space AND an ampersand: the sed substitution used to eat the
     # & (it means "the matched text") and write a corrupted plist path (measured
     # 2026-10-10).
@@ -740,8 +771,9 @@ def case_help_and_footer(sb, pkg, bindir, user, py):
     check("macOS --help names the 3.10-3.12 band", "3.10-3.12" in body,
           "the band is not stated in the installer help")
     lin_help = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--help"], env, pkg)
-    check("Linux --help lists --no-path", "--no-path" in lin_help.stdout,
-          "the Linux help does not document --no-path")
+    check("Linux --help lists --no-path and --python",
+          "--no-path" in lin_help.stdout and "--python" in lin_help.stdout,
+          "the Linux help does not document --no-path / --python")
     check("Linux --help prints the header to its last line",
           "nobody thinks to delete" in lin_help.stdout,
           "the usage range still stops early: " + repr(lin_help.stdout[-120:]))

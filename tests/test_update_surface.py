@@ -226,7 +226,8 @@ ship), so it is not a capability and is not listed here.
         "--force-python": ((MAC,), "rebuild the venv from scratch - macOS only"),
         "--install-python": ((MAC,), "fetch a private python with uv; the Linux installer has "
                                      "no such flag (see ~/whats-live/ISSUES.md)"),
-        "--python": ((MAC,), "interpreter to build the venv from - macOS only"),
+        "--python": ((SH, MAC), "interpreter to build the venv from - both POSIX doors "
+                                "(PowerShell's twin is Python)"),
         "--no-launchd": ((MAC,), "skip the launchd agent - macOS only"),
         "--no-service": ((SH,), "skip the systemd unit (files only) - Linux only; the macOS "
                                 "spelling is --no-launchd and Windows has -SkipTask"),

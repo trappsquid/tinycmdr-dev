@@ -115,7 +115,7 @@ sha256sum -c SHA256SUMS --ignore-missing     # macOS: shasum -a 256 -c SHA256SUM
 **Linux.** `--mode user|system`, `--yes`; a run with no terminal never asks. **macOS** has one
 kind of install — a per-user launchd agent, `--no-launchd` to skip it — so it takes `--yes` and
 has no `--mode`. Every question has a switch: `--mattermost-url`, `--allowed-user`,
-`--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--web-host`, `--web-port`,
+`--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--python`, `--web-host`, `--web-port`,
 `--web-token`, `--no-web`, `--no-path`.
 
 **A second install on one host** needs its own identity: `TINYCMDR_SERVICE=tinycmdr-work …` on
