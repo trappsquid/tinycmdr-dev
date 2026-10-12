@@ -848,10 +848,10 @@ def main():
     check(res.get("legionHidden") is False,
           "a hub with cohorts shows the legion rail section")
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(len(names) == 4 and "PRAETORIUM" in names[0] and "storage" in names[1]
-          and "ADD COHORT" in (names[3] or ""),
-          f"the rail pins the praetorium, one row per cohort, then ADD COHORT "
-          f"({names})")
+    check(len(names) == 5 and "PRAETORIUM" in names[0] and "storage" in names[1]
+          and "ALL COHORTS" in (names[3] or "") and "ADD COHORT" in (names[4] or ""),
+          f"the rail pins the praetorium, one row per cohort, the fan-out row, "
+          f"then ADD COHORT ({names})")
     check("COHORS III" in (names[2] or "") and (res["cohorts"][2] or {}).get("bad"),
           f"the silent cohort wears the bad dot, numbered ({names[2]!r})")
     check("connection refused" in ((res["cohorts"][2] or {}).get("title") or ""),
@@ -903,6 +903,34 @@ def main():
     check("already on campaign" in (((res.get("note") or {}).get("text")) or ""),
           f"a second order while one runs is refused in the hub's words "
           f"({res.get('note')!r})")
+
+    # ...ALL COHORTS: one order fans out to every cohort from the rail; each cohort
+    # runs it in its own tab, and a cohort already on campaign is refused BY NAME in
+    # the summary the roster keeps
+    sc = {"runs": [], "legion_cohorts": cohorts, "legion_tabs": [],
+          "legion_spec": [["tool", "uptime"], ["final", "load average 0.4"]],
+          "legion_busy": True,
+          "steps": [
+              {"kind": "polls", "n": 3},
+              {"kind": "clickrow", "id": "cohorts", "text": "ALL COHORTS", "polls": 4},
+              {"kind": "message", "text": "check every disk", "polls": 8},
+          ]}
+    res = run_page(sc, script)
+    check(not res["errors"], f"the ALL COHORTS page runs clean ({res['errors'][:1]})")
+    check(res.get("chan") == "COMMAND CHANNEL \u00b7 ALL COHORTS",
+          f"the ALL row opens the fan-out channel ({res.get('chan')!r})")
+    check(has(res, "ONE ORDER, EVERY COHORT"),
+          "the fan-out view names the shape")
+    check(has(res, "order sent to 1 of 2 cohorts") and has(res, "refused: storage"),
+          f"the summary counts and names the refused cohort "
+          f"({[t for _c, t in drawn(res)][-6:]})")
+    _bc = res.get("legionBroadcasts") or []
+    check(len(_bc) == 1 and _bc[0].get("op") == "send-all"
+          and _bc[0].get("message") == "check every disk"
+          and _bc[0].get("sent") == ["office"],
+          f"the fan-out posted send-all, skipping the busy cohort ({_bc})")
+    check(((res.get("state") or {}).get("legion") or {}).get("active") == "allcohorts",
+          f"...and the stage stays on the fan-out ({res.get('state')})")
 
     # ...and a hub with NO cohorts: the rail still shows - praetorium and the ADD
     # COHORT invitation, so a cohort can be connected from the page - while the tab

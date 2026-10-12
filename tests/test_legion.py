@@ -487,6 +487,60 @@ def test_hub_busy_refusal(hub):
         hub.WEB_RUNS.pop(run.id, None)
 
 
+def test_hub_broadcast(hub):
+    """ALL COHORTS: one order fans out; a cohort on campaign is refused by name."""
+    remotes = hub.CONFIG["agent"].get("a2a_remotes") or {}
+    saved = dict(remotes)
+    # two cohorts only: "slow" (made busy below) and "old" (fast), so the fan-out's
+    # sent half actually runs and the summary is graded on both outcomes
+    hub.CONFIG["agent"]["a2a_remotes"] = {"slow": saved["slow"], "old": saved["old"]}
+    run, busy = hub._web_claim_run(hub.legion_key("slow"), "",
+                                   make=lambda rid: hub.LegionRun(rid, "slow", "ctx"))
+    try:
+        out, code = hub.legion_send_all("check every disk")
+        check(code == 200 and bool(out.get("ok")), "the fan-out is accepted", (code, out))
+        check(out.get("sent") == ["old"]
+              and [r.get("name") for r in out.get("refused") or []] == ["slow"],
+              "one cohort ordered, the busy one refused - by name", out)
+        check("1 of 2" in out.get("summary", "") and "slow" in out.get("summary", ""),
+              "the summary counts and names", out.get("summary"))
+        check((hub.legion_overview("").get("broadcast") or {}).get("summary")
+              == out.get("summary"),
+              "the summary is kept in the legion store for the page's ALL view",
+              hub.legion_overview("").get("broadcast"))
+        check(wait_record_done(hub, "old", timeout=30),
+              "the ordered cohort ran it", hub.legion_record("old"))
+        lines = [l for r in hub.web_transcript(hub.legion_key("old"))["runs"]
+                 for l in (r.get("lines") or [])]
+        check(any("check every disk" in str(l.get("text") or "") for l in lines),
+              "the order is registered in the cohort's own transcript", lines[:3])
+    finally:
+        if run is not None:
+            run.done = True
+            hub.WEB_RUNS.pop(run.id, None)
+        hub.CONFIG["agent"]["a2a_remotes"] = saved
+    # a legion frame does not count against the page's live-run cap
+    saved_max = hub.WEB_RUN_LIVE_MAX
+    hub.WEB_RUN_LIVE_MAX = 0
+    page_run = legion_run = None
+    try:
+        page_run, busy2 = hub._web_claim_run(
+            "cap-check-conv", "",
+            make=lambda rid: hub.WebRun(rid, "cap-check-conv", ""))
+        check(busy2 == "cap", "the page's cap still caps page runs", busy2)
+        legion_run, busy3 = hub._web_claim_run(
+            hub.legion_key("old"), "",
+            make=lambda rid: hub.LegionRun(rid, "old", "ctx"))
+        check(legion_run is not None and busy3 is None,
+              "a legion claim is exempt from the page cap", (legion_run, busy3))
+    finally:
+        hub.WEB_RUN_LIVE_MAX = saved_max
+        for r in (page_run, legion_run):
+            if r is not None:
+                r.done = True
+                hub.WEB_RUNS.pop(r.id, None)
+
+
 def test_hub_task_store_fallback(hub, state):
     """The socket times out; the task store answers; the order is not re-run."""
     saved = hub.CONFIG["agent"].get("a2a_timeout")
@@ -642,6 +696,7 @@ def main():
         test_hub_no_cohorts(hub)
         test_hub_dispatch(hub, state)
         test_hub_busy_refusal(hub)
+        test_hub_broadcast(hub)
         test_hub_task_store_fallback(hub, state_slow)
         test_hub_lines_fallback(hub)
         test_hub_unreachable(hub)

@@ -28517,12 +28517,16 @@ def _web_claim_run(session_key="web", client="", make=None):
         for r in WEB_RUNS.values():
             if r.session_key == session_key and not r.done:
                 return None, r
-        if sum(1 for r in WEB_RUNS.values() if not r.done) >= WEB_RUN_LIVE_MAX:
+        if not str(session_key).startswith(LEGION_KEY_PREFIX) \
+                and sum(1 for r in WEB_RUNS.values() if not r.done) >= WEB_RUN_LIVE_MAX:
             # The bound this table never had: one run per conversation is not a bound
             # when the key space is open, so N keys meant N agent threads against the
             # LLM endpoint, and with 40+ live runs every finished run was evicted
             # before its page made the final poll (A-2026-10-08-117). A scheduled
             # job's report (web_new_scheduled_run) is not a claim and keeps its door.
+            # A legion claim skips the bound on purpose: one frame per CONFIGURED
+            # cohort (the per-key check above refuses a second), so an ALL COHORTS
+            # fan-out can neither be capped out by the page's bound nor inflate it.
             return None, "cap"
         run = (make or (lambda rid: WebRun(rid, session_key, client)))(
             os.urandom(6).hex())
@@ -29455,6 +29459,57 @@ def legion_send(name, text, client=""):
     return run.id, None, 200
 
 
+def legion_send_all(text, client=""):
+    """(payload, status) for the ALL COHORTS fan-out: one order, every configured cohort.
+
+    Each cohort receives the SAME order through legion_send - registered in that
+    cohort's own tab (its run), refused per cohort when it is already on campaign,
+    never re-sent - so every answer lands where a single order's always did and the
+    fan-out adds no second delivery path. The fan-out's bound is the cohorts
+    themselves: one task each (legion_send's own claim), which is why legion frames
+    are exempt from the page's WEB_RUN_LIVE_MAX (see _web_claim_run). The summary is
+    kept at the top of the legion store, where the page's ALL COHORTS view reads it
+    back."""
+    text = str(text or "").strip()
+    if not text:
+        return {"error": "an order needs words"}, 400
+    sent, refused, failed = [], [], []
+    total = 0
+    for name in legion_cohorts():
+        total += 1
+        run_id, err, code = legion_send(name, text, client)
+        if run_id:
+            sent.append(name)
+        elif code == 409:
+            refused.append({"name": name, "reason": err})
+        else:
+            failed.append({"name": name, "error": err, "status": code})
+    parts = ["order sent to %d of %d cohort%s"
+             % (len(sent), total, "" if total == 1 else "s")]
+    if refused:
+        parts.append("refused: " + ", ".join(
+            "%s (already on campaign)" % r["name"] for r in refused))
+    if failed:
+        parts.append("failed: " + ", ".join(
+            "%s (%s)" % (f["name"], f["error"] or f["status"]) for f in failed))
+    out = {"ok": True, "sent": sent, "refused": refused, "failed": failed,
+           "summary": "; ".join(parts), "at": time.time(),
+           "text": scrub(" ".join(text.split())[:160])}
+
+    def fn(st):
+        st["broadcast"] = {k: out[k] for k in ("at", "text", "sent", "refused",
+                                               "failed", "summary")}
+        return None
+
+    try:
+        _legion_state(fn)
+    except Exception:                                            # noqa: BLE001
+        log.debug("legion: could not record the broadcast summary", exc_info=True)
+    log.info("legion: fan-out to %d cohort(s): %d sent, %d refused, %d failed",
+             total, len(sent), len(refused), len(failed))
+    return out, 200
+
+
 def _legion_row(name):
     """One cohort as the rail and the tab strip read it: LOCAL state only."""
     rec = legion_record(name)
@@ -29488,6 +29543,7 @@ def legion_overview(client):
         row["numeral"] = i + 2            # the hub itself is COHORS I
     return {"cohorts": [row for row, _n in rows],
             "tabs": legion_tabs(client),
+            "broadcast": _legion_state().get("broadcast") or {},
             "praetorium": {"host": socket.gethostname(), "version": VERSION}}
 
 
@@ -30213,7 +30269,7 @@ let runId=null, gen=0, timer=null, fails=0, localSeq=0, sessionKey=null,
 // The legion's own state: which channel is on screen ('praetorium' = this box), the
 // cohorts and tabs the hub last reported, and what this browser has SEEN of each
 // cohort's last task (the tab badge clears when its channel is opened).
-let legion={on:false,cohorts:[],tabs:[],praetorium:{},seen:{},timer:null,
+let legion={on:false,cohorts:[],tabs:[],praetorium:{},broadcast:{},seen:{},timer:null,
             dialog:null,active:'praetorium'};
 try{
  legion.active=localStorage.fb_legion_active||'praetorium';
@@ -30610,6 +30666,25 @@ function renderLegion(){
   row.onclick=function(){openChannel(c.name);};
   cohortsEl.appendChild(row);
  }
+ if(n>=2){
+  // ALL COHORTS: one order, every cohort. A fan-out of one is just a send, so the
+  // row appears once there is something to fan to.
+  const all=document.createElement('div');
+  all.className='campaign-item cohort allcohorts'+(legion.active==='allcohorts'?' active':'');
+  all.title='one order, every cohort at once';
+  const aic=document.createElement('span');aic.className='campaign-icon';aic.innerHTML=SHIELD_ICON;
+  all.appendChild(aic);
+  const atx=document.createElement('span');
+  const att=document.createElement('strong');att.textContent='ALL COHORTS';atx.appendChild(att);
+  const am=document.createElement('small');
+  am.appendChild(dotFor(onCampaign?'working':'ready'));
+  const amt=document.createElement('span');
+  amt.textContent=n+' \u00b7 one order fans out';
+  am.appendChild(amt);atx.appendChild(am);
+  all.appendChild(atx);
+  all.onclick=function(){openAllCohorts();};
+  cohortsEl.appendChild(all);
+ }
  const add=document.createElement('div');
  add.className='campaign-item cohort addcohort';
  add.title='connect a box that already serves its page';
@@ -30714,6 +30789,7 @@ async function refreshLegion(){
   legion.praetorium=j.praetorium||{};
   legion.cohorts=j.cohorts||[];
   legion.tabs=j.tabs||[];
+  legion.broadcast=j.broadcast||{};
   legion.on=legion.cohorts.length>0;
   if(!legion.on){
    legion.tabs=[];
@@ -30722,7 +30798,8 @@ async function refreshLegion(){
    if(legion.active!=='praetorium')return openSession(sessionKey||'web',true);
    return;
   }
-  if(legion.active!=='praetorium'&&!legionOf(legion.active))legion.active='praetorium';
+  if(legion.active!=='praetorium'&&legion.active!=='allcohorts'
+     &&!legionOf(legion.active))legion.active='praetorium';
   renderLegion();
   const c=legion.active!=='praetorium'?legionOf(legion.active):null;
   if(c&&c.state==='working'&&!legion.timer)startLegionPoll(legion.active);
@@ -30751,6 +30828,7 @@ async function loadCohortRuns(which){
 }
 async function openChannel(which){
  if(which==='praetorium'){return openSession(sessionKey||'web',true);}
+ if(which==='allcohorts'){return openAllCohorts();}
  if(!legionOf(which))return;
  if(legion.active===which&&legion.timer)return;   // already there, already live
  if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
@@ -30805,6 +30883,69 @@ async function legionSend(text){
  legionMarkSeen(remote);
  setStage('working','on campaign \u00b7 0s, 0 tool calls');
  startLegionPoll(remote);
+}
+function cohortStateText(c){
+ const map={working:'on campaign',done:'reported',failed:'failed',silent:'unreachable',
+            ready:'ready'};
+ return (map[c.state]||c.state||'ready')+(c.task&&c.task.id?' \u00b7 '+c.task.id:'');
+}
+function paintBroadcast(){
+ const b=legion.broadcast||{};
+ const lines=[{uid:'bc-head',kind:'system',
+   text:"ONE ORDER, EVERY COHORT \u00b7 each answer lands in that cohort's own tab",i:0}];
+ if(b.summary)lines.push({uid:'bc-last',kind:'say',text:'last fan-out: '+b.summary,i:1});
+ legion.cohorts.forEach(function(c,i){
+  lines.push({uid:'bc-'+c.name,kind:c.state==='working'?'tool':'system',
+   text:'COHORS '+(NUMERALS[(c.numeral||2)-1]||c.numeral)+' '+c.name+' \u00b7 '
+        +cohortStateText(c),i:2+i});
+ });
+ reconcile('allcohorts',lines);
+}
+async function openAllCohorts(){
+ if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
+ legion.active='allcohorts';
+ try{localStorage.fb_legion_active='allcohorts';}catch(e){}
+ runId=null;busy(false);gen++;
+ clearLog();
+ chanEl.textContent='COMMAND CHANNEL \u00b7 ALL COHORTS';
+ titleEl.textContent='ALL COHORTS';
+ renderLegion();
+ setStage('ready',legion.cohorts.length+' cohorts \u00b7 one order at a time each');
+ inp.placeholder='Order every cohort to\u2026';
+ paintBroadcast();
+ await refreshLegion();
+ startAllPoll();
+}
+function startAllPoll(){
+ if(legion.timer)clearTimeout(legion.timer);
+ const my=gen;
+ legion.timer='pending';
+ (async function loop(){
+  if(my!==gen||legion.active!=='allcohorts'){legion.timer=null;return;}
+  try{
+   const r=await fetch('/api/legion',{headers:H()});
+   if(my!==gen||legion.active!=='allcohorts'){legion.timer=null;return;}
+   if(r.ok){const j=await r.json();fails=0;
+    legion.cohorts=j.cohorts||[];legion.broadcast=j.broadcast||{};
+    renderLegion();paintBroadcast();
+    const onCampaign=legion.cohorts.filter(function(c){return c.state==='working';}).length;
+    setStage(onCampaign?'working':'ready',
+      onCampaign?onCampaign+' on campaign \u00b7 each reports in its own tab'
+                :'awaiting orders');
+   }else{fails++;setStage('trouble');}
+  }catch(e){fails++;setStage('trouble');}
+  legion.timer=setTimeout(loop,fails?Math.min(5000,700*fails):1800);
+ })();
+}
+async function legionSendAll(text){
+ const {status:code,j}=await post('/api/legion',{op:'send-all',message:text});
+ if(code!==200||j.error){note(j.error||('the hub answered '+code));return;}
+ note('');
+ legion.broadcast={at:j.at,sent:j.sent||[],refused:j.refused||[],
+                   failed:j.failed||[],summary:j.summary||''};
+ paintBroadcast();
+ setStage('working','fan-out sent');
+ startAllPoll();
 }
 async function loadSessions(){
  const r=await fetch('/api/sessions'+(allEl.checked?'?all=1':''),{headers:H()});
@@ -31069,6 +31210,12 @@ async function send(){
  hist.unshift(t);histAt=-1;
  localStorage.fb_draft='';
  if(t==='/clear'){clearLog();note('transcript cleared (the conversation is still on the server)');return;}
+ if(legion.active==='allcohorts'){
+  // The fan-out channel: one order, every cohort. Each cohort's answer lands in
+  // its own tab (the hub registers one run per cohort), and the roster here shows
+  // who was sent, who was refused and who has reported.
+  return legionSendAll(t);
+ }
  if(legion.active!=='praetorium'){
   // Everything else typed on a cohort channel is an ORDER: it goes to that box
   // over A2A, where the local slash-commands mean nothing.
@@ -33671,8 +33818,15 @@ def run_webui():
                         return
                     self._json({"run_id": run_id, "remote": name})
                     return
-                self._json({"error": "unknown op (send, tab-open, tab-close, "
-                                     "add-remote)"}, 400)
+                if op == "send-all":
+                    out, code = legion_send_all(body.get("message"), client)
+                    if code != 200:
+                        self._json(out, code)
+                        return
+                    self._json(out)
+                    return
+                self._json({"error": "unknown op (send, send-all, tab-open, "
+                                     "tab-close, add-remote)"}, 400)
                 return
             if not self.path.startswith("/api/chat"):
                 self._drain()

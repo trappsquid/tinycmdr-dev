@@ -193,6 +193,7 @@ const uploads = [];
 let healthFetches = 0;
 let legionFetches = 0;
 const legionAdds = [];                 // every add-remote POST body the page sent
+const legionBroadcasts = [];           // every send-all POST and the reply it got
 const modelPosts = [];                 // every model switch the header control sent
 let modelCurrent = null;               // what /api/models calls current (the POST moves it)
 const ROSTER_MAIN = { name: 'main', url: 'http://127.0.0.1:1/v1', local: true,
@@ -480,6 +481,31 @@ function fetchShim(url, opts) {
                       added: { ok: true, name: body.remote, lines: true,
                                card: { name: 'tinycmdr', version: '9.9.9' } } });
       }
+      if (body.op === 'send-all') {
+        const names = (scenario.legion_cohorts || []).map((c) => c.name);
+        const sent = [], refused = [];
+        for (const name of names) {
+          // scenario.legion_busy refuses the FIRST cohort, so a mixed fan-out is
+          // gradeable: one already on campaign, the rest ordered.
+          if (scenario.legion_busy && name === names[0]) {
+            refused.push({ name: name,
+              reason: 'this cohort is already on campaign (task L42) - wait for its report' });
+            continue;
+          }
+          legionOpen(name, body.message);
+          sent.push(name);
+        }
+        const summary = 'order sent to ' + sent.length + ' of ' + names.length
+          + ' cohort' + (names.length === 1 ? '' : 's')
+          + (refused.length ? '; refused: '
+             + refused.map((r) => r.name + ' (already on campaign)').join(', ') : '');
+        const reply = { ok: true, sent: sent, refused: refused, failed: [],
+                        summary: summary, at: 1, text: body.message };
+        scenario.legion_broadcast = reply;
+        legionBroadcasts.push({ op: body.op, message: body.message,
+                                sent: sent, summary: summary });
+        return jres(reply);
+      }
       return jres({ error: 'unknown op' });
     }
     if (sub === '/api/legion/session') {
@@ -504,6 +530,7 @@ function fetchShim(url, opts) {
     }
     return jres({ cohorts: scenario.legion_cohorts || [],
                   tabs: scenario.legion_tabs || [],
+                  broadcast: scenario.legion_broadcast || {},
                   praetorium: { host: 'harness', version: 'harness' } });
   }
   if (url.indexOf('/api/events') === 0) {
@@ -754,6 +781,7 @@ async function main() {
     legionStat: byId.legionstat ? byId.legionstat.textContent : '',
     legionFetches: legionFetches,
     legionAdds: legionAdds,
+    legionBroadcasts: legionBroadcasts,
     addcohort: (globalThis.document.body.children || [])
       .filter((c) => c.id === 'addcohort').map((c) => c.textContent),
     cohorts: (byId.cohorts ? byId.cohorts.children : []).map((c) => ({
