@@ -47,6 +47,11 @@ RUNS_DIR = TESTS / "eval-runs"
 # Production-shaped defaults for every task unless the task overrides them.
 DEFAULT_CONFIG = {"max_steps": 40, "max_minutes": 12}
 
+# Every arm pins the same sampling, through the measurement door apply_sampling reads
+# (TINYCMDR_EVAL_SAMPLING). Without it two arms of ONE build differed by 36% of steps:
+# steps and tokens move with the sampler, and a score change must be the build's.
+EVAL_SAMPLING = {"temperature": 0.0, "top_p": 1.0, "top_k": 0}
+
 
 # --------------------------------------------------------------------------
 # Grading
@@ -444,10 +449,14 @@ def baseline_from(results, label, budget, runs):
         "endpoint": os.environ.get("TINYCMDR_TEST_BASE_URL", "http://127.0.0.1:8081/v1"),
         "model": os.environ.get("TINYCMDR_TEST_MODEL", "main"),
         "runs": runs,
-        "note": ("Sampling is inherited from the endpoint (no temperature is pinned), so a "
-                 "single task flip is a signal, not a verdict: two arms of the SAME build "
-                 "differed by 36% of steps and 14% of tokens on 2026-09-27. Treat 'no "
-                 "category regressed' as the reading, not 'the score is equal'."),
+        # The arm's pinned sampling, recorded where the numbers live: two baselines may
+        # only be compared when this block is equal.
+        "sampling": dict(EVAL_SAMPLING),
+        "note": ("Sampling is PINNED for every arm (TINYCMDR_EVAL_SAMPLING) so arms of "
+                 "one build are comparable; steps and tokens still move, so treat 'no "
+                 "category regressed' as the reading, not 'the score is equal'. The pin "
+                 "landed 2026-10-12: before it, two arms of the SAME build differed by "
+                 "36% of steps and 14% of tokens."),
         "tasks": {r["task"]: {"pass": bool(r["pass"]),
                               "category": r.get("category"),
                               "steps": r.get("steps_seen"),
@@ -544,6 +553,12 @@ def main():
     unknown = [i for i in ids if i not in eval_tasks.BY_ID]
     if unknown:
         sys.exit(f"unknown task id(s): {unknown}")
+
+    # Pin this arm's sampling for the whole process: the staged build reads the env per
+    # request (eval_sampling), and the baseline records the set.
+    os.environ["TINYCMDR_EVAL_SAMPLING"] = json.dumps(EVAL_SAMPLING, sort_keys=True)
+    print(f"sampling: PINNED {json.dumps(EVAL_SAMPLING, sort_keys=True)} "
+          f"(TINYCMDR_EVAL_SAMPLING; config cannot set this)")
 
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     out = Path(args.out) if args.out else \

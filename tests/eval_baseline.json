@@ -7,7 +7,7 @@
  "runs": [
   "20260927-092747-baseline-1032.jsonl"
  ],
- "note": "Sampling is inherited from the endpoint (no temperature is pinned), so a single task flip is a signal, not a verdict: two arms of the SAME build differed by 36% of steps and 14% of tokens on 2026-09-27. Treat 'no category regressed' as the reading, not 'the score is equal'.",
+ "note": "Sampling is inherited from the endpoint (no temperature is pinned), so a single task flip is a signal, not a verdict: two arms of the SAME build differed by 36% of steps and 14% of tokens on 2026-09-27. Treat 'no category regressed' as the reading, not 'the score is equal'. This file predates the arm pin (2026-10-12): later baselines record the pinned set in a `sampling` block, and two baselines are comparable only when it matches.",
  "tasks": {
   "T01_write_count": {
    "pass": true,
@@ -125,7 +125,7 @@
   }
  },
  "variance": {
-  "note": "Five arms of the same 18 tasks on the same endpoint and model. Sampling is inherited from the server, so steps and tokens swing widely between runs of THE SAME build: read a regression as a signal to look, not a verdict. T19_midrun_steer was measured in its own run 20 minutes earlier (it was added to the set after the arm above) and merged here; a `--baseline` run that reports it missing is reading a baseline older than this line.",
+  "note": "Five arms of the same 18 tasks on the same endpoint and model. Sampling is inherited from the server, so steps and tokens swing widely between runs of THE SAME build: read a regression as a signal to look, not a verdict. Every arm in this block predates the 2026-10-12 pin and inherited its sampling. T19_midrun_steer was measured in its own run 20 minutes earlier (it was added to the set after the arm above) and merged here; a `--baseline` run that reports it missing is reading a baseline older than this line.",
   "arms": [
    {
     "label": "baseline-1030",

@@ -2172,6 +2172,36 @@ def test_the_system_prompt_forbids_dismissing_a_request():
           "must contain what they returned" in sp, "data rule missing")
 
 
+def test_eval_sampling_pin_is_the_one_door():
+    """The eval rig's pin (TINYCMDR_EVAL_SAMPLING) is the ONE door that can put a
+    sampling set on a request - config never can - and it is whitelisted and
+    fail-safe: only SAMPLING_KEYS ride, and a malformed value is ignored, never fatal.
+    (The comparability claim it serves: without a pin, two arms of one build differed
+    by 36% of steps.)"""
+    saved = os.environ.pop("TINYCMDR_EVAL_SAMPLING", None)
+    try:
+        body = fb.apply_sampling({"model": "main", "tools": []})
+        check("pin: with no env, nothing rides (the standing rule holds)",
+              not any(k in body for k in ("temperature", "top_p", "top_k")), sorted(body))
+        os.environ["TINYCMDR_EVAL_SAMPLING"] = json.dumps(
+            {"temperature": 0.0, "top_p": 1.0, "top_k": 0, "nonsense": 7})
+        body = fb.apply_sampling({"model": "main", "temperature": 9.9, "messages": []})
+        check("pin: the declared set rides, whitelisted, and beats the payload",
+              body.get("temperature") == 0.0 and body.get("top_p") == 1.0
+              and body.get("top_k") == 0 and "nonsense" not in body, sorted(body))
+        s = fb.sampling_summary()
+        check("pin: /status announces the pin instead of 'inherited'",
+              s.startswith("PINNED by TINYCMDR_EVAL_SAMPLING") and "temperature 0" in s, s)
+        os.environ["TINYCMDR_EVAL_SAMPLING"] = "{not json"
+        check("pin: a malformed value is ignored, never fatal",
+              not any(k in fb.apply_sampling({}) for k in ("temperature", "top_p")),
+              fb.sampling_summary())
+    finally:
+        os.environ.pop("TINYCMDR_EVAL_SAMPLING", None)
+        if saved is not None:
+            os.environ["TINYCMDR_EVAL_SAMPLING"] = saved
+
+
 def test_visible_metrics_for_duplicates_and_sampling():
     """The operator should be able to see the anti-loop machinery working, and
     see which sampling is actually in force."""

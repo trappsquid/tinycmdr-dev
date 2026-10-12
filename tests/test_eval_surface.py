@@ -475,6 +475,15 @@ No model calls. Two directions per task:
         ids = [t["id"] for t in eval_tasks.TASKS]
         check(len(ids) == len(set(ids)), "task ids are unique")
         check(len(ids) >= 12, f"task set has {len(ids)} tasks")
+
+        # the arm's pinned sampling is RECORDED with the numbers, and the note says so:
+        # two baselines are only comparable when this block is equal.
+        _b = run_eval.baseline_from([], "probe", 24000, ["arm.jsonl"])
+        check("the baseline records the pinned sampling set",
+              (_b.get("sampling") or {}).get("temperature") == 0.0)
+        check("...and its note names the pin", "PINNED" in (_b.get("note") or ""))
+        check("...and the arm runner pins through the one door",
+              run_eval.EVAL_SAMPLING.get("top_p") == 1.0)
         print()
         if FAILS:
             print(f"{len(FAILS)} check(s) failed")

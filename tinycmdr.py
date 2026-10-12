@@ -249,10 +249,12 @@ DEFAULT_CONFIG = {
         # Sampling is NOT configured here, on purpose: it is inherited from
         # whatever endpoint the request lands on (local llama.cpp reads the model
         # file's own general.sampling.* metadata; a cloud provider uses its own
-        # defaults). apply_sampling() strips these keys so nothing can send them.
-        # This entry used to read "temperature": 0.6 — that is where the
+        # defaults). apply_sampling() strips these keys so config can never send
+        # them. This entry used to read "temperature": 0.6 — that is where the
         # unexplained 0.6 came from: a default nobody remembered choosing, which
-        # applied whenever config.json did not override it.
+        # applied whenever config.json did not override it. The one door that may
+        # put a sampling set back is the evaluation rig's TINYCMDR_EVAL_SAMPLING
+        # (see eval_sampling) — a bot run never sets it.
         # A per-SEGMENT budget since 2026-10-10 (the peer of agent.max_steps and
         # max_minutes): when it is reached the harness checkpoints and continues the job
         # in a fresh segment, so it is runway, not a guillotine. It used to bound the
@@ -19421,10 +19423,40 @@ def strays_in_config():
     return sorted(out)
 
 
+def eval_sampling():
+    """The evaluation rig's pinned sampling, from TINYCMDR_EVAL_SAMPLING (a JSON
+    object), or {}.
+
+    The standing rule is that a request carries no sampling config can name: a stale
+    value would silently override whatever endpoint or model the box is pointed at, and
+    this box carried 0.6 for weeks exactly that way. An evaluation ARM is the one place
+    the trade flips - comparability beats the endpoint's defaults (two arms of one build
+    differed by 36% of steps without a pin) - so the pin exists behind ONE door a bot
+    run never sets, is whitelisted to SAMPLING_KEYS, and a malformed value is reported
+    and ignored, never fatal."""
+    raw = os.environ.get("TINYCMDR_EVAL_SAMPLING") or ""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        log.warning("TINYCMDR_EVAL_SAMPLING is not JSON - ignored: %r", raw[:120])
+        return {}
+    if not isinstance(data, dict):
+        log.warning("TINYCMDR_EVAL_SAMPLING is not an object - ignored: %r", raw[:120])
+        return {}
+    return {k: data[k] for k in SAMPLING_KEYS if data.get(k) is not None}
+
+
 def sampling_summary():
-    """One line for /status describing the sampling in force. Sampling is always
-    inherited from the endpoint, so the real numbers come from /props — nothing
-    here comes from our config."""
+    """One line for /status describing the sampling in force. Sampling is inherited
+    from the endpoint, so the real numbers come from /props - nothing here comes from
+    config; the eval pin (eval_sampling) is the one exception, and it announces
+    itself."""
+    pin = eval_sampling()
+    if pin:
+        return ("PINNED by TINYCMDR_EVAL_SAMPLING: "
+                + " · ".join(f"{k} {_num(v)}" for k, v in sorted(pin.items())))
     server = server_defaults()
     if server:
         got = " · ".join(f"{_SHORT[k]} {_num(server[k])}"
@@ -19862,7 +19894,7 @@ def _apply_reasoning_flags(payload, url):
 
 
 def apply_sampling(payload):
-    """Strip sampling parameters from a request; never add any.
+    """Strip what a request must never carry, then apply the eval pin.
 
     Sampling is inherited from whatever endpoint the request lands on: local
     llama.cpp reads the model file's own `general.sampling.*` metadata, a cloud
@@ -19871,10 +19903,12 @@ def apply_sampling(payload):
     model changes — this box carried a stale `temperature: 0.6` for weeks
     because of exactly that. Kept as the single choke point (rather than
     deleted) so there is one place to look, and so even a stray value that
-    reaches the payload cannot be sent.
+    reaches the payload cannot be sent. The ONE door that may put a set back is
+    eval_sampling() (TINYCMDR_EVAL_SAMPLING), the measurement rig's pin.
     """
     for k in SAMPLING_KEYS:
         payload.pop(k, None)
+    payload.update(eval_sampling())
     return payload
 
 
@@ -39505,6 +39539,10 @@ def cli_banner():
     model = "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])
     context = ("~%s usable per turn \u00b7 prompt %s"
                % (fmt_tokens(f["env"]["budget"]), f["prompt"]))
+    if eval_sampling():
+        # The eval pin is the one thing a startup reader must not have to open /status
+        # for: only another pinned arm's numbers are comparable to these.
+        context += " \u00b7 sampling PINNED (eval arm)"
     if f["env"].get("source") == "assumed":
         # The number below it is a guess with a moving denominator (8000 + static + reply);
         # saying so is the difference between a wrong window and an honest unknown.
