@@ -25489,9 +25489,10 @@ class TuiScreen:
         head = Text(title, style=title_style or "bold")
         if foot:
             head.append("   " + foot, style="dim")
-        self._draw(Panel(body, title=head, title_align="left",
-                         border_style=border_style, box=self.box, padding=(0, 1),
-                         style=self.surface), raw=raw, kind=kind)
+        return self._draw(Panel(body, title=head, title_align="left",
+                                border_style=border_style, box=self.box,
+                                padding=(0, 1),
+                                style=self.surface), raw=raw, kind=kind)
 
     # -- the pieces the console asks for -----------------------------------
     def banner(self, title, rows, hint=""):
@@ -25571,9 +25572,21 @@ class TuiScreen:
         if title == "answer":
             # the title carries the one accent; the frame stays quiet so the words
             # are the brightest thing on the screen
-            self._panel(title, self.style("heading"), style, body, foot, raw=str(text), kind=kind)
-        else:
-            self._panel(title, ("bold " + style).strip(), style, body, foot, raw=str(text), kind=kind)
+            return self._panel(title, self.style("heading"), style, body, foot,
+                               raw=str(text), kind=kind)
+        return self._panel(title, ("bold " + style).strip(), style, body, foot,
+                           raw=str(text), kind=kind)
+
+    def amend_call(self, ix, kind, text):
+        """Fold a SUCCESSFUL, one-line result into its call's own frame.
+
+        The brief's section 6 target: a call and its result read as one visual unit,
+        the result a dim footer line in the same box - and two boxes again on failure
+        or a multi-line preview, so nothing that needs attention hides in a footer.
+        Only a repaintable screen can do this; the inline console cannot take a
+        printed line back (see the class docstring), so it keeps the two-box shape."""
+        del ix, kind, text
+        return False
 
     def answer_card(self, ref, answer):
         """The answer card, with `ref` (the question) filed immediately above it.
@@ -25770,6 +25783,7 @@ class CliDestination(Destination):
         self._row = None         # ask_user's row while a question is open here
         self.on_drop = on_drop   # told what the streamed draft said, when it goes
         self._refs = {}          # ref -> the text already printed for it
+        self._call_items = {}    # a call's ref -> its item index, when the screen repaints
         self._open = False       # a line printed without its newline yet
         self._pulsed = set()     # drafts already reduced to one dim pulse
         self._hold = {}          # ref -> (text, when) while a line's opening is held
@@ -25887,13 +25901,16 @@ class CliDestination(Destination):
             # only thing worth printing, and it lands through update()
             return self.STATUS_REF
         self._close()
+        ix = None
         if self.screen is not None:
-            self.screen.card(kind, self._plain(text))
+            ix = self.screen.card(kind, self._plain(text))
         else:
             self._emit(self._paint("  " + self.glyphs.get(kind, "") + self._plain(text),
                                    self.TONES.get(kind, "0")))
         ref = ("cli", len(self._refs))
         self._refs[ref] = str(text)
+        if kind == "tool" and ix is not None:
+            self._call_items[ref] = ix      # its result may fold into this frame
         if kind == "narration" and str(text).strip():
             # A narration line is drawn on sight (it is the first chunk of what may
             # become the answer); remember how much of it the terminal holds.
@@ -25946,6 +25963,10 @@ class CliDestination(Destination):
             # a line of its own, and only a real one gets the brightest card
             if kind == "final":
                 self.screen.status_line(self._plain(text))
+            elif kind in ("tool_done", "tool_fail") \
+                    and self.screen.amend_call(self._call_items.pop(ref, None),
+                                               kind, self._plain(text)):
+                pass        # one visual unit: the result rode the call's own frame
             else:
                 self.screen.card(kind, self._plain(text))
         else:
@@ -26255,6 +26276,7 @@ class AppScreen(TuiScreen):
         self._open = False
         self._new_item()
         self._invalidate()
+        return len(self.items) - 1
 
     def _put(self, ansi, end="\n", raw=None, kind=None):
         del end
@@ -26308,11 +26330,44 @@ class AppScreen(TuiScreen):
                 self._narration_from = len(self.items)
         else:
             self._narration_from = None
-        super().card(kind, text, foot)
+        rc = super().card(kind, text, foot)
         if kind == "final":
             self._final = str(text)
             self._finals.append(str(text))
             del self._finals[:-self.REPRINT_ANSWERS]
+        return rc
+
+    def amend_call(self, ix, kind, text):
+        """Fold a successful, one-line result into the call's own frame, in place.
+
+        This screen repaints, so the call's panel can be rebuilt with the result as a
+        dim footer line - one visual unit, exactly the transcript shape the brief
+        asks for. Failure and a multi-line preview fall back to a card of their own
+        (CliDestination.update draws it when this returns False)."""
+        if kind != "tool_done" or "\n" in str(text) or not isinstance(ix, int):
+            return False
+        if not (0 <= ix < len(self.items)) or self.items[ix][3] != "tool":
+            return False
+        from rich.panel import Panel
+        from rich.text import Text
+        call_text = str(self.items[ix][2] or "")
+        style = self.style(TUI_KINDS.get("tool", (None, "call"))[1])
+        body = Text()
+        _head, _sep, _rest = call_text.partition("(")
+        body.append(_head, style=self.style("call") or "default")
+        if _sep:
+            body.append("(" + _rest, style=self.style("body") or "default")
+        body.append("\n" + str(text), style="dim")
+        panel = Panel(body, title=Text("call", style=("bold " + style).strip()),
+                      title_align="left", border_style=style, box=self.box,
+                      padding=(0, 1), style=self.surface)
+        self.items[ix] = ("r", panel, call_text + "\n" + str(text), "tool")
+        # The item list is the truth and lines() renders lazily: drop the cached
+        # render from this item on, or the pane keeps painting the old panel.
+        del self._rendered[ix:]
+        self._flat_of = -1
+        self._invalidate()
+        return True
 
     def _drop_narration(self):
         """Drop the run's draft region: the pane repaints, so nothing is filed."""

@@ -992,6 +992,32 @@ if HAVE_APP:
         check("--app's own surface starts no page lane (that is main()'s)",
               not _webui_calls, _webui_calls)
 
+        # the one-unit shape (the brief's section 6): a successful call and its
+        # one-line result are ONE frame, the result a dim footer inside it; failure
+        # and a multi-line preview keep two boxes on purpose
+        check("--app: a call and its one-line result read as ONE item",
+              any(it[3] == "tool" and "echo · 0.1s" in (it[2] or "")
+                  for it in app_screen.items),
+              [(it[3], (it[2] or "")[:60]) for it in app_screen.items])
+        check("...and no separate result card is filed",
+              not any(it[3] == "tool_done" for it in app_screen.items),
+              [it[3] for it in app_screen.items])
+        _f = fb.AppScreen(colour=False, tier="truecolor")
+        _fdest = fb.CliDestination(colour=False, screen=_f)
+        _fref = _fdest.line("tool", "`shell` make")
+        _fdest.update(_fref, "tool_fail", "exit 2 - make died on line 3")
+        check("...a failure expands to its own card, never a footer",
+              any(it[3] == "tool_fail" for it in _f.items)
+              and any(it[3] == "tool" and (it[2] or "").count("\n") == 0
+                      for it in _f.items),
+              [it[3] for it in _f.items])
+        _m = fb.AppScreen(colour=False, tier="truecolor")
+        _mdest = fb.CliDestination(colour=False, screen=_m)
+        _mref = _mdest.line("tool", "`shell` tree")
+        _mdest.update(_mref, "tool_done", "line one\nline two")
+        check("...and a multi-line preview keeps two boxes",
+              any(it[3] == "tool_done" for it in _m.items), [it[3] for it in _m.items])
+
         # scrolling: auto-follow at the bottom, and a page up suspends it
         _full = fb.AppScreen(colour=False, tier="truecolor")
         for _i in range(80):
