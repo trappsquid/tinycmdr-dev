@@ -2048,10 +2048,26 @@ def main():
           "an upload name cannot carry a platform-reserved character",
           fb._web_safe_name("report*final.pdf"))
     _ts231 = int(time.time())
-    for _off in range(4):
+    # The fixture is a DIRECTORY where the door wants to write, which no write can take.
+    # The token in the stored name is random by design (A-39), so the name is pinned
+    # through the door's own namer instead of guessed; a build without that seam
+    # (pre-A-39) is left alone, and the check below grades whatever name it builds.
+    # getattr, not a direct attribute: a pre-fix build must FAIL a check here, never die
+    # inside the fixture.
+    _bad231 = STAGE / "uploads" / ("%d_blocked.txt" % _ts231)
+    # The neighbours are for a build WITHOUT that seam: its name is the second alone, so
+    # the test's own second (or the one either side of it) still lands on a directory.
+    for _off in (-1, 0, 1):
         (STAGE / "uploads" / ("%d_blocked.txt" % (_ts231 + _off))).mkdir(exist_ok=True)
-    _st231, _hd231, _bd231, _ = probe("POST", "/api/upload?name=blocked.txt", TOK,
-                                      b"payload")
+    _namer231 = getattr(fb, "_upload_name", None)
+    if _namer231:
+        fb._upload_name = lambda safe: _bad231.name
+    try:
+        _st231, _hd231, _bd231, _ = probe("POST", "/api/upload?name=blocked.txt", TOK,
+                                          b"payload")
+    finally:
+        if _namer231:
+            fb._upload_name = _namer231
     check(_st231 == 400 and b"cannot be stored" in _bd231,
           "an upload name that cannot be written ANSWERS; it does not drop the socket",
           (_st231, _bd231[:90]))
@@ -2315,19 +2331,119 @@ def main():
           "the stylesheet revalidates with a 304 instead of being re-read",
           (_hd254.get("ETag"), _st254b))
 
-    # ---- A-233/234: uploads/ never ages out, and a same-second name overwrites -----
-    # Both are in the ledger already (A-40 and A-39, ACCEPTED: the fix there is a random
-    # suffix). Pinned so the disposition is visible in the suite, not re-litigated.
-    _up_before = len(list((STAGE / "uploads").glob("*")))
-    _dup_a = probe("POST", "/api/upload?name=pinned-dup.bin", TOK, b"one")
-    _dup_b = probe("POST", "/api/upload?name=pinned-dup.bin", TOK, b"two")
-    _up_after = len(list((STAGE / "uploads").glob("*")))
-    _dupfiles = sorted((STAGE / "uploads").glob("*_pinned-dup.bin"))
-    check(_dup_a[0] == 200 and _dup_b[0] == 200 and _dupfiles
-          and _dupfiles[-1].read_bytes() == b"two"
-          and _up_after >= _up_before + 1,
-          "a same-second upload name overwrites, and uploads/ ages nothing out "
-          "(A-233/234, ledger A-40/A-39 accepted)", (_up_before, _up_after))
+    # ---- A-233/234 (ledger A-39/A-40): no silent replacement, and uploads/ ages out --
+    # A-39's accepted fix is a random suffix on the stored name; A-40's is an age prune
+    # that only considers this app's own `<digits>_` names. The clock is FROZEN for the
+    # two uploads below so "same second" is a fact under test rather than a race the
+    # pre-fix build would win most of the time - and the pre-fix build (one file, the
+    # second payload) fails this check either way.
+    _up_dir = STAGE / "uploads"
+    _real_time = fb.time.time
+    _frozen = _real_time()
+    try:
+        fb.time.time = lambda: _frozen
+        _dup_a = probe("POST", "/api/upload?name=" + urllib.parse.quote("pinned-dup.bin"),
+                       TOK, b"one")
+        _dup_b = probe("POST", "/api/upload?name=" + urllib.parse.quote("pinned-dup.bin"),
+                       TOK, b"two")
+    finally:
+        fb.time.time = _real_time
+    _dupfiles = sorted(_up_dir.glob("*_pinned-dup.bin"))
+    _dupname = json.loads(_dup_b[2]).get("name", "") if _dup_b[0] == 200 else ""
+    check(_dup_a[0] == 200 and _dup_b[0] == 200 and len(_dupfiles) == 2
+          and sorted(f.read_bytes() for f in _dupfiles) == [b"one", b"two"],
+          "two uploads of one name in the same second land as TWO files, neither kept "
+          "silently (A-233, ledger A-39)", [f.name for f in _dupfiles])
+    check(bool(re.match(r"^\d+_[0-9a-f]{6}_pinned-dup\.bin$", _dupname)),
+          "the stored name keeps the <digits>_<name> shape, with the suffix between",
+          _dupname)
+
+    # The prune is A-40's half: past `agent.uploads_keep_days` (shipped default, 30) an
+    # upload this app wrote goes, and a file the operator dropped in by hand stays.
+    _keep_days = fb.CONFIG["agent"].get("uploads_keep_days")
+    check(_keep_days == 30, "the uploads age bound ships as a 30-day default", _keep_days)
+    _old_app = _up_dir / "1000000000_old-upload.bin"
+    _old_app.write_bytes(b"old app upload")
+    _stale = _frozen - 40 * 86400
+    os.utime(_old_app, (_stale, _stale))
+    _old_hand = _up_dir / "operator-drop.bin"      # no `<digits>_` prefix: not ours
+    _old_hand.write_bytes(b"hand placed")
+    os.utime(_old_hand, (_stale, _stale))
+    _fresh_app = _up_dir / "1000000000_fresh.bin"
+    _fresh_app.write_bytes(b"fresh")
+    probe("POST", "/api/upload?name=prune-trigger.bin", TOK, b"trigger")
+    check(not _old_app.exists() and _old_hand.exists() and _fresh_app.exists(),
+          "an upload past the age bound is pruned; a hand-placed file and a fresh one "
+          "are kept (A-234, ledger A-40)",
+          sorted(p.name for p in _up_dir.glob("*")))
+
+    # ...and at rest, on POSIX: mkdir's mode and open's mode are both umask-blind, so an
+    # attachment was 0644 in a 0755 folder. Windows has no such bits - its ACL decides,
+    # and the product leaves it alone.
+    _upmode = _up_dir.stat().st_mode
+    _probe_upload = _dupfiles[0] if _dupfiles else _up_dir / "missing"
+    if os.name == "nt":
+        # The same claim as the .env check above, in what Windows DOES guarantee: the
+        # mode argument only carries the read-only bit there, and the ACL is left as it
+        # was, so what must hold is that the file stayed the owner's to read and rewrite
+        # and is still inside uploads/.
+        check(os.access(_probe_upload, os.R_OK | os.W_OK)
+              and _probe_upload.parent == _up_dir,
+              "the upload folder and its files stay the owner's, in place (Windows ACLs)",
+              (str(_probe_upload), str(_up_dir)))
+    else:
+        _filemode = _probe_upload.stat().st_mode
+        check((_upmode & 0o077) == 0 and (_filemode & 0o077) == 0,
+              "uploads/ is 0700 and an upload lands 0600, not umask's 0755/0644 "
+              "(ledger A-08)", (oct(_upmode & 0o777), oct(_filemode & 0o777)))
+        # ...and the fix reaches an install that already has the folder: a 0755
+        # uploads/ (what every older build made) is narrowed, not left as it was.
+        # getattr: a pre-fix build has no folder door, and this check must not die.
+        _dir_door = getattr(fb, "_uploads_dir", None)
+        os.chmod(_up_dir, 0o755)
+        if _dir_door:
+            _dir_door()
+        check(_dir_door is not None and (_up_dir.stat().st_mode & 0o077) == 0,
+              "a folder an older build left 0755 is narrowed at the next upload",
+              (oct(_up_dir.stat().st_mode & 0o777), bool(_dir_door)))
+
+    # ---- ledger A-10-14: one attachment, one stored name, whichever door got it ------
+    # The chat-lane intake named its file with bare os.path.basename, so the same
+    # attachment landed under two different names depending on the door - and a
+    # Windows-reserved name that the page door has answered since A-231 failed at write
+    # time there. Both chat doors now run the page door's sanitiser.
+    class _FilesStub:
+        @staticmethod
+        def get_file(fid):
+            return b"attachment bytes"
+
+    class _DispatcherStub:                 # _process_attachments reads only the driver
+        driver = type("_D", (), {"files": _FilesStub()})()
+
+    _mm_post = {"file_ids": ["f1"],
+                "metadata": {"files": [{"id": "f1", "name": "monthly*report.pdf",
+                                        "mime_type": "application/pdf"}]}}
+    _proc = getattr(fb.MattermostDispatcher, "_process_attachments", None)
+    try:
+        _mm_notes = _proc(_DispatcherStub(), _mm_post) if _proc else []
+    except Exception as _e:                                          # noqa: BLE001
+        # pre-fix on Windows: the reserved character reaches the write and raises
+        _mm_notes = ["%s: %s" % (type(_e).__name__, _e)]
+    _mm_saved = sorted(p.name for p in _up_dir.glob("*_monthly_report.pdf"))
+    check(len(_mm_saved) == 1 and bool(re.match(r"^\d+_[0-9a-f]{6}_monthly_report\.pdf$",
+                                                _mm_saved[0])),
+          "the chat lane stores the SANITISED name the page door would (ledger A-10-14)",
+          (_mm_saved, _mm_notes))
+
+    _tg_dl = getattr(fb, "tg_download_media", None)
+    try:
+        _tg_notes = _tg_dl(_FilesStub(), [("f1", "voix*3.ogg", "audio/ogg")]) \
+            if _tg_dl else []
+    except Exception as _e:                                          # noqa: BLE001
+        _tg_notes = ["%s: %s" % (type(_e).__name__, _e)]
+    _tg_saved = sorted(p.name for p in _up_dir.glob("*_voix_3.ogg"))
+    check(len(_tg_saved) == 1,
+          "the Telegram door stores it too (ledger A-10-14)", (_tg_saved, _tg_notes))
 
     # ---- A-255: a non-ASCII download name rides RFC 5987 ------------------------
     _caf255 = STAGE / "caf\u00e9.pdf"

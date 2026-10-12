@@ -439,6 +439,12 @@ DEFAULT_CONFIG = {
         # tail with an explicit omitted-bytes marker; the pointer says so. A runaway
         # command (a multi-GB log) used to be written in full, byte for byte.
         "spill_max_bytes": 8388608,
+        # uploads/ is the one folder the operator's own files land in - the page, the
+        # Mattermost and the Telegram door all write there - and nothing ever emptied
+        # it. A file this app wrote (`<digits>_...`) is dropped once it is older than
+        # this; a file the operator put there by hand is never touched. 0 = keep
+        # everything, forever.
+        "uploads_keep_days": 30,
         # Tool-result digestion: a known command shape is rendered down to its
         # signal before the model reads it. The cap above only cuts a 30-line error
         # out of 6k chars of routine output; this finds the line that mattered and
@@ -29234,6 +29240,103 @@ WEB_TARGET_MAX = 4096
 # the two directions agree, and read under the same deadline discipline as _body.
 WEB_UPLOAD_MAX = SEND_FILE_MAX
 
+# The uploads folder's own bounds. Three doors write into it (the page, the Mattermost
+# lane, the Telegram lane) and it had neither: a second upload of the same name
+# replaced the first, and nothing ever removed anything.
+UPLOADS_KEEP_DAYS_DEFAULT = 30
+# What this app names its own uploads: `<digits>_...`. Only these are ever pruned -
+# a file the operator dropped into uploads/ by hand is not ours to delete.
+_UPLOAD_NAME_RE = re.compile(r"^\d+_")
+
+
+def _uploads_dir():
+    """The uploads folder, owner-only.
+
+    `mkdir(exist_ok=True)` takes its mode from the umask, so on a default box uploads/
+    was 0755 and every file in it 0644 - an operator attachment (a document, a .env
+    dragged in to be inspected) sat readable by any local user, the same at-rest defect
+    spill/ was fixed for. The mode is set at creation and tightened when an older build
+    left it wide. Windows has no mode bits, so its ACL keeps deciding
+    (A-2026-10-10-08)."""
+    UPLOADS_DIR.mkdir(mode=0o700, exist_ok=True)
+    if os.name != "nt":
+        try:
+            if stat.S_IMODE(UPLOADS_DIR.stat().st_mode) & 0o077:
+                os.chmod(UPLOADS_DIR, 0o700)
+        except OSError:
+            pass
+    return UPLOADS_DIR
+
+
+def _upload_name(safe):
+    """The stored name for one upload: `<digits>_<6 hex>_<safe>`.
+
+    Seconds alone collide: two uploads of the same name inside the same second wrote
+    the same path, and the second silently REPLACED the first (A-2026-10-05-39 - the
+    ledger's accepted fix is this random suffix, which the three doors now share so the
+    shape cannot drift between lanes). The digits stay first and the sanitised name
+    stays last, so the extension a caller reads is intact."""
+    return "%d_%s_%s" % (int(time.time()), os.urandom(3).hex(), safe)
+
+
+def _upload_write(dest, data):
+    """Write one uploaded file owner-only, whatever the umask says.
+
+    `dest.write_bytes(data)` creates through the mode the umask leaves (0666 & ~umask -
+    0644 on a default box). The fd is opened O_CREAT with 0600 and fchmod'd to 0600 -
+    the shape atomic_write_bytes uses for its temp - so a file an older build left
+    world-readable is narrowed too. On Windows the mode argument only carries the
+    read-only bit and the ACL keeps deciding, so nothing is loosened there
+    (A-2026-10-10-08)."""
+    fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                 | getattr(os, "O_BINARY", 0), 0o600)
+    try:
+        if os.name != "nt" and hasattr(os, "fchmod"):
+            try:
+                os.fchmod(fd, 0o600)       # an existing looser mode is not kept
+            except OSError:
+                pass
+        fh = os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        raise
+    with fh:
+        fh.write(data)
+
+
+def _uploads_prune(now=None):
+    """Drop this app's own uploads past `agent.uploads_keep_days`. Returns the count.
+
+    uploads/ grew without bound: all three doors write there and nothing ever deleted
+    anything (A-2026-10-05-40). Only names this app makes - `<digits>_...` - are
+    candidates, and the page door runs this once per upload: one scandir of one flat
+    directory, whose entries carry their own stat. 0 disables the prune, and a folder
+    this process cannot read is not an error here."""
+    try:
+        days = int((CONFIG.get("agent") or {}).get("uploads_keep_days") or 0)
+    except (TypeError, ValueError):
+        days = UPLOADS_KEEP_DAYS_DEFAULT
+    if days <= 0:
+        return 0
+    cutoff = (time.time() if now is None else now) - days * 86400
+    try:
+        entries = list(os.scandir(str(UPLOADS_DIR)))
+    except OSError:
+        return 0
+    dropped = 0
+    for entry in entries:
+        if not _UPLOAD_NAME_RE.match(entry.name):
+            continue
+        try:
+            if entry.is_file(follow_symlinks=False) and entry.stat().st_mtime < cutoff:
+                os.unlink(entry.path)
+                dropped += 1
+        except OSError:
+            continue
+    if dropped:
+        log.info("uploads: dropped %d file(s) older than %d day(s)", dropped, days)
+    return dropped
+
 
 def _web_safe_name(name):
     """A stored filename that cannot escape uploads/ or carry separators/controls.
@@ -32649,11 +32752,16 @@ def run_webui():
                 # turn a literal "%2e%2e" in a filename into ".." before _web_safe_name
                 # sees it (A-223).
                 raw = (self._query().get("name") or "").strip()
-                UPLOADS_DIR.mkdir(exist_ok=True)
+                folder = _uploads_dir()
+                # The one door that runs the age prune (A-2026-10-05-40): it is where an
+                # install's uploads come from, and the gate is one scandir of one flat
+                # directory - never the file being written now, whose mtime is this
+                # second.
+                _uploads_prune()
                 safe = _web_safe_name(raw) if raw else "upload.bin"
-                dest = UPLOADS_DIR / ("%d_%s" % (int(time.time()), safe))
+                dest = folder / _upload_name(safe)
                 try:
-                    dest.write_bytes(data)
+                    _upload_write(dest, data)
                 except OSError as e:
                     # A name this filesystem will not take (a reserved character, or a
                     # name that is already a directory) used to raise OUT of the handler
@@ -34462,9 +34570,14 @@ class MattermostDispatcher:
             except Exception as e:
                 notes.append(f"[failed to download attachment {name}: {e}]")
                 continue
-            UPLOADS_DIR.mkdir(exist_ok=True)
-            dest = UPLOADS_DIR / f"{int(time.time())}_{os.path.basename(name)}"
-            dest.write_bytes(content)
+            # The same treatment the page door gives an upload name (A-2026-10-10-14):
+            # basename alone left the reserved characters, the 120-byte cut and the
+            # rewrite unreported, so one attachment was stored under two names
+            # depending on which door received it. _web_safe_name takes the basename
+            # itself, so nothing here reads a path component.
+            dest = (_uploads_dir()
+                    / _upload_name(_web_safe_name(name)))
+            _upload_write(dest, content)
             if mime.startswith("image/") and CONFIG["agent"].get("vision"):
                 images.append((mime, base64.b64encode(content).decode()))
                 notes.append(f"[image attached; also saved to {dest}]")
@@ -37119,9 +37232,11 @@ def tg_download_media(client, items):
         except Exception as exc:                                # noqa: BLE001 - reported
             notes.append("[failed to download attachment %s: %s]" % (name, exc))
             continue
-        UPLOADS_DIR.mkdir(exist_ok=True)
-        dest = UPLOADS_DIR / ("%d_%s" % (int(time.time()), os.path.basename(name)))
-        dest.write_bytes(content)
+        # Same name for the same attachment whichever chat lane received it: the
+        # Telegram door's line was basename-only, which is the parity gap
+        # A-2026-10-10-14 names at the Mattermost door.
+        dest = _uploads_dir() / _upload_name(_web_safe_name(name))
+        _upload_write(dest, content)
         if str(mime).startswith("image/") and CONFIG["agent"].get("vision"):
             images.append((mime, base64.b64encode(content).decode()))
             notes.append("[image attached; also saved to %s]" % dest)
