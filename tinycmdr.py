@@ -23564,6 +23564,27 @@ def model_route_for(name):
             "which ignores the model field and serves whatever is loaded")
 
 
+def _model_place(e):
+    """One plain phrase for where a model lives - never a bare URL.
+
+    `model list` is read by the same person the numbered picker serves, and a URL is
+    not actionable for them; the entry already carries everything this needs (the URL,
+    the primary/fallback flag, and the key the endpoint takes)."""
+    url = str(e.get("url") or "")
+    try:
+        host = (urllib.parse.urlsplit(url if "//" in url else "//" + url).hostname
+                or "").lower()
+    except Exception:                                            # noqa: BLE001
+        host = ""
+    if host in ("localhost", "::1") or host.startswith("127."):
+        return "this box"
+    if e.get("local") or _is_local_url(url):
+        return "a box on your network"
+    if str(e.get("key") or "none") != "none":
+        return "cloud, needs a key"
+    return "off this network"
+
+
 def set_global_model(model_name):
     """Set the bot-wide default model in config.json — every conversation,
     including scheduled jobs, and it survives a restart. The value being
@@ -27151,12 +27172,15 @@ def model_command(session_key, arg):
                 f"`/tinycmdr model <name> --global` for every conversation · "
                 f"`/model default [--global]` to revert")
     if name.lower() in ("list", "ls", "models"):
-        return ("Models this bot can run:\n"
-                + "\n".join(f"- `{e['name']}` → `{e['url']}`"
-                            + (" (local)" if _is_local_url(e.get("url")) else "")
-                            for e in cat)
-                + "\nOnly the names on off-box endpoints change where a call "
-                  "goes — the local server serves whatever is loaded.")
+        lines = ["Models this bot can run:"]
+        for i, e in enumerate(cat, 1):
+            mark = ("   ← in use now"
+                    if e["name"].lower() == str(current).lower() else "")
+            lines.append("  %d. `%s` — %s%s" % (i, e["name"], _model_place(e), mark))
+        lines.append("`/tinycmdr model <number>` switches · `/tinycmdr model default` "
+                     "reverts · only off-box endpoints change where a call goes — "
+                     "the local server serves whatever is loaded.")
+        return "\n".join(lines)
     if name.lower() in ("default", "reset", "off"):
         if is_global:
             prev, err = restore_global_model()
@@ -27170,6 +27194,13 @@ def model_command(session_key, arg):
         _save_overrides()
         return (f"Model reverted to the config default for this "
                 f"conversation: `{CONFIG['llm']['model']}`")
+    if name.isdigit():
+        n = int(name)
+        if 1 <= n <= len(cat):
+            name = cat[n - 1]["name"]
+        else:
+            return (f"⚠️ Nothing switched: there is no model number `{name}` — "
+                    f"`/tinycmdr model list` numbers them 1–{len(cat)}.")
     e = model_entry(name)
     if not e:
         return (f"⚠️ Nothing switched: no reachable endpoint advertises "
@@ -29357,49 +29388,118 @@ def legion_lines(name):
 # browser, so the same facts had to be asked for in chat. Read-only on purpose:
 # the model owns these files, and a page that writes them is a second writer with
 # no lock discipline.
-WEB_COMMANDS = (
-    ("/tinycmdr new", "start a fresh conversation"),
-    ("/tinycmdr status", "this host: model, context, limits, uptime"),
-    ("/tinycmdr stop", "cancel the run that is going"),
-    ("/tinycmdr undo [N]", "drop the last N exchanges"),
-    ("/tinycmdr retry", "run my last request again"),
-    ("/tinycmdr model [name|list] [--global]", "show, list or switch the model"),
-    ("/tinycmdr reasoning [level]", "reasoning effort for this conversation"),
-    ("/tinycmdr plan [on|off|apply]", "plan mode: look, don't touch - then approve"),
-    ("/tinycmdr restart", "restart the bot"),
-    ("/tinycmdr version", "the version this page is talking to"),
-    ("/tinycmdr help", "this list"),
+# One table behind every help surface: the chat /help block (Mattermost posts it,
+# Telegram's TG_HELP renders the same rows) and the page's /help reply and "/" palette
+# (`web_command_rows`, which GET /api/commands serves). The shell's VERB_HELP stays the
+# terminal's own detail page. The verb sets genuinely differ - the page runs no /save,
+# /fork, /bg or /pause, and a lane renders no page-only word - so each row carries its
+# surfaces; that difference is DATA here instead of three hand-kept lists that drift
+# (they had: the page answered "Unknown command" for `/update` while both chat lanes
+# ran it, and the help blocks disagreed on which verbs existed at all; reported
+# 2026-10-12). A verb the table lacks but `_CHAT_VERB_SET` carries still rides in on
+# the page, and a suite fails when the table and the set disagree.
+# (group, verb, shown as, one plain line, on chat?, on the page?)
+_HELP_ROWS = (
+    ("Your conversation", "new", "new", "start a fresh conversation", 1, 1),
+    ("Your conversation", "save", "save", "export this conversation to a file", 1, 0),
+    ("Your conversation", "fork", "fork [name]",
+     "branch the conversation into a copy", 1, 0),
+    ("While I'm working", "stop", "stop", "cancel the run that is going", 1, 1),
+    ("While I'm working", "undo", "undo [N]", "drop the last N exchanges", 1, 1),
+    ("While I'm working", "retry", "retry", "run my last request again", 1, 1),
+    ("While I'm working", "bg", "bg <task>", "run it in the background", 1, 0),
+    ("While I'm working", "pause", "pause [reason|off]",
+     "hold new tasks until resumed", 1, 0),
+    ("While I'm working", "plan", "plan [on|off|apply]",
+     "read-only planning: look, don't touch, then approve", 1, 1),
+    ("Change how I work", "model", "model [name|list] [--global]",
+     "show, list or switch the model", 1, 1),
+    ("Change how I work", "reasoning", "reasoning [level]",
+     "how hard it thinks, for this conversation", 1, 1),
+    ("Change how I work", "config", "config",
+     "get, set, unset or list settings - e.g. `config set agent.max_steps 40`", 1, 1),
+    ("Change how I work", "approvals", "approvals",
+     "what the confirm gate stopped asking about", 1, 1),
+    ("Fix and maintain", "status", "status",
+     "this host: model, context, limits, uptime", 1, 1),
+    ("Fix and maintain", "doctor", "doctor",
+     "what is configured and what is missing", 1, 1),
+    ("Fix and maintain", "health", "health",
+     "the health payload: lanes, sockets, version", 1, 1),
+    ("Fix and maintain", "logs", "logs", "the tail of this host's log", 1, 1),
+    ("Fix and maintain", "proc", "proc", "the bot's processes and children", 1, 1),
+    ("Fix and maintain", "clean", "clean",
+     "sweep stale files (spins, spills, uploads)", 1, 1),
+    ("Fix and maintain", "failures", "failures",
+     "the recent failures this host recorded", 1, 1),
+    ("Fix and maintain", "restart", "restart", "restart the bot", 1, 1),
+    ("Fix and maintain", "update", "update",
+     "update from the published release, then restart onto it", 1, 1),
+    ("Fix and maintain", "version", "version", "the version running here", 1, 1),
+    ("Fix and maintain", "help", "help", "this list", 1, 1),
 )
 
-# One line per management verb the chat lanes run through verb_from_chat. The page
-# lists them from the SAME frozenset those lanes gate on (`_CHAT_VERB_SET`), so a verb
-# added there cannot be missing here - the page answered "Unknown command" for
-# `/update`, the command the fleet is updated with, while both chat lanes ran it
-# (reported 2026-10-12).
-WEB_VERB_HELP = {
-    "update": "update from the published release, then restart onto it",
-    "doctor": "what is configured and what is missing",
-    "health": "the health payload: lanes, sockets, version",
-    "proc": "the bot's processes and children",
-    "config": "read or set config.json keys",
-    "logs": "the tail of this host's log",
-    "clean": "sweep stale files (spins, spills, uploads)",
-    "approvals": "what the confirm gate stopped asking about",
-    "failures": "the recent failures this host recorded",
-}
+
+def help_groups(surface):
+    """[(group, [(shown, one line)])] for one help surface: `chat` or `web`.
+
+    A web row carries the `%s <verb>` form a page command is typed with; a chat row is
+    the bare word, because the block's own header supplies the prefix.
+    """
+    idx = 4 if surface == "chat" else 5
+    out = []
+    for row in _HELP_ROWS:
+        if not row[idx]:
+            continue
+        if not out or out[-1][0] != row[0]:
+            out.append((row[0], []))
+        shown = row[2] if surface == "chat" else (CMDR + " " + row[2])
+        out[-1][1].append((shown, row[3]))
+    if surface == "web":
+        have = {row[1] for row in _HELP_ROWS}
+        for v in sorted(_CHAT_VERB_SET):
+            if v in have:
+                continue
+            if not out or out[-1][0] != "Fix and maintain":
+                out.append(("Fix and maintain", []))
+            out[-1][1].append((CMDR + " " + v, "run `%s` on this host" % v))
+    return out
+
+
+def chat_help_text():
+    """The chat /help block, rendered from `_HELP_ROWS` - the same rows the page's
+    /help and its "/" palette draw from, so the surfaces cannot disagree. A chat row is
+    rendered as the FULL command (`/tinycmdr <verb>`): the words are the same in every
+    lane, and one line per command is what a novice can act on."""
+    lines = ["**Commands** — type `%s` then a word; `%s help` prints this list."
+             % (CMDR, CMDR),
+             "Everything else is a task — just tell me what you need."]
+    for group, rows in help_groups("chat"):
+        lines.append("")
+        lines.append("**%s**" % group)
+        for shown, blurb in rows:
+            lines.append("`%s %s` — %s" % (CMDR, shown, blurb))
+    return "\n".join(lines)
+
+
+def verb_hint(word):
+    """` did you mean `model`?` for a near-miss command, or "".
+
+    The verb set is small and closed, so a typo can name its likely target
+    (difflib, cutoff 0.7: `/modle` gets a pointer, `/zzz` stays silent)."""
+    import difflib
+    w = str(word or "").strip().lstrip("/").lower()
+    if not w or w == "tinycmdr":
+        return ""
+    pool = sorted({row[1] for row in _HELP_ROWS} | set(_CHAT_VERB_SET) | set(VERBS))
+    near = difflib.get_close_matches(w, pool, n=1, cutoff=0.7)
+    return " Did you mean `%s`?" % near[0] if near else ""
 
 
 def web_command_rows():
     """[(cmd, help)] for the page's palette AND its /help - one source, so the two
     cannot drift, and the management verbs ride in from `_CHAT_VERB_SET`."""
-    rows = list(WEB_COMMANDS)
-    have = {c for c, _h in rows}
-    for v in sorted(_CHAT_VERB_SET):
-        cmd = "/tinycmdr " + v
-        if cmd in have:
-            continue
-        rows.append((cmd, WEB_VERB_HELP.get(v, "run `%s` on this host" % v)))
-    return rows
+    return [(cmd, h) for _g, rows in help_groups("web") for cmd, h in rows]
 
 
 def web_commands(active):
@@ -29752,7 +29852,8 @@ WEB_PAGE = """
       <div id=sessions class="campaign-list"></div>
     </div>
     <div class="sidebar-footer">
-      <label class="host-toggle" title="Every browser on this host, not just this one: the rail shows every conversation kept on this box. Reading another browser's conversation is allowed here; renaming, deleting or running in it is not."><input id=allclients type=checkbox checked><span></span> Show every conversation on this host</label>
+      <label class="host-toggle"><input id=allclients type=checkbox checked><span></span> Show every conversation on this host</label>
+      <small class="host-rule">Every browser on this host, not just this one: reading another browser's conversation is allowed here; renaming, deleting or running in it is not.</small>
       <div class="host-card"><div><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 20v2" /> <path d="M12 2v2" /> <path d="M17 20v2" /> <path d="M17 2v2" /> <path d="M2 12h2" /> <path d="M2 17h2" /> <path d="M2 7h2" /> <path d="M20 12h2" /> <path d="M20 17h2" /> <path d="M20 7h2" /> <path d="M7 20v2" /> <path d="M7 2v2" /> <rect x="4" y="4" width="16" height="16" rx="2" /> <rect x="8" y="8" width="8" height="8" rx="1" /> </svg><strong id=host></strong></div><small id=hostver></small></div>
     </div>
   </aside>
@@ -29771,8 +29872,8 @@ WEB_PAGE = """
           <h1><span>Greetings,</span> Commander.</h1>
           <p>Your legion is idle. Dispatch a new order, inspect the host, or resume an earlier campaign from the archive.</p>
           <div class="hero-actions">
-            <button id=emptynew class="primary-action">Start a new campaign <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg></button>
-            <button id=emptylast class="secondary-action">Resume the last campaign</button>
+            <button id=emptynew class="primary-action">Start a new campaign (new conversation) <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg></button>
+            <button id=emptylast class="secondary-action">Resume the last campaign (last conversation)</button>
           </div>
           <div class="session-strip" aria-label="Current session statistics">
             <div class="stat-block"><small>SESSION</small><strong id=stat-session>&mdash;</strong></div>
@@ -30845,6 +30946,10 @@ async function send(){
  if(t==='/stop'||t==='stop'){return stop();}
  if(t.startsWith('/')){                       // agent command, answered inline
   const {status:code,j}=await post('/api/run',{message:t,session:sessionKey});
+  // The server's restart replies (the /restart and /update handlers) end "reload
+  // this page after that" - versionCheck honours that instead of leaving an
+  // instruction the person has to remember.
+  if(String(j.reply||'').indexOf('Restarting')>=0){wantReload=true;}
   localRun(code===200?'say':'error',j.reply||j.error||'(no reply)');
   return;
  }
@@ -30970,6 +31075,18 @@ function showLoadError(msg){
  card.appendChild(t);card.appendChild(w);card.appendChild(acts);
  log.appendChild(card);syncEmpty();
 }
+// The page recovers on its own: after a restart this page was told to reload, and a
+// server running a DIFFERENT version than this page's code is a stale client - either
+// way the first /api/health that answers again reloads the page. One reload per
+// version; a reload that did not take (a cached page) falls back to the manual note
+// instead of looping.
+let wantReload=false,reloadedFor='';
+try{reloadedFor=sessionStorage.fb_reloaded_for||'';}catch(e){}
+function reloadPage(ver){
+ wantReload=false;
+ if(ver){reloadedFor=String(ver);try{sessionStorage.fb_reloaded_for=reloadedFor;}catch(e){}}
+ location.reload();
+}
 async function versionCheck(){
  try{
   const r=await fetch('/api/health');const j=await r.json();
@@ -30988,7 +31105,9 @@ async function versionCheck(){
   document.title=(dl.length?'CHAT LANE DOWN - ':'')+'tinycmdr'+(j.version?' '+j.version:'');
   if(dl.length&&!laneWasDown){laneWasDown=true;note('chat lane down: '+verEl.title);}
   else if(!dl.length){laneWasDown=false;}
+  if(wantReload){reloadPage(j.version||PAGE_VER);return;}
   if(j.version&&PAGE_VER&&j.version!==PAGE_VER){
+   if(reloadedFor!==String(j.version)){reloadPage(j.version);return;}
    note('this page is '+PAGE_VER+', the server is '+j.version+' - stale client code',
      ['Reload',function(){location.replace('/?v='+j.version);}]);
   }
@@ -31822,10 +31941,15 @@ def _web_command(text, key="web"):
         run.add("system", "stop requested")
         return ("reply", "🛑 Stop requested — the current step finishes first.")
     if low == "/help":
-        return ("reply",
-                "Commands:\n"
-                + "\n".join(f"{c} — {h}" for c, h in web_command_rows())
-                + "\nEverything else is a task for the agent.")
+        lines = ["Commands:"]
+        for group, rows in help_groups("web"):
+            lines.append("")
+            lines.append("**%s**" % group)
+            for cmd, h in rows:
+                lines.append("%s — %s" % (cmd, h))
+        lines.append("")
+        lines.append("Everything else is a task for the agent.")
+        return ("reply", "\n".join(lines))
     # `/tinycmdr <verb>` for the management verbs: one word per thing, every surface.
     # Both chat lanes run this set through verb_from_chat; the page did not, so
     # `/update` - the command the fleet is updated with - answered "Unknown command"
@@ -31846,7 +31970,7 @@ def _web_command(text, key="web"):
     if cmdr_legacy_prefix(text):
         return ("reply", CMDR_MOVED)
     if low.startswith("/"):
-        return ("reply", "Unknown command — try %s help." % CMDR)
+        return ("reply", "Unknown command.%s Try %s help." % (verb_hint(low), CMDR))
     return ("task", text)
 
 # This box's own names: loopback/hostname/web.host immediately, the resolver's answers
@@ -35724,27 +35848,7 @@ class MattermostDispatcher:
             self._post(channel_id, post_root, f"tinycmdr v{VERSION}")
             return
         if low == "/help":
-            self._post(channel_id, post_root,
-                       "**Commands** — type `%s` then one of these "
-                       "(`%s help` is this list):\n"
-                       "`new` fresh session · `stop` cancel the running "
-                       "task · `status` health & context usage\n"
-                       "`undo [N]` drop the last N exchanges · `retry` "
-                       "re-run your last request · `save` export session\n"
-                       "`bg <task>` run in background · `pause [reason|off]` "
-                       "hold new tasks\n"
-                       "`model [name|list]` show/list/switch model · "
-                       "`/reasoning <level|status>` effort for this conversation\n"
-                       "`/plan on|off|apply` read-only planning · `/fork [name]` "
-                       "branch the conversation\n"
-                       "`restart [force]` restart the bot · `version` · `help`\n"
-                       "Management verbs run here too, as `%s update|doctor|health|"
-                       "proc|config|logs|clean|approvals|failures` — `update` checks "
-                       "for a new release and applies it.\n"
-                       "The same word everywhere: `%s status` in a shell or a "
-                       "session, `%s status` here.\n"
-                       "Everything else is a task — just tell me what you "
-                       "need." % (CMDR, CMDR, CMDR, CMDR, CMDR))
+            self._post(channel_id, post_root, chat_help_text())
             return
         if cmdr_legacy_prefix(stripped):
             # `/cmdr` existed for one day; a near-miss deserves a pointer, not a shrug.
@@ -35752,7 +35856,8 @@ class MattermostDispatcher:
             return
         if stripped.startswith("/") and not retried:
             self._post(channel_id, post_root,
-                       f"Unknown command `{stripped.split()[0]}` — try {CMDR} help. "
+                       f"Unknown command `{stripped.split()[0]}`."
+                       f"{verb_hint(stripped.split()[0])} Try {CMDR} help. "
                        "(Slash commands are handled locally; nothing was sent "
                        "to the model.)")
             return
@@ -36484,29 +36589,35 @@ _TG_FAST = ("/stop", "/restart")
 # leaves a run going while the operator believes it stopped (A-171).
 _TG_REDELIVER = ("/stop",)
 
-TG_HELP = ("<b>tinycmdr</b>\n"
-           "Send a task in plain words and it runs on this box: shell, files, a URL "
-           "you hand it, its notes and its own tools.\n\n"
-           "<b>Commands</b> — the same words as every other surface, also with a "
-           "<b>/tinycmdr</b> prefix and a <b>@botname</b> suffix:\n"
-           "<b>/new</b> fresh conversation · <b>/stop</b> cancel the run in flight · "
-           "<b>/usage</b> tokens and time for the last run\n"
-           "<b>/status</b> health, model, context · <b>/model [name|list]</b> show or "
-           "switch the model\n"
-           "<b>/reasoning &lt;auto|off|level&gt;</b> effort for this chat · "
-           "<b>/plan on|off|apply</b> read-only planning\n"
-           "<b>/undo [N]</b> drop exchanges · <b>/retry</b> re-run the last request · "
-           "<b>/save</b> export this chat\n"
-           "<b>/bg &lt;task&gt;</b> run in background · <b>/pause [reason|off]</b> "
-           "hold new tasks\n"
-           "<b>/fork [name]</b> branch the conversation · <b>/restart [force]</b> the "
-           "bot · <b>/version</b>\n"
-           "<b>/help</b> this screen (also <b>/start</b>)\n\n"
-           "Management verbs run here too, as "
-           "<b>/tinycmdr update|doctor|health|proc|config|logs|clean|approvals|"
-           "failures</b> — <b>update</b> checks for a new release and applies it.\n\n"
-           "Anything else is a request. While it works, the message above keeps "
-           "itself current, and a plain line you type is sent in at the next step.")
+def _tg_help_text():
+    """TG_HELP, rendered from `_HELP_ROWS` - the same rows the chat block and the page
+    draw from. HTML-escaped here because this constant is built before `tg_escape`
+    exists at module level, and `<task>` must not open a Telegram parse tag."""
+
+    def esc(t):
+        return (str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+    lines = ["<b>tinycmdr</b>",
+             "Send a task in plain words and it runs on this box: shell, files, a URL "
+             "you hand it, its notes and its own tools.",
+             "",
+             "<b>Commands</b> — the same words as every other surface, also with a "
+             "<b>/tinycmdr</b> prefix and a <b>@botname</b> suffix:",
+             "Everything else is a task — just tell me what you need.", ""]
+    for group, rows in help_groups("chat"):
+        lines.append("<b>%s</b>" % esc(group))
+        for shown, blurb in rows:
+            lines.append("<b>/%s</b> — %s" % (esc(shown), esc(blurb)))
+        lines.append("")
+    lines.append("<b>/start</b> or <b>/help</b> — this screen · "
+                 "<b>/usage</b> — tokens and time for the last run")
+    lines.append("")
+    lines.append("A plain line you type while I work is sent in at the next step, "
+                 "and the message above keeps itself current.")
+    return "\n".join(lines)
+
+
+TG_HELP = _tg_help_text()
 
 
 
@@ -38502,11 +38613,11 @@ class TelegramPoller:
 
             else:
 
-                self._say(chat_id, "Unknown command `%s` — try /help. (Slash commands "
+                self._say(chat_id, "Unknown command `%s`.%s Try /help. (Slash commands "
 
                                    "are handled locally; nothing was sent to the model.)"
 
-                          % text.split()[0])
+                          % (text.split()[0], verb_hint(text.split()[0])))
 
             return True
 
@@ -42064,6 +42175,9 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   setup              interactive wizard: model, Mattermost, Telegram, the page, web search
   config get|set|unset <dotted.key> [value]
                      read or edit config.json (a read-back is printed; secrets refused)
+  config list [section]
+                     what config.json can adjust, and what it is set to (a `*` marks a
+                     value that differs from the shipped default; secrets are never printed)
   health             one line + exit code: up, lane, model (no network, for scripts)
   failures           the known-failure library: which entries have EVER fired on this
                      box, and which failures keep arriving with no entry (-c, --json)
@@ -42932,17 +43046,127 @@ def _case_twin_note(node, name, walked, tail=()):
     return " - did you mean %s?" % ".".join(list(walked) + [hits[0]] + list(tail))
 
 
+def _config_first_sentence(text, cap=120):
+    """The opening sentence of a `_comment`, trimmed - a listing line, not a paragraph."""
+    t = " ".join(str(text or "").split())
+    cut = t.find(". ")
+    if cut > 0:
+        t = t[:cut + 1]
+    if len(t) > cap:
+        t = t[:cap - 1].rstrip() + "…"
+    return t
+
+
+def _config_list_secret(section, key):
+    """True when a listing line would print a secret's VALUE.
+
+    The write guard's rule minus its llm.* exemption: a local endpoint's key may live
+    in config.json, but `config` runs in chat too and whatever it prints lands in a
+    channel. `api_key_env` is a NAME and stays visible."""
+    if _secret_config_path("%s.%s" % (section, key)):
+        return True
+    return section == "llm" and str(key).lower() in ("api_key", "token")
+
+
+def _json_public(v):
+    """JSON with secret-named values replaced - the listing's one container renderer."""
+    if isinstance(v, dict):
+        return {k: ("(a secret)" if (_SECRET_NAME_RX.search(str(k)) is not None
+                                     or str(k) in ("api_key", "token"))
+                    else _json_public(x))
+                for k, x in v.items()}
+    if isinstance(v, list):
+        return [_json_public(x) for x in v]
+    return v
+
+
+def _config_list(rest):
+    """`config list [section]` - what is adjustable here, and what it is set to.
+
+    The schema is DEFAULT_CONFIG (the code's own defaults; the shipped example supplies
+    the one-line section notes). A value that differs from the shipped default is
+    marked `*`; a secret is NAMED, never printed - its home is .env, because config.json
+    is a file the agent reads into a prompt."""
+    args = [a for a in rest if not str(a).startswith("-")]
+    section = str(args[0]).strip() if args else ""
+    example = {}
+    try:
+        example = json.loads((BASE_DIR / "config.example.json")
+                             .read_text(encoding="utf-8-sig"))
+    except Exception:                                            # noqa: BLE001
+        example = {}
+    note = ""
+    if not CONFIG_PATH.exists():
+        raw = {}
+        note = "(no config.json yet: every value below is a shipped default)"
+    else:
+        raw, err = _config_raw()
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+    if not section:
+        if note:
+            print(note)
+        print("what config.json adjusts (config list <section> names its keys):")
+        for sec, body in DEFAULT_CONFIG.items():
+            if not isinstance(body, dict):
+                continue
+            blurb = _config_first_sentence((example.get(sec) or {}).get("_comment"))
+            print("  %-12s %s" % (sec, blurb))
+        print("config get <section.key> reads one · config set <section.key> <value> "
+              "writes it (--str keeps a string)")
+        return 0
+    if section not in DEFAULT_CONFIG:
+        print("no section %r in the schema. Sections: %s"
+              % (section, ", ".join(s for s, b in DEFAULT_CONFIG.items()
+                                    if isinstance(b, dict))), file=sys.stderr)
+        return 2
+    if note:
+        print(note)
+    body = DEFAULT_CONFIG.get(section)
+    body = body if isinstance(body, dict) else {}
+    cur = raw.get(section)
+    cur = cur if isinstance(cur, dict) else {}
+    print("%s%s:" % (section, "  (not set in config.json)" if not cur else ""))
+    marked = False
+    for key, default in body.items():
+        if _config_list_secret(section, key):
+            marked = marked or key in cur
+            print("  %-24s = (a secret: not printed - set it with `tinycmdr token set "
+                  "<NAME>`)" % key)
+            continue
+        val = cur[key] if key in cur else default
+        text = val if isinstance(val, str) else json.dumps(_json_public(val))
+        if len(text) > 64:
+            text = text[:61] + "..."
+        star = " *" if key in cur and cur[key] != default else ""
+        marked = marked or bool(star)
+        print("  %-24s = %s%s" % (key, text, star))
+    extra = sorted(k for k in cur if k not in body and not str(k).startswith("_"))
+    if extra:
+        print("  (also set, not read by this build: %s - config get shows any of them)"
+              % ", ".join(extra))
+    if marked:
+        print("* differs from the shipped default")
+    return 0
+
+
 def _verb_config(rest):
-    """`config get|set|unset <dotted.key> [value]` — a config.json edit with a read-back.
+    """`config get|set|unset <dotted.key> [value]` or `config list [section]` — a
+    config.json edit with a read-back, and the listing that answers "what can I set?".
 
     Hand-editing is how config.json gets a trailing comma, a number that is a string, or a
     token in a file the agent can read. Values are parsed as JSON when they can be (so
     `true`, `250`, `["a"]` land typed), as a string otherwise; --str forces a string."""
-    if not rest or rest[0] not in ("get", "set", "unset"):
-        print("config get <dotted.key> | set <dotted.key> <value> [--str] | unset <dotted.key>",
-              file=sys.stderr)
+    if not rest or rest[0] not in ("get", "set", "unset", "list"):
+        print("config get <dotted.key> | set <dotted.key> <value> [--str] | "
+              "unset <dotted.key> | list [section]", file=sys.stderr)
+        print("e.g. config set agent.max_steps 40 · config set llm.model main · "
+              "config list llm", file=sys.stderr)
         return 2
     what = rest[0]
+    if what == "list":
+        return _config_list(rest[1:])
     args = list(rest[1:])
     as_str = "--str" in args
     args = [a for a in args if a != "--str"]
@@ -43467,7 +43691,20 @@ def _package_differs(root):
     return False
 
 
-def _verb_update(rest):
+def _ask_yes(prompt_text):
+    """One [Y/n] question on a door that can actually answer it.
+
+    EOF must not read as the empty answer (which means yes): the Windows NUL device
+    isatty()s and then answers EOF (the installer's own lesson, measured 2026-10-08),
+    so an EOF is a plain no, never an accidental yes and never a hang."""
+    try:
+        return input(prompt_text).strip().lower() in ("", "y", "yes")
+    except (EOFError, OSError):
+        print()
+        return False
+
+
+def _verb_update(rest, ask=False):
     """`update [--full]` or `update <file.py|zip|folder>` — put a newer build in place.
 
     With no argument it downloads the RELEASE package for this host, checks it against the
@@ -43571,6 +43808,10 @@ def _verb_update(rest):
                 print("your persona is an edit to a shipped file - copied to %s first"
                       % Path(_kept).name)
             written, skipped = _apply_package(root)
+            # One terminal check for the two offers below: the plain shell door
+            # passes ask=True (main()); a chat lane, the console's fast path and
+            # --plain never do, so those doors keep the output they always had.
+            _tty = bool(ask) and pick_terminal_ready()
             # Host-owned file whose shipped default this package MOVED: the one gap worth
             # a line, because the operator is missing a change right now.
             for _line in _host_gap_notes(written):
@@ -43584,24 +43825,42 @@ def _verb_update(rest):
                      if written else ""))
             if "requirements.txt" in written:
                 # The bounds in that file are load-bearing and nothing installs from
-                # it here, so the operator gets the exact command instead of a new
-                # Build meeting an old venv. Deliberately NOT
-                # automatic: an update should not reach the network beyond the
-                # release package itself.
+                # it here, so the operator gets the exact command; a terminal is
+                # offered the reconcile itself, on an explicit yes - never in a
+                # script, and never silently: the release package is the update's
+                # one silent fetch.
                 _venv_py = BASE_DIR / "venv" / ("Scripts/python.exe" if IS_WINDOWS
                                                 else "bin/python")
                 print("dependencies changed in this release - reconcile the venv:")
                 print("    %s -m pip install -r %s"
                       % (_venv_py, BASE_DIR / "requirements.txt"))
+                if _tty and _ask_yes("Reconcile the venv now? [Y/n] "):
+                    print("    running pip...")
+                    _prc, _pout, _perr, _pto = run_capture(
+                        [str(_venv_py), "-m", "pip", "install", "-r",
+                         str(BASE_DIR / "requirements.txt")], timeout=900)
+                    if _prc == 0:
+                        print("    venv reconciled.")
+                    else:
+                        _tail = ((_perr or _pout or "").strip().splitlines() or [""])[-1]
+                        print("    pip exited %s: %s" % (_prc, _tail))
+                        print("    run the command above by hand")
             note = _prune_dev_kit(keep_dev)
             if note:
                 print(note)
             if new_version != this_version:
                 print("VERSION %s -> %s" % (this_version, new_version))
+                print("Done — tinycmdr %s is in place." % new_version)
             else:
                 print("repaired: %d file(s) restored from the %s package"
                       % (len(written), new_version))
-            print("Restart tinycmdr to run new build: `tinycmdr restart`")
+                print("Done — this install is repaired (tinycmdr %s)." % new_version)
+            if _tty and _ask_yes("Restart tinycmdr now, onto the new build? [Y/n] "):
+                return _verb_restart()
+            if _tty:
+                print("Restart it later with: `tinycmdr restart`")
+            else:
+                print("Restart tinycmdr to run new build: `tinycmdr restart`")
             return 0
         finally:
             shutil.rmtree(work, ignore_errors=True)
@@ -45302,8 +45561,8 @@ def verb_from_chat(argv_line):
             return ("`%s` needs a terminal on the host (it prompts, opens a session, or has "
                     "its own fast path), so it is not a chat verb. From chat: %s."
                     % (verb, ", ".join(sorted(_CHAT_VERB_SET))))
-        return ("unknown verb %r. From chat: %s."
-                % (verb, ", ".join(sorted(_CHAT_VERB_SET))))
+        return ("unknown verb %r.%s From chat: %s."
+                % (verb, verb_hint(verb), ", ".join(sorted(_CHAT_VERB_SET))))
     buf = io.StringIO()
     code = 0
     try:
@@ -45389,8 +45648,13 @@ def _verb_failures(rest):
     return 0
 
 
-def run_verb(argv):
-    """Dispatch one management verb. Returns the process exit code."""
+def run_verb(argv, ask=False):
+    """Dispatch one management verb. Returns the process exit code.
+
+    `ask` marks a door where a person is present (the plain shell): only `update`
+    reads it, to offer its two follow-up questions. Every other caller - the chat
+    lanes through verb_from_chat, the console's fast path, tests - keeps prompts
+    off, so a chat message can never block on a question."""
     verb = (argv[0] or "").strip().lower()
     if verb in ("kill", "exit"):
         verb = "quit"          # one door, three names
@@ -45399,7 +45663,7 @@ def run_verb(argv):
         print(VERB_HELP)
         return 0
     if verb not in VERBS:
-        print("unknown verb %r\n" % verb, file=sys.stderr)
+        print("unknown verb %r%s\n" % (verb, verb_hint(verb)), file=sys.stderr)
         print(VERB_HELP)
         return 2
     log.info("verb: %s %s", verb, _verb_log_args(verb, rest))
@@ -45422,7 +45686,7 @@ def run_verb(argv):
     if verb == "config":
         return _verb_config(rest)
     if verb == "update":
-        return _verb_update(rest)
+        return _verb_update(rest, ask=ask)
     if verb == "clean":
         return _verb_clean(rest)
     if verb == "model":
@@ -45673,7 +45937,9 @@ def main():
     # Management verbs, and the two inert flags. Nothing here starts the agent loop:
     # `tinycmdr status` asks the endpoint for metadata and answers a question.
     if len(sys.argv) > 1 and sys.argv[1].lower() in VERBS:
-        sys.exit(run_verb(sys.argv[1:]))
+        # A person is at this door: only here may `update` offer its restart and venv
+        # questions (and the verb itself re-checks for a real tty).
+        sys.exit(run_verb(sys.argv[1:], ask=True))
     # A first argument that is not a flag and not a verb is a verb the operator MEANT
     # (a typo, or a name from an older README): it used to fall through to the start
     # of the bot, which then sat there answering nobody while the terminal looked

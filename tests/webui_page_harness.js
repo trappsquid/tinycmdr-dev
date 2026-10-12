@@ -157,6 +157,10 @@ globalThis.document = {
 const store = { fb_token: 'test-token' };
 store.removeItem = (k) => { delete store[k]; };
 globalThis.localStorage = store;
+// the page remembers a reload attempt per version in sessionStorage; a plain object
+// carries property reads and writes the same way the browser object does
+globalThis.sessionStorage = {};
+let reloads = 0;
 let promptCalls = 0;
 let promptMsg = '';
 globalThis.prompt = (msg) => { promptCalls++; promptMsg = String(msg); return 'test-token'; };
@@ -171,6 +175,7 @@ globalThis.setInterval = () => 0;
 if (scenario.no_token) { delete store.fb_token; }
 globalThis.location = { search: scenario.query || '', hash: scenario.hash || '',
                         pathname: '/',
+                        reload: () => { reloads++; },
                         href: 'http://127.0.0.1:8790/' + (scenario.query || '') };
 const replaced = [];
 globalThis.history = { replaceState: (_s, _t, url) => { replaced.push(url); } };
@@ -515,6 +520,11 @@ function fetchShim(url, opts) {
   }
   if (url.indexOf('/api/stop') === 0) { return jres({ stopping: true }); }
   if (url.indexOf('/api/run') === 0) {
+    // the real server answers a '/' command inline with a reply and starts no run -
+    // the page's command path posts to the same route (its comment says so)
+    if (body.message && body.message[0] === '/') {
+      return jres({ reply: scenario.command_reply || 'ok', session: body.session });
+    }
     if (scenario.busy_reply && active && !active.done) {
       addLine(active, 'you', body.message + '   (mid-run)');
       return jres({ run_id: active.id, busy: true, steered: true });
@@ -756,6 +766,7 @@ async function main() {
       x: deepHas(c, 'campaign-tab-x') })),
     retryLabel: byId.laneretry.textContent,
     healthFetches: healthFetches,
+    reloads: reloads,
     title: globalThis.document.title,
     errors,
   };

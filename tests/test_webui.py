@@ -776,6 +776,22 @@ def main():
     cat = fb._web_command("/tinycmdr help", "web")[1]
     check("/tinycmdr update" in cat and "/tinycmdr doctor" in cat,
           "...and /help names the same set", cat[:400])
+    kind, out = fb._web_command("/modle", "web")
+    check(kind == "reply" and "Did you mean" in out and "model" in out,
+          "a near-miss on the page names the likely target", out[:200])
+    kind, out = fb._web_command("/tinycmdr config list", "web")
+    check(kind == "reply" and "llm" in out and "agent" in out,
+          "config list answers through the page's command door too", out[:200])
+    # The one table's two guarantees: a management verb added to _CHAT_VERB_SET must
+    # have a chat row (or it silently misses the chat block), and the page's rows must
+    # carry every one of them (the ride-in the old WEB_COMMANDS had).
+    _table_verbs = {r[1] for r in fb._HELP_ROWS if r[4]}
+    check("every chat management verb has a row in the one help table",
+          set(fb._CHAT_VERB_SET) <= _table_verbs,
+          sorted(set(fb._CHAT_VERB_SET) - _table_verbs))
+    check("...and the page's rows carry every one of them",
+          {"/tinycmdr " + v for v in fb._CHAT_VERB_SET} <= cmds,
+          sorted({"/tinycmdr " + v for v in fb._CHAT_VERB_SET} - cmds))
     seen = []
     _real_vfc = fb.verb_from_chat
     _real_pr = fb.perform_restart

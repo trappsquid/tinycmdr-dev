@@ -1251,6 +1251,9 @@ check("A-172: /new clears the previous conversation's steps from the live messag
 # A-173: the help screen lists every verb, and the prefix.
 check("A-173: the help screen names /start and the /tinycmdr prefix",
       "/start" in fb.TG_HELP and "/tinycmdr" in fb.TG_HELP, fb.TG_HELP[:60])
+check("A-173b: the help screen renders every row of the shared table",
+      all(("/" + r[1]) in fb.TG_HELP for r in fb._HELP_ROWS if r[4]),
+      [r[1] for r in fb._HELP_ROWS if r[4] and ("/" + r[1]) not in fb.TG_HELP])
 
 
 # A-170: a failed steer receipt must not lose the update.
@@ -1657,6 +1660,11 @@ check("an unknown command is refused locally, the Mattermost lane's own rule",
 _puc.handle(msg(7, "/cmdr stop", 7, mid=5))
 check("the retired prefix points at the current one",
       "prefix" in _last(_uc).lower(), _last(_uc)[:60])
+_puc.handle(msg(7, "/modle", 7, mid=9))
+check("a near-miss command names its likely target",
+      "Unknown command" in _last(_uc) and "Did you mean" in _last(_uc)
+      and "model" in _last(_uc) and not _puc_sub,
+      (_last(_uc)[:80], _puc_sub))
 
 # /stop releases a parked question at once, as stopped (not a timeout)
 _qdest = fb.TelegramDestination(FakeClient(), chat_id=7, session_key="telegram-7")

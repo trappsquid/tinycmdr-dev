@@ -639,6 +639,31 @@ def main():
     check(after > before, f"Retry asks the server again ({before} -> {after})")
     check(res.get("retryLabel") == "Retry", "and the button never sticks on 'checking...'")
 
+    # -- the page recovers on its own after a restart (UX review, 2026-10-12) -----
+    # The server's restart replies end "reload this page after that"; the page used to
+    # print that instruction and hope. Now the next /api/health that answers reloads
+    # the page - and a server running a different version than this page's code (a
+    # shell-driven update) reloads it once, then falls back to the manual note so a
+    # cached page cannot loop.
+    sc = {"command_reply": "♻️ Restarting — the bot replaces itself in a few "
+                           "seconds; reload this page after that.",
+          "runs": [],
+          "steps": [{"kind": "message", "text": "/tinycmdr restart", "polls": 3},
+                    {"kind": "call", "fn": "versionCheck", "polls": 2}]}
+    res = run_page(sc, script)
+    check(not res["errors"], f"the restart-reload page runs clean ({res['errors'][:1]})")
+    check(res.get("reloads", 0) == 1,
+          f"the restart reply makes the page reload itself ({res.get('reloads')})")
+
+    sc = {"health": {"ok": True, "version": "9.9.9", "lanes": {"web": {"state": "up"}}},
+          "runs": [], "steps": [{"kind": "call", "fn": "versionCheck", "polls": 2},
+                                {"kind": "call", "fn": "versionCheck", "polls": 2}]}
+    res = run_page(sc, script)
+    check(res.get("reloads", 0) == 1
+          and "stale client code" in ((res.get("note") or {}).get("text") or ""),
+          f"a persistent version mismatch reloads once, then shows the manual note "
+          f"({res.get('reloads')}, {(res.get('note') or {}).get('text')!r})")
+
     sc = {"health": {"ok": True, "version": "harness",
                      "config_changed": "port changed in config.json; restart to apply"},
           "runs": [], "steps": [{"kind": "polls", "n": 3}]}

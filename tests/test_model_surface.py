@@ -739,6 +739,23 @@ is offered now, the configured one first and marked current.
             reply = mod7.model_command("mattermost:suite", "local-gguf-27b")
             check("Nothing switched" not in reply and "local-gguf-27b" in reply,
                   "...and switching to it is not refused", reply[:300])
+            # the numbered menu (UX review, 2026-10-12): a number to pick by, the
+            # model in use marked, and plain words where a model lives - not a URL
+            # the person this list is for cannot act on
+            _rows = [ln for ln in listing.splitlines() if "local-gguf-27b" in ln]
+            check(_rows and "in use now" in _rows[0]
+                  and _rows[0].strip().split(".")[0].isdigit(),
+                  "...as a numbered menu marking the model in use", listing[:300])
+            check("this box" in listing and "http://" not in listing,
+                  "...with plain words for where a model lives, not a URL",
+                  listing[:300])
+            _first = mod7.model_catalog()[0]["name"]
+            reply = mod7.model_command("mattermost:suite", "1")
+            check("a number switches to that menu row",
+                  "Nothing switched" not in reply and _first in reply, reply[:200])
+            reply = mod7.model_command("mattermost:suite", "99")
+            check("a number outside the menu is refused with the range",
+                  "Nothing switched" in reply and "1–" in reply, reply[:200])
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

@@ -1637,14 +1637,31 @@ What must hold, and what this pins:
         check("/tinycmdr help queued nothing", not d2.queues.get("c1"), d2.queues)
         # The commands the lane implements but the help never listed: /plan, /fork and
         # /reasoning, and - the one an operator most needs - `update` (A-2026-10-06-273).
-        for _c in ("/plan", "/fork", "/reasoning", "/tinycmdr update"):
+        # The block renders every row as its full command now (one form that works in
+        # every client), so the check names that form.
+        for _c in ("`/tinycmdr plan", "`/tinycmdr fork", "`/tinycmdr reasoning",
+                   "/tinycmdr update"):
             check("the chat help lists %s" % _c, _c in text, text[:400])
+        _missing = [r[1] for r in fb._HELP_ROWS
+                    if r[4] and ("`/tinycmdr %s`" % r[2]) not in text]
+        check("...and every row of the one help table renders", not _missing, _missing)
 
         d3, posted3 = make_dispatcher()
         d3._handle("c1", "alice", "/tinycmdr wibble", "m3", "m3", True)
         check("an unknown verb is answered locally, never sent to the model",
               any("Unknown command" in p for p in posted3) and not d3.queues.get("c1"),
               posted3)
+
+        d4, posted4 = make_dispatcher()
+        d4._handle("c1", "alice", "/tinycmdr modle", "m4", "m4", True)
+        check("a near-miss command names its likely target (UX review, 2026-10-12)",
+              any("Unknown command" in p and "Did you mean" in p and "model" in p
+                  for p in posted4) and not d4.queues.get("c1"), posted4)
+        d5, posted5 = make_dispatcher()
+        d5._handle("c1", "alice", "/tinycmdr zzzz", "m5", "m5", True)
+        check("...while a word matching nothing stays silent",
+              any("Unknown command" in p for p in posted5)
+              and not any("Did you mean" in p for p in posted5), posted5)
 
 
     def test_listener_thread_reads_a_prefixed_command():

@@ -56,15 +56,18 @@ class FakeTTY(io.StringIO):
         return True
 
 
-def call(fb, argv, stdin=None, tty=False):
-    """Run one verb, with both streams captured and stdin faked when asked."""
+def call(fb, argv, stdin=None, tty=False, ask=False):
+    """Run one verb, with both streams captured and stdin faked when asked.
+
+    `ask` mirrors the plain shell door (main passes it): only then may `update`
+    offer its [Y/n] questions."""
     out, err = io.StringIO(), io.StringIO()
     saved = sys.stdin
     if stdin is not None:
         sys.stdin = FakeTTY(stdin) if tty else io.StringIO(stdin)
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = fb.run_verb(list(argv))
+            rc = fb.run_verb(list(argv), ask=ask)
     finally:
         sys.stdin = saved
     return rc, out.getvalue(), err.getvalue()
@@ -263,6 +266,85 @@ def _body():
               and "pip install -r %s" in _tsrc)
         check("...and the mmpy_bot guard points at requirements.txt, not a module list",
               "pip install requests mmpy_bot croniter" not in _tsrc)
+
+        # The update's two follow-ups, offered only where a person is (UX review,
+        # 2026-10-12): a terminal gets one [Y/n] for the venv reconcile the release
+        # moved and one for the restart, and every other door (a pipe, a chat lane,
+        # the console) keeps the plain lines it always had. ask=True mirrors main();
+        # a real pty is patched in and the release machinery is stubbed.
+        _saved_stdin = sys.stdin
+        _saved_attrs = {_n: getattr(fb, _n) for _n in (
+            "pick_terminal_ready", "_update_asset", "_update_base", "_download",
+            "_verify_asset", "_extract_release", "_disk_version", "_package_differs",
+            "_dev_tree_reason", "preserve_edited_soul", "_apply_package",
+            "ensure_launcher_executable", "_host_gap_notes", "_prune_dev_kit",
+            "run_capture", "_verb_restart")}
+        _rel = Path(tempfile.mkdtemp(prefix="fbtest-rel-"))
+        try:
+            sys.stdin = FakeTTY("y\n")
+            check("_ask_yes reads a yes", fb._ask_yes("? ") is True, "")
+            sys.stdin = FakeTTY("n\n")
+            check("_ask_yes reads a no", fb._ask_yes("? ") is False, "")
+            sys.stdin = FakeTTY("")
+            check("_ask_yes gives EOF the safe answer, never an accidental yes",
+                  fb._ask_yes("? ") is False, "")
+
+            _root = _rel / "tinycmdr-9.9.9"
+            _root.mkdir()
+            (_root / "tinycmdr.py").write_text('VERSION = "9.9.9"\n', encoding="utf-8")
+            fb.pick_terminal_ready = lambda: True
+            fb._update_asset = lambda: "tinycmdr-fake.zip"
+            fb._update_base = lambda: "http://127.0.0.1:1/releases"
+            fb._download = lambda url, dest: (True, "")
+            fb._verify_asset = lambda a, s, n: (True, "")
+            fb._extract_release = lambda a, d: _root
+            fb._disk_version = lambda: "1.0.0"
+            fb._package_differs = lambda root: True
+            fb._dev_tree_reason = lambda: None
+            fb.preserve_edited_soul = lambda stamp: ""
+            fb._apply_package = lambda root: (["tinycmdr.py", "requirements.txt"], [])
+            fb.ensure_launcher_executable = lambda: None
+            fb._host_gap_notes = lambda written: []
+            fb._prune_dev_kit = lambda keep: ""
+            _acts = {"pips": [], "restarts": []}
+            fb._verb_restart = lambda: (_acts["restarts"].append(1), 0)[1]
+
+            def _fake_capture(argv, timeout=0, **kw):
+                _acts["pips"].append([str(a) for a in argv])
+                return 0, "Successfully installed", "", False
+            fb.run_capture = _fake_capture
+
+            sys.stdin = FakeTTY("n\nn\n")
+            rc, out, err = call(fb, ["update"], ask=True)
+            check("a terminal update offers both follow-ups",
+                  rc == 0 and "Reconcile the venv now?" in out
+                  and "Restart tinycmdr now" in out, (rc, out[-300:]))
+            check("...and declining both names the command, runs nothing",
+                  not _acts["pips"] and not _acts["restarts"]
+                  and "Restart it later with" in out
+                  and "Done — tinycmdr 9.9.9 is in place." in out,
+                  (out[-200:], _acts))
+            sys.stdin = FakeTTY("y\ny\n")
+            rc, out, err = call(fb, ["update"], ask=True)
+            check("...and accepting both reconciles the venv and restarts",
+                  rc == 0 and _acts["pips"] and _acts["restarts"]
+                  and "-m" in _acts["pips"][0] and "pip" in _acts["pips"][0]
+                  and "venv reconciled" in out, (rc, out[-200:], _acts))
+            fb.pick_terminal_ready = lambda: False
+            _acts["pips"].clear()
+            _acts["restarts"].clear()
+            sys.stdin = FakeTTY("")
+            rc, out, err = call(fb, ["update"], ask=True)
+            check("...while a door without a tty keeps the plain next step, no questions",
+                  rc == 0 and "Reconcile the venv now?" not in out
+                  and "Restart tinycmdr to run new build: `tinycmdr restart`" in out
+                  and not _acts["pips"] and not _acts["restarts"],
+                  (rc, out[-200:]))
+        finally:
+            sys.stdin = _saved_stdin
+            for _n, _v in _saved_attrs.items():
+                setattr(fb, _n, _v)
+            shutil.rmtree(_rel, ignore_errors=True)
 
         # The host-owned rule is written out SIX times - the three installers, the two
         # standalone updaters the launcher falls back to for an old or broken install
@@ -1452,6 +1534,34 @@ def _body():
               rc == 0 and "digest_lines" not in written["agent"], list(written["agent"]))
         rc, out, err = call(fb, ["config", "unset", "agent.digest_lines"])
         check("...and says so when it was not set", rc == 2, rc)
+
+        # `config list` (UX review, 2026-10-12): the verb that answers "what can I
+        # set?" without browsing config.json - sections first, then a section's keys
+        # with their values and a `*` on anything that differs from the shipped
+        # default. A secret is NAMED, never printed: `config` runs in chat too, and
+        # what chat prints lands in a channel.
+        rc, out, err = call(fb, ["config", "list"])
+        check("config list names the sections and the way deeper",
+              rc == 0 and "llm" in out and "agent" in out
+              and "config list <section>" in out, (rc, out[:200]))
+        rc, out, err = call(fb, ["config", "list", "llm"])
+        check("config list <section> names its keys with their values",
+              rc == 0 and "base_url" in out and "max_turns" in out, out[:300])
+        rc, out, err = call(fb, ["config", "list", "nope"])
+        check("a section the schema does not have is refused, the real ones named",
+              rc == 2 and "llm" in err, (rc, err[:200]))
+        _def_steps = fb.DEFAULT_CONFIG["agent"]["max_steps"]
+        call(fb, ["config", "set", "agent.max_steps", str(_def_steps + 1)])
+        rc, out, err = call(fb, ["config", "list", "agent"])
+        check("a changed value is marked against the shipped default",
+              rc == 0 and str(_def_steps + 1) in out
+              and "* differs from the shipped default" in out, out[-300:])
+        call(fb, ["config", "set", "llm.api_key", "sk-SENTINEL-A69"])
+        rc, out, err = call(fb, ["config", "list", "llm"])
+        check("a secret's value is never printed (chat carries this listing)",
+              "sk-SENTINEL-A69" not in out and "api_key" in out
+              and "tinycmdr token set" in out, out[:400])
+        call(fb, ["config", "unset", "llm.api_key"])
 
         # ---- a box with NO config.json: the verb CREATES one, and does not write on a read
         # `setup` prints `config set` as its non-interactive path, and that path used to die

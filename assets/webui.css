@@ -626,6 +626,14 @@ color:var(--fg);padding:.45rem .55rem;font:inherit}
   box-shadow: 0 0 12px rgba(215, 169, 74, 0.28);
 }
 
+.host-rule {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted-2);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
 .host-card {
   margin-top: 16px;
   padding: 12px;
