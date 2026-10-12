@@ -61,11 +61,12 @@
     {
       "id": "lane-recovery-is-not-reported",
       "title": "an offline window leaves no record once the lane recovers",
-      "state": "open",
+      "state": "unreleased",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "0ed4f42",
+        "expect": "untagged"
       },
-      "detail": "logs/state.json holds only the CURRENT verdict: after the 2026-09-30 00:15-05:00 outage it reads an empty failures map and a lane that is ok - lane_down() empties the failures map on recovery, so the only trace of 4h45m offline is 1654 lines in logs/launchd.err.log. `tinycmdr health` reports the live state with an exit code, which is the right answer WHILE it is down; an operator who was asleep learns nothing afterwards. The offline window costs more than the chat lane: the model endpoint is on the same LAN, so the agent can do nothing at all for those hours.",
+      "detail": "logs/state.json holds only the CURRENT verdict: after the 2026-09-30 00:15-05:00 outage it reads an empty failures map and a lane that is ok - lane_down() empties the failures map on recovery, so the only trace of 4h45m offline is 1654 lines in logs/launchd.err.log. `tinycmdr health` reports the live state with an exit code, which is the right answer WHILE it is down; an operator who was asleep learns nothing afterwards. The offline window costs more than the chat lane: the model endpoint is on the same LAN, so the agent can do nothing at all for those hours. Fixed 2026-10-12 (0ed4f42): a recovery past LANE_GAP_NOTICE_S keeps its window on the lane record, and `status`, `health` and the page print it - the chat lanes add that what arrived meanwhile is picked up - and it survives on disk for cold readers.",
       "gate": "on the first successful connect after a gap past a threshold, say so where the operator reads (a chat line and/or a field in status/health): the window, and that nothing was missed. While offline no notice is possible at all, so the report has to be the recovery rather than an alert"
     },
     {
@@ -345,31 +346,34 @@
     {
       "id": "linux-install-python",
       "title": "the Linux installer has no --install-python",
-      "state": "open",
+      "state": "unreleased",
       "anchor": {
-        "file": "install/install-tinycmdr.sh"
+        "commit": "e85a7c4",
+        "expect": "untagged"
       },
-      "detail": "The macOS installer takes the flag; the Linux script and the Windows one never mention it. A per-host gap rather than a bug: the flag exists so a host can point the install at an interpreter it already trusts.",
+      "detail": "The macOS installer takes the flag; the Linux script and the Windows one never mention it. A per-host gap rather than a bug: the flag exists so a host can point the install at an interpreter it already trusts. Fixed 2026-10-12 (e85a7c4): the Linux door takes --python <path> (the switch twin of TINYCMDR_PYTHON, the flag winning), the no-python and version-band messages name it, and there is deliberately no uv fetch on Linux - python3 comes from the distribution.",
       "gate": "the flag in install/install-tinycmdr.sh, or a decision that Linux does not need it"
     },
     {
       "id": "linux-installer-distro",
       "title": "the Linux installer assumes apt and detects no distro",
-      "state": "open",
+      "state": "unreleased",
       "anchor": {
-        "file": "install/install-tinycmdr.sh"
+        "commit": "e85a7c4",
+        "expect": "untagged"
       },
-      "detail": "Its one package call is a bare 'apt-get install -y -q python3-venv' behind an ensurepip probe, and the error text names apt. On a non-apt distribution ensurepip may be absent from the system Python, so that branch fires and the package manager does not exist. The install has been done by hand on a non-apt host, so the path is survivable, but no CI job exercises one.",
+      "detail": "Its one package call is a bare 'apt-get install -y -q python3-venv' behind an ensurepip probe, and the error text names apt. On a non-apt distribution ensurepip may be absent from the system Python, so that branch fires and the package manager does not exist. The install has been done by hand on a non-apt host, so the path is survivable, but no CI job exercises one. Fixed 2026-10-12 (e85a7c4): the header documents Debian-shaped hosts (apt-get, systemd), and the venv-support messages name the failure and the --python door instead of calling a package manager that may not exist; test_installer_unix drives a broken and a venv-less interpreter through the door.",
       "gate": "a distro branch, or a documented 'supported: Debian-shaped' with the failure named"
     },
     {
       "id": "windows-ci-tier2",
       "title": "three more suites could run on Windows once their shell expectations are read",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "file": ".github/workflows/ci.yml"
+        "commit": "aa2d920",
+        "expect": "tagged"
       },
-      "detail": "test_dropin_tools, test_guard_battery and test_tool_doors reference the shell but write no platform branch, so they were left out of the 2026-09-29 widening rather than added blind - a suite that cannot run on a runner exits 77 and the gate counts that as red. test_verbs (os.X_OK, st_mode, uid) and test_shim (pwd/grp) are POSIX by construction and stay out on purpose. test_endpoint_window is platform-neutral (it stubs the transport) and is a candidate too.",
+      "detail": "test_dropin_tools, test_guard_battery and test_tool_doors reference the shell but write no platform branch, so they were left out of the 2026-09-29 widening rather than added blind - a suite that cannot run on a runner exits 77 and the gate counts that as red. test_verbs (os.X_OK, st_mode, uid) and test_shim (pwd/grp) are POSIX by construction and stay out on purpose. test_endpoint_window is platform-neutral (it stubs the transport) and is a candidate too. Closed 2026-10-12: all four are Windows-declared and green - test_dropin_tools (member of test_tool_load_surface), test_guard_battery and test_tool_doors (member of test_authority_surface) sit in must, graded on Windows every push, and test_endpoint_window (member of test_endpoint_surface) sits in scheduled, graded by the product's job on every publish and by the dev nightly.",
       "gate": "each suite read, then added to .github/workflows/ci.yml if its shell expectations hold on Windows"
     },
     {
@@ -385,21 +389,22 @@
     {
       "id": "tools-versioning",
       "title": "tools/* is gitignored, so tool code that was built and smoke-tested ships nowhere",
-      "state": "open",
+      "state": "closed",
       "anchor": {
         "file": ".gitignore"
       },
-      "detail": "tools/ is per-host by design and only four files ship (README.md, patch.py, process.py, toolsmith.py). A full GUI-driving tool was written, tested on three platforms and left out of every archive: tools/README.md is tracked while the tools it documents are not.",
+      "detail": "tools/ is per-host by design and only four files ship (README.md, patch.py, process.py, toolsmith.py). A full GUI-driving tool was written, tested on three platforms and left out of every archive: tools/README.md is tracked while the tools it documents are not. Closed 2026-10-12 (d6576a7): the policy is stated where a user reads it - the four starters and the README ship and ride every package; everything else in tools/ is host-owned by design, never versioned and never overwritten by an update.",
       "gate": "a policy: version them, or state in the README that tools/ is per-host by design"
     },
     {
       "id": "sampling-unpinned",
       "title": "eval sampling is inherited, so two arms of the same build are not comparable",
-      "state": "open",
+      "state": "unreleased",
       "anchor": {
-        "file": "tests/eval_baseline.json"
+        "commit": "5abe6ea",
+        "expect": "untagged"
       },
-      "detail": "The baseline file says it out loud: two arms of the same build differed by 36% of steps and 14% of tokens. The harness has a sampling key set and a per-model profile path, but the profile covers output caps only, so it cannot express sampling or generation length - the two things that move most between runs and matter most on a small model.",
+      "detail": "The baseline file says it out loud: two arms of the same build differed by 36% of steps and 14% of tokens. The harness has a sampling key set and a per-model profile path, but the profile covers output caps only, so it cannot express sampling or generation length - the two things that move most between runs and matter most on a small model. Fixed 2026-10-12 (5abe6ea): every eval arm pins temperature 0, top_p 1, top_k 0 through TINYCMDR_EVAL_SAMPLING - whitelisted, fail-safe, and the one door that may add sampling, since config never can; the pin rides the baseline's sampling block and note, and the banner and /status announce it.",
       "gate": "the sampling set pinned for eval arms and surfaced in the startup line"
     },
     {
@@ -409,7 +414,7 @@
       "anchor": {
         "file": "tests/eval_tasks.py"
       },
-      "detail": "No eval arm has run against a small window or a small model - every number in the baseline came from a large budget against one endpoint. That is the differentiator the README advertises and the one claim without evidence behind it.",
+      "detail": "No eval arm has run against a small window or a small model - every number in the baseline came from a large budget against one endpoint. That is the differentiator the README advertises and the one claim without evidence behind it. Blocked on infrastructure, not code: no small model on a small window is served anywhere this box can reach, so the two arms cannot run yet.",
       "gate": "two arms - same build, a small model on a small window, sampling pinned - scored against the graded set"
     },
     {
@@ -561,11 +566,12 @@
     {
       "id": "console-tool-card-collapse",
       "title": "a tool call and its result are two boxes where one visual unit would read better",
-      "state": "open",
+      "state": "unreleased",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "1bc2e70",
+        "expect": "untagged"
       },
-      "detail": "The brief's section 6 target state, deferred on its own instruction ('if this proves too invasive in v1, defer it') because T-01/T-02/T-03 outranked it. Today a call is one box and its result a second box stacked with no gap; the target is the call box with its result appended as a dim footer line ('check name, 0.2s') inside or immediately under the same frame, expanding to a separate box only on failure or when the output preview exceeds one line. The inline screen would have to hold the call's renderable and amend it, which the append-only inline path cannot do - so this is a natural follow-on for --app (where the transcript is repainted) and then, if it earns it, for the inline screen.",
+      "detail": "The brief's section 6 target state, deferred on its own instruction ('if this proves too invasive in v1, defer it') because T-01/T-02/T-03 outranked it. Today a call is one box and its result a second box stacked with no gap; the target is the call box with its result appended as a dim footer line ('check name, 0.2s') inside or immediately under the same frame, expanding to a separate box only on failure or when the output preview exceeds one line. The inline screen would have to hold the call's renderable and amend it, which the append-only inline path cannot do - so this is a natural follow-on for --app (where the transcript is repainted) and then, if it earns it, for the inline screen. Landed for --app 2026-10-12 (1bc2e70): a successful call and its one-line result are one item, the result a dim footer inside the call's frame, while failure and a multi-line preview keep two boxes; the inline console keeps its two-box rhythm until it earns the one-unit shape.",
       "gate": "the call and its result read as one visual unit in the transcript; on failure and on long output still two, with tests/test_tui.py's rhythm checks updated to the new shape"
     },
     {
@@ -1715,11 +1721,12 @@
     {
       "id": "lane-web-leftovers-open",
       "title": "run-8 leftovers: a2a in-flight tasks, web.port 0 readers, one deafness path",
-      "state": "open",
+      "state": "unreleased",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "20bb9b1",
+        "expect": "untagged"
       },
-      "detail": "Three items from the lane/web audit, each with its shape recorded: (1) a2a SendMessage stores the task only after the run and ignores a client taskId, so a client timeout loses the handle and the retry re-executes every tool call - store a TASK_STATE_WORKING placeholder before the run and treat a client taskId as an idempotency key; (2) eight readers still collapse web.port 0 to 8790 (a2a card, status, health, setup, web/firewall links) - one web-port helper that preserves 0 and resolves it from the bound port recorded in the lane state; (3) lane-deafness detection is three mechanisms (MM liveness exits 75, MM catch-up rescues, TG reports down now) - one heartbeat-stale path that calls lane_down for every lane. PART 2 LANDED c740780: web_port_effective() answers with the configured port, else the port the page actually bound (logs/state.json lane record), else 8790 as a documented guess; 11 runtime readers route through it; tests/test_webui.py pins the three cases and is red on the pre-fix build. Parts 1 (a2a in-flight task) and 3 (one lane-deafness path) remain open. PART 1 LANDED 7abac65: SendMessage checks the id before running (a known task answers as-is), stores a well-formed TASK_STATE_WORKING placeholder under the lock so GetTask answers during the run, and only a placeholder is ever overwritten by the result; tests/test_a2a.py pins all four checks, red pre-fix. Part 3 (one lane-deafness path) remains open.",
+      "detail": "Three items from the lane/web audit, each with its shape recorded: (1) a2a SendMessage stores the task only after the run and ignores a client taskId, so a client timeout loses the handle and the retry re-executes every tool call - store a TASK_STATE_WORKING placeholder before the run and treat a client taskId as an idempotency key; (2) eight readers still collapse web.port 0 to 8790 (a2a card, status, health, setup, web/firewall links) - one web-port helper that preserves 0 and resolves it from the bound port recorded in the lane state; (3) lane-deafness detection is three mechanisms (MM liveness exits 75, MM catch-up rescues, TG reports down now) - one heartbeat-stale path that calls lane_down for every lane. PART 2 LANDED c740780: web_port_effective() answers with the configured port, else the port the page actually bound (logs/state.json lane record), else 8790 as a documented guess; 11 runtime readers route through it; tests/test_webui.py pins the three cases and is red on the pre-fix build. Parts 1 (a2a in-flight task) and 3 (one lane-deafness path) remain open. PART 1 LANDED 7abac65: SendMessage checks the id before running (a known task answers as-is), stores a well-formed TASK_STATE_WORKING placeholder under the lock so GetTask answers during the run, and only a placeholder is ever overwritten by the result; tests/test_a2a.py pins all four checks, red pre-fix. Part 3 (one lane-deafness path) remains open. PART 3 LANDED 20bb9b1: one lane_heartbeat_stale path every lane's silence ends in - the MM watchdog records the lane failed before its restart and the TG poll loop reports through the same door, once per episode, ended by lane_up; tests/test_lane_surface pins the record, the once-per-episode and the fresh episode after news.",
       "gate": "pending - next release"
     },
     {
@@ -1740,7 +1747,7 @@
       "anchor": {
         "file": "install/install-tinycmdr.ps1"
       },
-      "detail": "rework what the installer asks and how. Plan agreed: ONE question set, three doors. The questions live as a table (id, one-line WHY, default, valid answers, where the answer lands: config key/.env) rendered by the Windows installer, the POSIX installer and `tinycmdr setup`; a parity test (the test_installer_parity.py pattern) reads all three and fails when a question id, order or wording drifts, so the set cannot fork. UX rules: one decision per prompt with the WHY on the line above; numbered choices with a visible default whenever there is more than one real answer; bare y/N only for true/false (autostart, fallback consent); ask only what a chosen kind needs (URL for a search API, a key only if that provider has one, blank = anonymous; local model endpoints need no key); never ask what is derivable (egress follows from the search chain, the bot name from the host, the model id from the endpoint probe); re-runs ask once 'Keep the existing configuration?' and then only what changes; the closing summary names every decision back, the files written (.env, config.json) and the single next command; every question keeps a flag/env twin so the fleet push and -NoPause paths stay non-interactive. Order of work: freeze the table and wording for review -> Windows door -> POSIX door -> `setup` -> update the fixed answer sequences in tests/test_setup.py, tests/test_model_setup.py and tests/test_installer_*.py -> one release. The search ask inside this set follows search-provider-declared-next (URL + optional key, repeatable, order = primary then fallbacks). One concrete correction in the same pass: the 'How should you talk to it?' multi-pick offers Mattermost / Telegram / 'sessions by hand' and never mentions the web page, though the page is the DEFAULT door now (bare tinycmdr serves it). The lane menu becomes: 1) the web page (default; token-gated, this machine or your network) 2) Mattermost 3) Telegram - the page's bind, port and token asked only when it is chosen, and terminal sessions (--cli / --once) described as always available instead of offered as a lane to install. The flag twins (-NoWeb, -WebHost, -WebPort, -WebToken) keep the non-interactive path working. Landed in 93dfa82 (dev): the update verb's .git-checkout notice and the dev-kit keep note are gone - policy stays silent - and the host-default note prints only when the package actually moved that default, as one action line (tests/test_update_notes.py fails on the pre-fix build). The rule for the whole pass: update/install output is what changed plus what the operator must do - no internal policy, no history, no process narration. Also removed CODE_OF_CONDUCT.md (5e205a3): Contributor Covenant boilerplate that promised enforcement by 'community leaders' for a project I maintain alone, and nothing referenced it; CONTRIBUTING.md and SECURITY.md stay.",
+      "detail": "rework what the installer asks and how. Plan agreed: ONE question set, three doors. The questions live as a table (id, one-line WHY, default, valid answers, where the answer lands: config key/.env) rendered by the Windows installer, the POSIX installer and `tinycmdr setup`; a parity test (the test_installer_parity.py pattern) reads all three and fails when a question id, order or wording drifts, so the set cannot fork. UX rules: one decision per prompt with the WHY on the line above; numbered choices with a visible default whenever there is more than one real answer; bare y/N only for true/false (autostart, fallback consent); ask only what a chosen kind needs (URL for a search API, a key only if that provider has one, blank = anonymous; local model endpoints need no key); never ask what is derivable (egress follows from the search chain, the bot name from the host, the model id from the endpoint probe); re-runs ask once 'Keep the existing configuration?' and then only what changes; the closing summary names every decision back, the files written (.env, config.json) and the single next command; every question keeps a flag/env twin so the fleet push and -NoPause paths stay non-interactive. Order of work: freeze the table and wording for review -> Windows door -> POSIX door -> `setup` -> update the fixed answer sequences in tests/test_setup.py, tests/test_model_setup.py and tests/test_installer_*.py -> one release. The search ask inside this set follows search-provider-declared-next (URL + optional key, repeatable, order = primary then fallbacks). One concrete correction in the same pass: the 'How should you talk to it?' multi-pick offers Mattermost / Telegram / 'sessions by hand' and never mentions the web page, though the page is the DEFAULT door now (bare tinycmdr serves it). The lane menu becomes: 1) the web page (default; token-gated, this machine or your network) 2) Mattermost 3) Telegram - the page's bind, port and token asked only when it is chosen, and terminal sessions (--cli / --once) described as always available instead of offered as a lane to install. The flag twins (-NoWeb, -WebHost, -WebPort, -WebToken) keep the non-interactive path working. Landed in 93dfa82 (dev): the update verb's .git-checkout notice and the dev-kit keep note are gone - policy stays silent - and the host-default note prints only when the package actually moved that default, as one action line (tests/test_update_notes.py fails on the pre-fix build). The rule for the whole pass: update/install output is what changed plus what the operator must do - no internal policy, no history, no process narration. Also removed CODE_OF_CONDUCT.md (5e205a3): Contributor Covenant boilerplate that promised enforcement by 'community leaders' for a project I maintain alone, and nothing referenced it; CONTRIBUTING.md and SECURITY.md stay. On 2026-10-12 the frozen question table and wording were drafted and await review before the three doors are rewired, per this plan's own order of work.",
       "gate": "pending - next release; no code change yet"
     },
     {
@@ -2075,12 +2082,13 @@
     {
       "id": "windows-tier-on-the-install-surface",
       "title": "every shipped suite is graded on Windows",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "file": "tests/windows-tier.json"
+        "commit": "aa2d920",
+        "expect": "tagged"
       },
       "windows_excluded": [],
-      "detail": "Repointed 2026-10-08. The tier now lives in one file (tests/windows-tier.json), read by tests/run_all.py --tier and named by both workflows, and the exclusions came OFF it: eight suites had been hidden from the Windows job by name, which was the fix for a public job that had been red for weeks and is not a fix. What Windows does in those areas was therefore ungraded, not known-broken - seven of the eight assume a POSIX platform (os.X_OK / os.access / os.chmod / st_mode, a POSIX shell, latin-1, a line console) and test_compaction_continuity carries no platform call at all. Each is red on Windows now and passes on its own commit: fix the suite's platform assumption, or the product where the platform is not the problem. The item closes when the Windows job is green with nothing excluded.",
+      "detail": "Repointed 2026-10-08. The tier now lives in one file (tests/windows-tier.json), read by tests/run_all.py --tier and named by both workflows, and the exclusions came OFF it: eight suites had been hidden from the Windows job by name, which was the fix for a public job that had been red for weeks and is not a fix. What Windows does in those areas was therefore ungraded, not known-broken - seven of the eight assume a POSIX platform (os.X_OK / os.access / os.chmod / st_mode, a POSIX shell, latin-1, a line console) and test_compaction_continuity carries no platform call at all. Each is red on Windows now and passes on its own commit: fix the suite's platform assumption, or the product where the platform is not the problem. The item closes when the Windows job is green with nothing excluded. Closed 2026-10-12: excluded is empty, every suite is graded by a Windows job (dev must per push, product must+scheduled per publish, dev nightly), and all are green; the nightly's own red - a POSIX-only installer suite whose exit 77 counts as red there - was fixed by declaring it not_applicable (667f7dc).",
       "gate": "make each of the eight pass on Windows (the suite's assumption, or the product), one commit each - the item closes when `excluded` is empty and the Windows job is green",
       "windows_not_applicable": [
         "tests/test_update_script.py",
@@ -2589,7 +2597,7 @@
       "anchor": {
         "file": "tinycmdr.py"
       },
-      "detail": "The legion ships one cohort at a time on purpose: a second order while one runs is refused 409 with the reason, and each tab keeps its own conversation. The deferred shape is an ALL COHORTS tab that fans one order out to N boxes, collects an answer into each cohort's own tab and badges which have reported. What it needs that does not exist yet: a fan-out that does not trip the host-wide WEB_RUN_LIVE_MAX after two cohorts, an aggregation line for the hub's own transcript, and a rule for a cohort already on campaign when the fan-out starts (skip it, queue it, or refuse the whole assembly).",
+      "detail": "The legion ships one cohort at a time on purpose: a second order while one runs is refused 409 with the reason, and each tab keeps its own conversation. The deferred shape is an ALL COHORTS tab that fans one order out to N boxes, collects an answer into each cohort's own tab and badges which have reported. What it needs that does not exist yet: a fan-out that does not trip the host-wide WEB_RUN_LIVE_MAX after two cohorts, an aggregation line for the hub's own transcript, and a rule for a cohort already on campaign when the fan-out starts (skip it, queue it, or refuse the whole assembly). The three open design points were resolved on 2026-10-12 against the repo's own rules: a cohort already on campaign is refused per cohort (legion_send's 409 shape), legion frames are exempt from the page's WEB_RUN_LIVE_MAX (they are bounded by cohorts x one task each), the aggregation line lands in the hub's own transcript, and the per-cohort badge reads the state the rail already derives.",
       "gate": "the ALL COHORTS tab: one order, N cohorts, an answer per cohort, a badge per report - and the fan-out's own bound"
     },
     {
