@@ -20,6 +20,13 @@ tinycmdr and are also the examples for each shape:
 
 Delete them, edit them, or add your own. Three file shapes are recognised.
 
+The four starter files and this README are the tool kit's shipped half: they are
+versioned source, they ride every package, and a fresh install seeds them. Everything
+else in this folder is **per-host by design** - your own tools live only on this box.
+`tools/` is host-owned: an update never touches it, nothing you write here is versioned
+into tinycmdr's repo, and a tool you want to keep across hosts belongs in your own
+source control.
+
 ## 1. Native: <name>.py
 
 The shape create_tool writes. NAME is the FILE name (one name per thing),
