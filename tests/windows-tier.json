@@ -46,7 +46,6 @@
     "tests/test_endpoint_surface.py",
     "tests/test_eval_surface.py",
     "tests/test_update_surface.py",
-    "tests/test_installer_unix.py",
     "tests/test_protocol_surface.py",
     "tests/test_memory_surface.py",
     "tests/test_model_surface.py",
@@ -64,7 +63,8 @@
   "excluded": {},
   "not_applicable": {
     "tests/test_update_script.py": "runs update.sh, a POSIX shell script; it declares exit 77 on Windows",
-    "tests/test_fix_perms.py": "grades POSIX mode bits on sessions/ sidecars; it declares exit 77 on Windows (the fix deliberately leaves ACLs alone there)"
+    "tests/test_fix_perms.py": "grades POSIX mode bits on sessions/ sidecars; it declares exit 77 on Windows (the fix deliberately leaves ACLs alone there)",
+    "tests/test_installer_unix.py": "grades the Unix installer (bash + systemd + AF_UNIX); it declares exit 77 on Windows and names test_installer_windows.py as the Windows counterpart"
   },
   "dev_only": [
     "tests/test_config_example.py",

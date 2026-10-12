@@ -323,9 +323,14 @@ def main():
         _hits = {q.relative_to(BASE).as_posix() for q in BASE.glob(_pat)}
         check("dev_only names %s, which is not in this tree" % _pat, bool(_hits), sorted(_hits))
         _dev_expanded |= _hits
-    check("...and every dev_only suite is still declared runnable here",
-          _dev_expanded and _dev_expanded <= (_buckets["must"] | _buckets["scheduled"]),
-          sorted(_dev_expanded - (_buckets["must"] | _buckets["scheduled"])))
+    check("...and every dev_only suite is still declared somewhere that grades it",
+          # `must`/`scheduled` on Windows, or `not_applicable` with its platform declared
+          # (tests/test_installer_unix.py: POSIX-only, and as a `scheduled` suite it made
+          # the Windows nightly red on its own skip every night).
+          _dev_expanded and _dev_expanded <= (_buckets["must"] | _buckets["scheduled"]
+                                              | _buckets["not_applicable"]),
+          sorted(_dev_expanded - (_buckets["must"] | _buckets["scheduled"]
+                                  | _buckets["not_applicable"])))
     for _key in ("excluded", "not_applicable"):
         _reasons = _tier.get(_key) or {}
         if _key == "excluded" and not _reasons:
@@ -366,8 +371,13 @@ def main():
         _priv = set((json.loads((BASE / "maintenance" / "product-manifest.json")
                                 .read_text(encoding="utf-8")).get("private_suites") or {}))
         _priv = {"tests/%s.py" % k for k in _priv}
-        check("...and every one of them SHIPS (a private suite is not in the product at all)",
-              not ((_named | _na) & _priv), sorted((_named | _na) & _priv))
+        # A suite the product does not ship (`dev_only`) cannot be listed here AND be
+        # required to ship: tests/test_installer_unix.py is exactly that shape (dev-only
+        # because it needs maintenance/package_assets.py, and POSIX-only on Windows).
+        _dev_set = set(_dev_only)
+        check("...and every one of them SHIPS or is dev_only",
+              not ((_named | _na) & _priv - _dev_set),
+              sorted((_named | _na) & _priv - _dev_set))
         # An exclusion is live work, never a settled one: the item stays open while a name is
         # listed. With the list empty, the item is the record of what was hidden and why it came
         # back - and the Windows job is green with nothing excluded.

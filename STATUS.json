@@ -2073,7 +2073,8 @@
       "gate": "make each of the eight pass on Windows (the suite's assumption, or the product), one commit each - the item closes when `excluded` is empty and the Windows job is green",
       "windows_not_applicable": [
         "tests/test_update_script.py",
-        "tests/test_fix_perms.py"
+        "tests/test_fix_perms.py",
+        "tests/test_installer_unix.py"
       ]
     },
     {
