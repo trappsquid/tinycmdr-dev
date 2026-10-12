@@ -31484,7 +31484,18 @@ def _web_hosts_settled(timeout=3.0):
         _WEB_HOSTS_WARM.join(timeout)
     return set(_WEB_HOSTS_CACHE or ()) | _web_hosts_configured()
 
-def health_payload():
+def _peer_is_loopback(peer):
+    """Is this socket peer ON this box?
+
+    A loopback peer is the same trust boundary as this process - the installer's probe,
+    the restart doors and a terminal `curl` all arrive from 127.0.0.1. `::ffff:127.0.0.1`
+    is the IPv4-mapped form a dual-stack v6 listener reports for a v4 client, so it is the
+    same peer as `127.0.0.1`. Anything else is off-box, however it reached this port.
+    """
+    return str(peer or "") in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+def health_payload(authed=False, client_is_loopback=True):
     """What a monitor should read, answering "can it hear me?" rather than "is the HTTP
     server up".
 
@@ -31492,17 +31503,28 @@ def health_payload():
     door probe this endpoint with `curl -sf`, and turning a dead chat lane into a failing HTTP
     probe would break the very commands that bring a box back. The door with an exit code is
     `tinycmdr health`.
+
+    The route stays token-free, but the payload has two tiers (A-2026-10-05-38): `pid`, the
+    per-lane map and `config_changed` describe the box and go only to a caller already ON it
+    (a loopback peer) or one holding the token. Any other peer - a LAN browser, a scanner -
+    gets `ok` and `version` alone, so the door still answers a `curl -sf` without handing an
+    off-box reader the process id and the lane layout.
     """
     lanes = lanes_snapshot()
-    return {
+    payload = {
         "ok": all(v["state"] != "failed" for v in lanes.values()),
         "version": VERSION,
+    }
+    if not (authed or client_is_loopback):
+        return payload
+    payload.update({
         "pid": os.getpid(),
         "lanes": lanes,
         # Not folded into `ok`: a pending restart is not a dead lane, but a reader deciding
         # whether to believe this page needs it.
         "config_changed": config_drift(),
-    }
+    })
+    return payload
 
 
 def run_webui():
@@ -31566,8 +31588,7 @@ def run_webui():
             # MAX_CONN - that is the 2026-09-23 thread-stacking incident - and hears BUSY
             # in HTTP instead of a bare close, so a monitor can tell it apart from a dead
             # box.
-            peer = str((client_address or ("",))[0])
-            exempt = peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+            exempt = _peer_is_loopback((client_address or ("",))[0])
             cap = self.MAX_CONN_EXEMPT if exempt else self.MAX_CONN
             with self._conn_lock:
                 if self._conn_live >= cap:
@@ -32046,7 +32067,14 @@ def run_webui():
                 self._forbidden()
                 return
             if self.path.startswith("/api/health"):
-                self._json(health_payload())
+                # The tier split (A-2026-10-05-38): a loopback peer or a token holder
+                # sees the whole page; any other peer gets ok+version only. `_auth_ok`
+                # is read here purely to widen the payload, never to gate the route -
+                # /api/health must keep answering a token-less `curl -sf`.
+                self._json(health_payload(
+                    authed=self._auth_ok(),
+                    client_is_loopback=_peer_is_loopback(
+                        (self.client_address or ("",))[0])))
             elif self.path.startswith("/.well-known/agent-card.json"):
                 # The A2A card (web.a2a): public metadata and no token - it names no
                 # secret, and a peer has to read it before it can authenticate. Every
