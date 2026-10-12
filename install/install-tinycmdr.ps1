@@ -926,7 +926,7 @@ if (-not $py) {
         # the winget path right above picked the right one.
         # PROCESSOR_ARCHITEW6432 first: under a 32-bit PowerShell on a 64-bit host the
         # other variable reads "x86" and the host wants the amd64 build. python.org
-        # names the 32-bit full installer python-3.12.8.exe (the -win32 suffix exists
+        # names the 32-bit full installer python-<ver>.exe (the -win32 suffix exists
         # only for the embeddable zip), so x86 is an EMPTY suffix - the old "win32"
         # name 404'd and this fallback could never install anything (measured
         # 2026-10-10).
@@ -937,15 +937,30 @@ if (-not $py) {
             "ARM64" { "-arm64" }
             default { "" }
         }
-        $installerName = "python-3.12.8$pySuffix.exe"
-        $installerUrl = "https://www.python.org/ftp/python/3.12.8/$installerName"
+        # 3.12.10 is the newest 3.12 with a Windows installer: 3.12.11+ ship source-only
+        # (security branch), so pinning those would 404 the fallback (measured
+        # 2026-10-12).
+        $installerName = "python-3.12.10$pySuffix.exe"
+        $installerUrl = "https://www.python.org/ftp/python/3.12.10/$installerName"
         $installerPath = Join-Path $env:TEMP $installerName
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
-            Say "running Python installer silently..."
-            $proc = Start-Process -FilePath $installerPath -ArgumentList "/quiet","InstallAllUsers=0","PrependPath=1","Include_pip=1" -Wait -PassThru
-            if ($proc.ExitCode -eq 0) { $installed = $true }
+            # TLS alone proves transfer, not provenance: python.org publishes no hash
+            # file for the .exe assets, but every Windows installer is Authenticode-signed
+            # by the Python Software Foundation, and Windows will refuse to run an exe
+            # whose check fails - so check it here, where the answer is still readable.
+            $sig = Get-AuthenticodeSignature -FilePath $installerPath
+            if ($sig.Status -ne 'Valid') {
+                Write-Host "the downloaded Python installer failed its signature check: $($sig.Status)" -ForegroundColor Red
+                Write-Host "  $installerUrl" -ForegroundColor Red
+                Write-Host "  install Python 3.12 by hand from https://python.org and re-run" -ForegroundColor Yellow
+            } else {
+                Say "signature: $($sig.SignerCertificate.Subject -replace '^CN=([^,]+).*','$1') (Valid)"
+                Say "running Python installer silently..."
+                $proc = Start-Process -FilePath $installerPath -ArgumentList "/quiet","InstallAllUsers=0","PrependPath=1","Include_pip=1" -Wait -PassThru
+                if ($proc.ExitCode -eq 0) { $installed = $true }
+            }
         } catch {
             Write-Host "download failed: $_" -ForegroundColor Red
         }

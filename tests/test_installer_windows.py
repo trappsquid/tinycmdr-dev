@@ -621,15 +621,26 @@ def main():
           # other variable reads "x86" and the host wants the amd64 build.
           "PROCESSOR_ARCHITEW6432" in install and "PROCESSOR_ARCHITECTURE" in install)
     check("the architectures are mapped to python.org's installer-name suffixes",
-          # python.org publishes the 32-bit full installer as python-3.12.8.exe: x86 is
+          # python.org publishes the 32-bit full installer as python-3.12.10.exe: x86 is
           # an EMPTY suffix, and the old "-win32" name 404'd (measured 2026-10-10).
           all(a in between(install, "$pySuffix = switch", "$installerName") for a in
               ('"AMD64"', '"ARM64"'))
           and '"-amd64"' in install and '"-arm64"' in install and 'default { "" }' in install)
     check("no hardcoded arch asset URL is left",
-          "python-3.12.8-amd64.exe" not in install
-          and "python-3.12.8-win32.exe" not in install
+          "python-3.12.10-amd64.exe" not in install
+          and "python-3.12.10-win32.exe" not in install
           and "$installerName" in install)
+    check("the fallback download is Authenticode-checked before it runs",
+          # python.org publishes no hash file for the .exe assets, so the signed installer
+          # is the integrity proof: a non-Valid signature must stop the run, not warn and
+          # continue.
+          "Get-AuthenticodeSignature" in install
+          and "$sig.Status -ne 'Valid'" in install
+          and install.find("Get-AuthenticodeSignature") < install.find("Start-Process -FilePath $installerPath"))
+    check("the fallback pins a version that still ships a Windows installer",
+          # 3.12.11+ are source-only security releases; the pinned name must stay a real
+          # asset (checked against python.org's FTP listing 2026-10-12).
+          "python-3.12.10$pySuffix.exe" in install and "python-3.12.8$pySuffix.exe" not in install)
     check("the resolved interpreter's word size is checked",
           "Is64BitOperatingSystem" in install and "calcsize('P')" in install)
 
