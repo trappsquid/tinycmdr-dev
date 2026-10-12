@@ -952,6 +952,56 @@ def guard_drift_note(drift):
 ENV_FILE = BASE_DIR / ".env"
 
 
+_SECRET_SHAPES = {
+    # name -> (regex, what it must look like). A Mattermost bot token is 26 lowercase
+    # alphanumerics; a Telegram bot token is "<digits>:<35 chars>". Both are fixed by the
+    # services, and a value that misses the shape can NEVER authenticate - which is the
+    # whole point of checking here rather than after 723 failed lane starts.
+    "TINYCMDR_MM_TOKEN": (re.compile(r"^[A-Za-z0-9]{26}$"),
+                          "26 letters/digits, from System Console -> Integrations -> "
+                          "Bot Accounts"),
+    "TINYCMDR_TG_TOKEN": (re.compile(r"^\d{5,12}:[A-Za-z0-9_-]{30,}$"),
+                          "<digits>:<35 characters>, from @BotFather"),
+    "TINYCMDR_WEB_TOKEN": (re.compile(r"^[A-Za-z0-9_-]{20,}$"),
+                           "20+ letters/digits/underscore/hyphen (an empty value at "
+                           "`token set` mints one)"),
+}
+
+
+def secret_check(name, value):
+    """The value to write, or ValueError saying why it cannot be a working secret.
+
+    `tinycmdr token` called it "set (.env)" while the lane failed 723 times - nothing had
+    looked at the value. The BOM case is not hypothetical either: PowerShell 5.1 prepends
+    a UTF-8 BOM to anything piped into a native command, so `"$tok" | tinycmdr token set
+    ...` writes seven bytes nobody can see.
+
+    Lives above _load_env_file on purpose: the loader calls it at import, so a name
+    whose inherited value cannot work never keeps the file's working one out
+    (A-2026-10-10-12).
+    """
+    text = str(value or "")
+    note = ""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+        note = ("removed a leading UTF-8 BOM (PowerShell 5.1 adds one when it pipes a "
+                "value into a command)")
+    bad = sorted({ch for ch in text if ch in "\r\n\t" or unicodedata.category(ch)[0] == "C"})
+    if bad:
+        raise ValueError("the value holds control characters (%s) - paste the token at "
+                         "the prompt, do not pipe it through a shell"
+                         % " ".join("U+%04X" % ord(c) for c in bad))
+    if not text.strip():
+        raise ValueError("the value is empty")
+    if text != text.strip():
+        raise ValueError("the value has leading or trailing whitespace")
+    shape = _SECRET_SHAPES.get(name)
+    if shape and not shape[0].match(text):
+        raise ValueError("a %s does not look like one: %d character(s), expected %s"
+                         % (name, len(text), shape[1]))
+    return text, note
+
+
 def _load_env_file():
     """Read BASE_DIR/.env into os.environ (real env wins).
 
@@ -960,9 +1010,12 @@ def _load_env_file():
 
     The "wins" is literal: a name already set in the environment - by a service
     manager, a launcher wrapper, a shell profile - keeps its value and the .env line
-    is NOT loaded for it. A box whose TINYCMDR_* token is stale in its service
-    environment therefore runs with that token and not the file's
-    (A-2026-10-10-12, measured 2026-10-10).
+    is NOT loaded for it. One exception: an inherited value that cannot BE a working
+    secret (secret_check's rules - a control character, a wrong shape, empty) never
+    shadows the file's value when the file's passes. A box whose TINYCMDR_* token is
+    dead in its service environment used to run with that token for ever - every
+    restart re-inherited it, so `token set` + restart could not heal the lane
+    (A-2026-10-10-12, measured 2026-10-12).
     """
     if not ENV_FILE.exists():
         return
@@ -984,8 +1037,28 @@ def _load_env_file():
             else:
                 v = v.split(" #", 1)[0].rstrip()
                 v = v.strip('"').strip("'")
-            if k and k not in os.environ:
+            if not k:
+                continue
+            if k not in os.environ:
                 os.environ[k] = v
+            elif k in _SECRET_SHAPES:
+                # Env wins, with one exception: a value inherited from the service
+                # environment that cannot BE a working secret must not shadow the
+                # file's working one. Every restart re-inherits the corpse, so without
+                # this the lane could never heal (A-2026-10-10-12, measured 2026-10-12).
+                try:
+                    secret_check(k, v)
+                except ValueError:
+                    continue            # neither value can work; the lane will name it
+                try:
+                    secret_check(k, os.environ[k])
+                except ValueError as why:
+                    log.warning(
+                        "%s inherited from the environment cannot work (%s) - using "
+                        "the value in %s instead; remove the name from the service "
+                        "environment (systemd, launchd, a wrapper) to end the "
+                        "shadowing.", k, why, ENV_FILE.name)
+                    os.environ[k] = v
     except Exception as e:  # never block startup on a malformed .env
         print(f"could not read {ENV_FILE}: {e}")
 
@@ -36071,7 +36144,7 @@ def run_bot():
     try:
         secret_check("TINYCMDR_MM_TOKEN", mm["token"])
     except ValueError as _problem:
-        raise RuntimeError("the Mattermost token in %s is unusable: %s - replace it with "
+        raise RuntimeError("the Mattermost token in %s or in the environment is unusable: %s - "
                            "`tinycmdr token set TINYCMDR_MM_TOKEN`, then restart"
                            % (ENV_FILE.name, _problem))
 
@@ -38384,13 +38457,14 @@ def run_telegram():
 
     except ValueError as _problem:
 
-        log.critical("the Telegram token in %s is unusable: %s - replace it with "
+        log.critical("the Telegram token in %s or in the environment is unusable: %s - "
 
                      "`tinycmdr token set TINYCMDR_TG_TOKEN`, then restart.",
 
                      ENV_FILE.name, _problem)
 
-        _refuse("the Telegram token in %s is unusable: %s" % (ENV_FILE.name, _problem))
+        _refuse("the Telegram token in %s or in the environment is unusable: %s"
+                % (ENV_FILE.name, _problem))
 
     allowed = {str(u).strip() for u in (tg.get("allowed_users") or []) if str(u).strip()}
 
@@ -44788,52 +44862,6 @@ def _verb_restart():
     print("restart: helper ran; instance state unknown (the lock could not be read)",
           file=sys.stderr)
     return 1
-
-
-_SECRET_SHAPES = {
-    # name -> (regex, what it must look like). A Mattermost bot token is 26 lowercase
-    # alphanumerics; a Telegram bot token is "<digits>:<35 chars>". Both are fixed by the
-    # services, and a value that misses the shape can NEVER authenticate - which is the
-    # whole point of checking here rather than after 723 failed lane starts.
-    "TINYCMDR_MM_TOKEN": (re.compile(r"^[A-Za-z0-9]{26}$"),
-                          "26 letters/digits, from System Console -> Integrations -> "
-                          "Bot Accounts"),
-    "TINYCMDR_TG_TOKEN": (re.compile(r"^\d{5,12}:[A-Za-z0-9_-]{30,}$"),
-                          "<digits>:<35 characters>, from @BotFather"),
-    "TINYCMDR_WEB_TOKEN": (re.compile(r"^[A-Za-z0-9_-]{20,}$"),
-                           "20+ letters/digits/underscore/hyphen (an empty value at "
-                           "`token set` mints one)"),
-}
-
-
-def secret_check(name, value):
-    """The value to write, or ValueError saying why it cannot be a working secret.
-
-    `tinycmdr token` called it "set (.env)" while the lane failed 723 times - nothing had
-    looked at the value. The BOM case is not hypothetical either: PowerShell 5.1 prepends
-    a UTF-8 BOM to anything piped into a native command, so `"$tok" | tinycmdr token set
-    ...` writes seven bytes nobody can see.
-    """
-    text = str(value or "")
-    note = ""
-    if text.startswith("\ufeff"):
-        text = text[1:]
-        note = ("removed a leading UTF-8 BOM (PowerShell 5.1 adds one when it pipes a "
-                "value into a command)")
-    bad = sorted({ch for ch in text if ch in "\r\n\t" or unicodedata.category(ch)[0] == "C"})
-    if bad:
-        raise ValueError("the value holds control characters (%s) - paste the token at "
-                         "the prompt, do not pipe it through a shell"
-                         % " ".join("U+%04X" % ord(c) for c in bad))
-    if not text.strip():
-        raise ValueError("the value is empty")
-    if text != text.strip():
-        raise ValueError("the value has leading or trailing whitespace")
-    shape = _SECRET_SHAPES.get(name)
-    if shape and not shape[0].match(text):
-        raise ValueError("a %s does not look like one: %d character(s), expected %s"
-                         % (name, len(text), shape[1]))
-    return text, note
 
 
 def _env_set(name, value):

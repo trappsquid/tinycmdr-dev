@@ -7,8 +7,14 @@ inside quotes, or with no space before it, is part of the value.
 
 TINYCMDR_SRC points SRC at a reverted build so the fix can be watched going red
 (tests/run_all.py clears it for a normal run).
+
+The same suite grades the env-shadowing exception (A-2026-10-10-12): an inherited
+TINYCMDR_* value that cannot be a working secret (a control character, a wrong
+shape) must not keep a working .env value from loading - a restart chain made the
+dead value permanent, so `token set` + restart could not heal a lane.
 """
 import importlib.util
+import logging
 import os
 import shutil
 import sys
@@ -32,13 +38,30 @@ for name in ("TCM_PROBE_PLAIN", "TCM_PROBE_QUOTED", "TCM_PROBE_QUOTED_SINGLE",
              "TCM_PROBE_NOSPACE", "TCM_PROBE_EMPTY"):
     os.environ.pop(name, None)
 
+# The shadowing exception needs a known-shape name and a dead value: one control
+# byte, the corpse a restart chain used to re-inherit (A-2026-10-10-12).
+os.environ["TINYCMDR_MM_TOKEN"] = "\x16"
+
 (STAGE / ".env").write_text(
     "TCM_PROBE_PLAIN=x # a trailing note\n"
     'TCM_PROBE_QUOTED="quoted # not a comment"\n'
     "TCM_PROBE_QUOTED_SINGLE='also # kept'\n"
     "TCM_PROBE_NOSPACE=ab#cd\n"
-    "TCM_PROBE_EMPTY=\n",
+    "TCM_PROBE_EMPTY=\n"
+    "TINYCMDR_MM_TOKEN=%s\n" % ("a" * 26),
     encoding="utf-8")
+
+# What the loader says while it refuses a dead shadowed value: captured so the
+# healing stays LOUD (a silent swap would hide a box whose service env is stale).
+_WARN = []
+
+
+class _Rec(logging.Handler):
+    def emit(self, record):
+        _WARN.append(record.getMessage())
+
+
+logging.getLogger("tinycmdr").addHandler(_Rec())
 
 spec = importlib.util.spec_from_file_location("tinycmdr_fix_env", STAGE / "tinycmdr.py")
 fb = importlib.util.module_from_spec(spec)
@@ -72,6 +95,16 @@ def main():
           g("TCM_PROBE_NOSPACE") == "ab#cd", repr(g("TCM_PROBE_NOSPACE")))
     check("an empty value stays empty",
           g("TCM_PROBE_EMPTY") == "", repr(g("TCM_PROBE_EMPTY")))
+    # A dead inherited value never keeps a working file value out (A-2026-10-10-12).
+    check("a dead inherited token does not shadow the file's value",
+          g("TINYCMDR_MM_TOKEN") == "a" * 26, repr(g("TINYCMDR_MM_TOKEN")))
+    check("...and the swap is warned, naming the key",
+          any("TINYCMDR_MM_TOKEN" in m and "inherited" in m for m in _WARN), _WARN)
+    # ...while a usable inherited value still wins: the dotenv rule is unchanged.
+    os.environ["TINYCMDR_MM_TOKEN"] = "b" * 26
+    fb._load_env_file()
+    check("a usable inherited token still wins",
+          g("TINYCMDR_MM_TOKEN") == "b" * 26, repr(g("TINYCMDR_MM_TOKEN")))
     # The real environment still wins over the file.
     os.environ["TCM_PROBE_PLAIN"] = "from-env"
     fb._load_env_file()
@@ -84,6 +117,7 @@ if __name__ == "__main__":
     try:
         rc = main()
     finally:
+        os.environ.pop("TINYCMDR_MM_TOKEN", None)
         shutil.rmtree(STAGE, ignore_errors=True)
     print("\n%d passed, %d failed" % (len(PASSES), len(FAILS)))
     sys.exit(rc if not FAILS else 1)
