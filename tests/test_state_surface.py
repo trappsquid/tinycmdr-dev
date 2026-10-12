@@ -182,6 +182,25 @@ is left behind, and the temp carries the destination's own mode.
                   got == 0o600, oct(got))
 
 
+    def test_a_read_only_destination_is_still_replaced():
+        # POSIX lets the DIRECTORY's permission decide, so a 0444 state file (a backup
+        # tool, a chmod by hand) is replaced and the write lands; Windows refuses the
+        # rename (WinError 5, every attempt) and wedged every later save of that file
+        # (A-2026-10-11-20). The writer clears the attribute on the Windows path and
+        # lands what POSIX already lands. Red-before/green-after on the Windows tier;
+        # on POSIX this grades that the fix did not break the case that worked.
+        p = TMP / "readonly-state.json"
+        p.write_text('{"items": ["kept"]}', encoding="utf-8")
+        os.chmod(p, stat.S_IREAD)
+        try:
+            fb.atomic_write_text(p, '{"items": ["new"]}')
+            check("a read-only destination is still replaced",
+                  p.read_text(encoding="utf-8") == '{"items": ["new"]}',
+                  repr(p.read_text(encoding="utf-8")[:60]))
+        finally:
+            os.chmod(p, stat.S_IWRITE)
+
+
     def test_bytes_go_in_verbatim():
         p = TMP / "bytes.bin"
         data = bytes(range(256))

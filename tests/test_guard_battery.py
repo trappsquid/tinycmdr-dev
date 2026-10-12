@@ -605,6 +605,30 @@ def test_confirm_approval_scopes():
           "rm -rf /tmp/later" in d2.lines[-1] and state["since"] in d2.lines[-1],
           d2.lines[-1])
     fb.confirm_allow("clear")
+    # A corrupt allowlist kept nothing: the permanent grant evaporated with no log and
+    # no .damaged-* copy - the one reader still off the shared loader
+    # (A-2026-10-11-18). It keeps the damaged file and says so now.
+    fb.RunReporter(_ApprovalDest("always"), "approve-sc").confirm("rm -rf /tmp/corrupt")
+    store = STAGE / "confirm-allow.json"
+    store.write_text('{"all": tru', encoding="utf-8")
+    _lines = []
+    import logging as _logging
+    _cap = _logging.Handler()
+    _cap.emit = lambda rec: _lines.append(rec.getMessage())
+    _logging.getLogger().addHandler(_cap)
+    try:
+        st = fb.confirm_allow_state()
+    finally:
+        _logging.getLogger().removeHandler(_cap)
+    check("a corrupt allowlist reads as empty, fails closed",
+          st == {"all": False, "sessions": []}, st)
+    _kept = list(STAGE.glob("confirm-allow.json.damaged-*"))
+    check("...the damaged file is KEPT beside itself", bool(_kept), _kept)
+    check("...and the log says why",
+          any("confirm-allow" in str(m) for m in _lines), _lines)
+    for _p in _kept:
+        _p.unlink(missing_ok=True)
+    fb.confirm_allow("clear")
 
 
 def test_a_refusal_sentence_cannot_approve():

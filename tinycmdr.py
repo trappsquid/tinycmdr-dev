@@ -9532,11 +9532,14 @@ _CONFIRM_SCOPE = {"session": "session", "all": "session", "always": "always",
 
 
 def _confirm_allow_read():
-    try:
-        d = json.loads(CONFIRM_ALLOW_FILE.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
+    """The permanent allowlist, through the ONE state loader (A-2026-10-11-18).
+
+    It used to swallow every exception and return {} in silence: one corrupted byte
+    made the never-ask-again grant evaporate with no log and no .damaged-* copy -
+    the exact silent-damage class `_load_json_state` exists for. A corrupt file now
+    keeps a copy beside itself and says so."""
+    d = _load_json_state(CONFIRM_ALLOW_FILE, "the confirm gate's allowlist")
+    return d if isinstance(d, dict) else {}
 
 
 def confirm_preapproved(session_key):
@@ -10104,7 +10107,10 @@ def atomic_write_bytes(path, data):
     the old file or the new one and never a mixture. The temp carries the
     DESTINATION's own mode (0600 when the file is new), so replacing a 0600 .env or
     a 0755 script neither widens it nor loses a bit: the previous version created
-    the temp with the umask's default and renamed that over a 0600 file.
+    the temp with the umask's default and renamed that over a 0600 file. On Windows
+    the mode bits are advisory - `os.open`'s mode is ignored and there is no
+    `fchmod`, so a new file measures 0o666 with the parent's ACLs governing - said
+    here rather than promised silently (A-2026-10-11-19, measured 2026-10-11).
 
     The destination is never opened for writing. If the write or the rename fails,
     the old file is left exactly as it was and the error is RAISED, so the caller
@@ -10163,6 +10169,7 @@ def atomic_write_bytes(path, data):
                 f.flush()
                 os.fsync(f.fileno())
             last = None
+            _ro_cleared = False
             for delay in (0,) + _ATOMIC_RENAME_RETRY_DELAYS:
                 if delay:
                     time.sleep(delay)
@@ -10172,6 +10179,19 @@ def atomic_write_bytes(path, data):
                     return
                 except OSError as e:
                     last = e
+                    if (os.name == "nt" and not _ro_cleared and p.exists()
+                            and not os.access(str(p), os.W_OK)):
+                        # Windows refuses to replace a READ-ONLY destination (WinError 5,
+                        # every attempt), while POSIX lets the DIRECTORY's permission
+                        # decide - so the same 0444 state file (a backup tool, a chmod by
+                        # hand) is replaced on the Mac and wedged every later save here
+                        # (A-2026-10-11-20, measured 2026-10-11). Clear the attribute and
+                        # retry once: the outcome POSIX already gives.
+                        _ro_cleared = True
+                        try:
+                            os.chmod(str(p), stat.S_IWRITE)
+                        except OSError:
+                            pass
             raise last
         except BaseException as e:
             try:
@@ -25527,10 +25547,6 @@ class TuiScreen:
         from rich.text import Text
         self._draw(Text("  " + text, style="dim"))
 
-    def note_line(self, text, style="dim"):
-        from rich.text import Text
-        self._draw(Text("  " + str(text), style=style))
-
     def raw_ansi(self, text):
         """Text that is ALREADY painted (the streamed narration, the closing newline).
 
@@ -36048,12 +36064,6 @@ def _lane_fails_load():
                 LANE_FAILS.update(stored)
 
 
-def _lane_fails_snapshot():
-    _lane_fails_load()
-    with _LANE_LOCK:
-        return json.loads(json.dumps(LANE_FAILS))
-
-
 LANE_PERMANENT_BACKOFF = 600      # a credential the service REFUSED is not an outage
 
 
@@ -39101,34 +39111,6 @@ def run_telegram():
 
                 log.warning("telegram: could not say the queue is full: %s", e)
 
-    def _run_command(chat_id, text, sender):
-
-        """Answer one command here and now, and hand a /retry follow-up to the worker."""
-
-        try:
-
-            follow = poller._verb(chat_id, text, sender)
-
-        except Exception as exc:                            # noqa: BLE001 - reported
-
-            log.exception("telegram: a command failed")
-
-            try:
-
-                client.send(chat_id, "⚠️ That command failed: %s: %s"
-
-                            % (type(exc).__name__, exc))
-
-            except Exception:                               # noqa: BLE001 - said already
-
-                pass
-
-            return
-
-        if isinstance(follow, str) and follow.strip():
-
-            submit(chat_id, follow, None, None)
-
     def submit_command(chat_id, text, sender=""):
 
         """Answer a command in order with this chat's runs.
@@ -39304,26 +39286,6 @@ _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
         # "reader": is a reader thread the one owner of stdin (see _cli_reader)?
         # "app": the AppScreen when --app owns the terminal (None otherwise).
         "ask": None, "reader": False, "app": None}
-
-
-def _console_utf8():
-    """Windows consoles are not UTF-8 by default, and the banner is.
-
-    Python's streams are reconfigured AND the console's own output code page is lifted to
-    65001, so a child (`chcp`-inheriting PowerShell, a tool writing bytes) lands in the same
-    encoding the harness reads.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-    if os.name == "nt":
-        try:
-            import ctypes
-            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
-        except Exception:
-            pass
 
 
 def _ansi_enable():
