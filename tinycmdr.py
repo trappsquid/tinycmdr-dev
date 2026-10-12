@@ -2752,8 +2752,10 @@ def _repair_doubled_calls(calls):
         arguments arrived clean: exactly the cases the old arguments-gate skipped, and
         exactly the no-argument doors (`memory`, `list_tools`) a doubled name breaks
         ;
-      * doubled ARGUMENTS (one JSON object followed by another) collapse to the first,
-        structure only, unchanged.
+      * doubled ARGUMENTS (one JSON object followed by another) keep the LAST complete
+        object that is not empty (`_one_json_object`), structure only, unchanged
+        (A-2026-10-10-09: this line said "the first" while the code and the payload
+        path both keep the last).
 
     Everything else is left exactly as the endpoint sent it - which is the point, after
     five releases of a fragment guard that could not tell a resend from a repeated
