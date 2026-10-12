@@ -14876,8 +14876,12 @@ def tool_skill(args, ctx):
 
 # Scheduler (cron gateway equivalent)
 def report(channel_id, text):
-    """Deliver a message: to Mattermost in bot mode, stdout otherwise."""
-    if REPORTER and channel_id:
+    """Deliver a message: to Mattermost in bot mode, stdout otherwise.
+
+    A `web:` destination is a PAGE conversation, not a chat channel: no lane is
+    asked to post it, and the message falls to the log like any report no lane
+    can carry."""
+    if REPORTER and channel_id and not str(channel_id).startswith(WEB_DEST_PREFIX):
         try:
             REPORTER(channel_id, text)
             return
@@ -15314,14 +15318,23 @@ class Scheduler:
         key = f"sched-{name}"
         if job.get("model"):
             AGENT.model_overrides[key] = job["model"]
-        # Where this job reports is a DESTINATION, resolved once - a channel or
-        # nowhere - and the callback list that used to be repeated here now lives
-        # in drive_run, so a job cannot be wired differently from a chat turn.
-        # The dispatcher is resolved from the job's own LANE first: in the pair
-        # process one global could only ever be one lane's (2026-10-11).
+        # Where this job reports is a DESTINATION, resolved once - a conversation
+        # or nowhere - and the callback list that used to be repeated here now
+        # lives in drive_run, so a job cannot be wired differently from a chat
+        # turn. A `web:<key>` token is the PAGE conversation the job was made
+        # from, and it resolves to its own headless run first: the chat lanes'
+        # dispatchers cannot carry it, and resolving it through them made the
+        # report log-only (A-2026-10-11-22). The dispatcher is resolved from the
+        # job's own LANE first: in the pair process one global could only ever be
+        # one lane's (2026-10-11).
         disp = self.dispatcher_for(job)
         token = job.get("channel_id")
-        if disp and token:
+        wkey = web_token_key(token)
+        wrun = web_new_scheduled_run(wkey) if wkey else None
+        if wrun is not None:
+            dest, door = WebDestination(wrun), wrun
+            wrun.add("system", f"⏰ **{name}**")
+        elif disp and token and not wkey:
             dest = MattermostDestination(disp, token, None)
             door = {"label": "answer in this channel",
                     "opener": lambda q, opts, w, l:
@@ -15331,21 +15344,35 @@ class Scheduler:
                     "close_question": lambda:
                         SCHEDULER.close_question(key, disp)}
         else:
+            # No dispatcher, or a web conversation that is gone - which
+            # web_new_scheduled_run has already said in the log: the job still
+            # runs, and its report lands with that warning.
             dest, door = NowhereDestination(), None
         rep = RunReporter(dest, key, label="⏰ Working…")
+        if wrun is not None:
+            # The web watchdog ends a wedged run through the reporter every other
+            # finish uses, the same way the browser route keeps its own.
+            wrun.reporter = rep
         failed = False
         try:
             answer = drive_run(key,
                                "[Scheduled task — work autonomously, then report] "
                                + job["task"],
-                               rep, channel_id=token, ask_door=door)
+                               rep, channel_id=token, ask_door=door,
+                               cancel_event=wrun.cancel
+                               if wrun is not None else None)
         except Exception as e:
             failed = True
             answer = f"⚠️ scheduled job '{name}' failed: {e}"
         finally:
             AGENT.model_overrides.pop(key, None)
-        rep.finish(ok=not failed)
-        _job_say(disp, token, f"⏰ **{name}**\n\n{answer}")
+        if wrun is not None:
+            # The report IS the run's ending: the final answer, the Done line and
+            # the record on disk, through the same finish a browser run uses.
+            _finish_web_run(wrun, rep, answer, failed=failed)
+        else:
+            rep.finish(ok=not failed)
+            _job_say(disp, token, f"⏰ **{name}**\n\n{answer}")
         # The outcome lands in jobs.json, where `list` shows it: a job that has failed
         # every night for a week must not read like a healthy one (A-2026-10-06-297).
         def _record(jobs):

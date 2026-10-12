@@ -125,9 +125,10 @@ reaches a model, a chat server or the clock.
         return sched
 
 
-    def _fire(sched, name, wait=True):
+    def _fire(sched, name, wait=True, job=None):
         t = threading.Thread(target=sched._fire,
-                             args=(name, {"task": "check the disk", "channel_id": None}),
+                             args=(name, job or {"task": "check the disk",
+                                                 "channel_id": None}),
                              daemon=True)
         t.start()
         if wait:
@@ -445,6 +446,72 @@ reaches a model, a chat server or the clock.
         sched.ok, sched._fire = saved_ok, saved_fire
         fb._release_lock()
         sched._stop.set()
+
+    # ---------------------- a browser-made job reports to its own conversation -------
+    # A job's channel_id is the destination token the surface that made it minted, and
+    # the page mints `web:<key>` (drive_run's own channel_id). _run_job resolved only
+    # the chat lanes' dispatchers, so a job made from the page fired with a chat
+    # destination that cannot exist: the report went to the log alone, and in the pair
+    # process a post was attempted to a chat channel named after the token
+    # (A-2026-10-11-22). The consumer pair existed (web_token_key /
+    # web_new_scheduled_run); the job now goes through it, and its report is a headless
+    # run in the conversation the token names, finished like any page run.
+    class _RecordingDispatcher:
+        name = "mattermost"
+        def __init__(self):
+            self.posts = []
+        def _post(self, channel_id, root_id, text, **kw):
+            self.posts.append((channel_id, text))
+            return "1"
+    sched = _scheduler("jobs-web.json")
+    fake = _RecordingDispatcher()
+    sched.dispatcher = fake
+    conv = fb.web_new_session("suiteSchedWeb")
+    check("the page conversation exists for the job's token",
+          bool(conv) and fb.web_entry(conv) is not None, conv)
+    seen = {}
+    def _capture(key, text, rep, **kw):
+        seen.update(key=key, rep=rep, kw=kw)
+        return "the answer"
+    saved_drive6, saved_report6 = fb.drive_run, fb.report
+    fb.drive_run = _capture
+    fb.report = lambda token, text: None
+    try:
+        _fire(sched, "web-job",
+              job={"task": "check the disk",
+                   "channel_id": f"{fb.WEB_DEST_PREFIX}{conv}"})
+        dest = getattr(seen.get("rep"), "dest", None)
+        check("a job made from the page reports to the page, not a chat lane",
+              getattr(dest, "name", None) == "web", dest)
+        check("...in the conversation its token names",
+              getattr(getattr(dest, "run", None), "session_key", None) == conv,
+              getattr(dest, "run", None))
+        check("...and no chat lane is handed the token",
+              fake.posts == [], fake.posts)
+        recs = fb.web_runlog(conv)
+        check("...with the report as the conversation's final line on disk",
+              bool(recs) and any(l.get("kind") == "final"
+                                 and l.get("text") == "the answer"
+                                 for l in recs[-1].get("lines") or []),
+              recs[-1].get("lines") if recs else None)
+    finally:
+        fb.drive_run, fb.report = saved_drive6, saved_report6
+        sched._stop.set()
+
+    # ...and report() keeps a page token away from every lane, not only from jobs: the
+    # run watchdogs report through it for any run, the page's included.
+    handed = []
+    saved_rp = fb.REPORTER
+    fb.REPORTER = lambda cid, text: handed.append((cid, text))
+    try:
+        fb.report("chan-1", "hello")
+        check("report() hands a chat channel to the lane",
+              handed == [("chan-1", "hello")], handed)
+        handed.clear()
+        fb.report(f"{fb.WEB_DEST_PREFIX}some-key", "hi")
+        check("...and never hands it a page token", handed == [], handed)
+    finally:
+        fb.REPORTER = saved_rp
 
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
     sys.exit(1 if FAILS else 0)
