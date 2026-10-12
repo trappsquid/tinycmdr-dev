@@ -2810,6 +2810,17 @@
       },
       "detail": "The user-mode gate demanded a session bus before it ever read `--no-service`, so a container, WSL without systemd, or a CI runner could not install even files-only - and the refusal named only `--mode system` as a way out. The gate steps aside when no service is being written, and the refusal now names `--mode user --no-service` too. Found driving the published one-liner end to end in an ubuntu container: install, the `tinycmdr` verb on PATH, status/health/doctor, the page answering on its port.",
       "gate": "RED on the pre-fix build: the no-bus `--no-service` check in tests/test_installer_unix.py exits 1 at the gate (1 check); green on the batch, and re-run end-to-end in the container"
+    },
+    {
+      "id": "audit-batch-hardening",
+      "title": "the audit batch: hardening, permissions, and the protocol details",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "ef3f451",
+        "expect": "untagged"
+      },
+      "detail": "The batch behind the next release: the WebUI sends its security headers and stops advertising its Python build; /api/health keeps its detail for the token holder or a loopback peer; uploads are named uniquely, bounded and owner-only, and the session sidecars are 0600; a config.json an older build wrote stops warning about its retired keys; .env follows the dotenv inline-comment rule; Retry-After honours the HTTP-date form; the delete question drops the shell's glue; and the Windows installer's Python fallback is signature-checked and current.",
+      "gate": "each fix's suite is red on its pre-fix build and green on the batch; the whole gate green, 0 skipped"
     }
   ]
 }
