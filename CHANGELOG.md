@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-10-12
+
 ### Fixed
 - **A dead secret in the process environment stops shadowing `.env`:** an inherited secret-named value always beat the file under the dotenv rule, so a stale service-environment token, model key or provider key made `token set` + restart unable to heal it - a value that cannot work now takes the file's working value instead, with a warning naming the key (tests/test_fix_env.py).
 

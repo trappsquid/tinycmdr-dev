@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "dead-env-shadows-dotenv",
+      "title": "a dead secret in the service environment shadowed .env for ever",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "5f79992",
+        "expect": "untagged"
+      },
+      "detail": "The dotenv rule (real env wins) let a value inherited from a service environment shadow the file's working one for ever - every restart re-inherited it, so `token set` + restart could not heal a lane, the model key or a provider key; a secret-named inherited value that cannot work now loses to the file's value, with a warning naming the key.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
       "id": "web-one-run-and-assets-1-0-84",
       "title": "one run per conversation on every route, and the page's assets hold to what they say",
       "detail": " /api/chat drives the conversation the body names, registers its run atomically (_web_claim_run under WEB_RUNS_LOCK; simultaneous POSTs get 409), touches the registry; WEB_REGISTRY_MAX=200 aggregate with the shared conversation protected; the runlog appends one line per checkpoint (compaction past WEB_RUNLOG_COMPACT_AT, view-side dedup/caps); downloads honour Range (206/416) and carry RFC 5987 filename*; one _asset helper with mtime/size ETags (304) serves the five asset routes and survives a vanished file; the CSS themes once per (mtime,size) and revalidates; platform-reserved upload names are rewritten and an unwritable name answers 400 instead of dropping the socket; drop_line keeps uids the page holds; out-of-range edits log a warning; web.port 0 probes the recorded port; JSON replies are UTF-8. 27 checks red on the pre-fix snapshot.",
