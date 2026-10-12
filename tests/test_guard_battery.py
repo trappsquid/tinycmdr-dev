@@ -292,6 +292,15 @@ def test_broad_root_escalates():
           gated("rm -rf /") == "block", gated("rm -rf /"))
     check("a named directory is CONFIRMED, not blocked",
           gated("rm -rf ~/Documents") == "confirm", gated("rm -rf ~/Documents"))
+    # The subshell glue's closing bracket rides the target token; the verdict was always
+    # right, but the question named `~)` (A-2026-10-12-02, reproduced 2026-10-12).
+    kind, why = fb.destructive_risk("(rm -rf ~)")
+    check("a subshell-wrapped whole-tree delete is BLOCKED", kind == "block", kind)
+    check("  and the reason names the clean target, not the glue",
+          why == "a recursive delete of ~", why)
+    kind, why = fb.destructive_risk("{ rm -rf /home; }")
+    check("  brace glue is stripped the same way",
+          kind == "block" and not why.endswith((")", "}")), (kind, why))
 
 
 def test_file_door_and_shell_door_agree():

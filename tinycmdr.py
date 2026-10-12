@@ -9290,7 +9290,10 @@ def destructive_risk(command, _depth=0):
                 # Bundled short flags, any position and order: -rf, -fr, -Rvf, -recurse.
                 recursive = recursive or "r" in low.lstrip("-")
                 continue
-            targets.append(w)
+            # The closing `)` of a subshell glue (`(rm -rf ~)`) rides on the target token;
+            # _broad_root strips it for its own match, but the reason string was built from
+            # the RAW token, so the operator's question named `~)` (A-2026-10-12-02).
+            targets.append(w.rstrip(")}"))
         if not recursive:
             # A single-target delete is ordinary work - UNLESS the target is real content
             # outside scratch, and then the operator is asked with the effect MEASURED. The
