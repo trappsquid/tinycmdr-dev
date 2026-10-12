@@ -2240,7 +2240,13 @@ def _http_body(exc, limit=600):
 
 
 def _retry_after_secs(exc, cap):
-    """Seconds a 429 asked us to wait, clamped to the configured cap."""
+    """Seconds a 429 asked us to wait, clamped to the configured cap.
+
+    RFC 9110 allows both forms, so both are read: `15`, and the HTTP-date
+    `Wed, 21 Oct 2026 07:28:00 GMT` (seconds until it, floored at 0). A date already in
+    the past is "no hint" (0), same as an unparsable value - the caller's capped backoff
+    then decides, which is the conservative path (A-2026-10-12-05, measured 2026-10-12).
+    """
     hdr = None
     try:
         hdr = exc.response.headers.get("Retry-After")
@@ -2248,10 +2254,18 @@ def _retry_after_secs(exc, cap):
         hdr = None
     secs = 0.0
     if hdr:
+        raw = str(hdr).strip()
         try:
-            secs = float(str(hdr).strip())
+            secs = float(raw)
         except Exception:
-            secs = 0.0   # HTTP-date form — treat as "no hint"
+            try:
+                import email.utils
+                when = email.utils.parsedate_to_datetime(raw)
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=_dt.timezone.utc)
+                secs = (when - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
+            except Exception:
+                secs = 0.0   # unparsable — treat as "no hint"
     return max(0.0, min(secs, float(cap or 0)))
 
 
