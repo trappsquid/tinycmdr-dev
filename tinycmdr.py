@@ -16638,7 +16638,17 @@ def run_block(key):
 
 
 def _ensure_sessions_dir():
-    SESSIONS_DIR.mkdir(exist_ok=True)
+    """sessions/, owner-only. mkdir's mode is umask-blind and a folder an older build
+    made 0755 keeps what it has, so the mode is set at creation and tightened when
+    found wide - the events/ transcript/ web files under it name every tool call and
+    carry session text (A-2026-10-10-15)."""
+    SESSIONS_DIR.mkdir(mode=0o700, exist_ok=True)
+    if os.name != "nt":                        # no mode bits on Windows; ACLs untouched
+        try:
+            if stat.S_IMODE(SESSIONS_DIR.stat().st_mode) & 0o077:
+                os.chmod(SESSIONS_DIR, 0o700)
+        except OSError:
+            pass
 
 
 # The event log: what happened, and how it ended
@@ -16692,6 +16702,42 @@ def _event_rolled_path(session_key):
     return SESSIONS_DIR / f"{safe}.events.1.jsonl"
 
 
+def _jsonl_tighten(path):
+    """Narrow one JSONL sidecar (events, transcript) to 0600 on POSIX. Windows keeps
+    its ACLs.
+
+    For the paths the writer did not create: a file an older build left 0644, and a
+    roll that inherited the mode of the file it replaced (A-2026-10-10-15)."""
+    if os.name == "nt":
+        return
+    try:
+        if stat.S_IMODE(path.stat().st_mode) & 0o077:
+            os.chmod(str(path), 0o600)
+    except OSError:
+        pass
+
+
+def _jsonl_open(path):
+    """Append handle for a JSONL sidecar that ends owner-only.
+
+    open("a") creates through the umask (0644 on a default box) and keeps whatever
+    mode an existing file has, so the fd is opened O_CREAT with 0600 and fchmod'd to
+    0600 - the same tightening atomic_write_bytes does for its temp. A write through
+    an existing fd cannot loosen a file; this only closes the two creation doors
+    (A-2026-10-10-15)."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    if os.name != "nt":
+        try:
+            os.fchmod(fd, 0o600)               # an existing looser mode is not kept
+        except OSError:
+            pass
+    try:
+        return os.fdopen(fd, "a", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def event(kind, session_key=None, run_id=None, **fields):
     """Append one event. Returns the run id in play. Never raises, never blocks a run."""
     global _EVENT_WARNED
@@ -16718,11 +16764,12 @@ def event(kind, session_key=None, run_id=None, **fields):
                 # reach) grows past any ceiling set elsewhere.
                 if path.exists() and path.stat().st_size >= _EVENT_MAX_BYTES:
                     path.replace(_event_rolled_path(key))
+                    _jsonl_tighten(_event_rolled_path(key))
                     log.info("event log rolled at %d bytes: %s -> %s",
                              _EVENT_MAX_BYTES, path.name, _event_rolled_path(key).name)
             except OSError as e:
                 log.debug("event roll skipped: %s", e)
-            with path.open("a", encoding="utf-8") as fh:
+            with _jsonl_open(path) as fh:
                 fh.write(line + "\n")
         return rid
     except Exception as e:                     # a log is never worth a run
@@ -20550,12 +20597,15 @@ class Agent:
             try:
                 if path.exists() and path.stat().st_size >= self._TRANSCRIPT_MAX_BYTES:
                     path.replace(SESSIONS_DIR / f"{safe}.transcript.1.jsonl")
+                    # The rename carries the replaced file's mode; narrow the roll too
+                    # (same shape as the event log's, A-2026-10-10-15).
+                    _jsonl_tighten(SESSIONS_DIR / f"{safe}.transcript.1.jsonl")
                     log.info("[%s] transcript rotated at %d bytes; the predecessor is "
                              "%s.1.jsonl", key, self._TRANSCRIPT_MAX_BYTES, safe)
             except OSError as e:
                 log.debug("transcript rotation skipped: %s", e)
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            with path.open("a", encoding="utf-8") as fh:
+            with _jsonl_open(path) as fh:
                 for m in dropped:
                     if m.get("role") == "system":
                         continue

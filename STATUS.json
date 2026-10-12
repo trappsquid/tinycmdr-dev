@@ -2072,7 +2072,8 @@
       "detail": "Repointed 2026-10-08. The tier now lives in one file (tests/windows-tier.json), read by tests/run_all.py --tier and named by both workflows, and the exclusions came OFF it: eight suites had been hidden from the Windows job by name, which was the fix for a public job that had been red for weeks and is not a fix. What Windows does in those areas was therefore ungraded, not known-broken - seven of the eight assume a POSIX platform (os.X_OK / os.access / os.chmod / st_mode, a POSIX shell, latin-1, a line console) and test_compaction_continuity carries no platform call at all. Each is red on Windows now and passes on its own commit: fix the suite's platform assumption, or the product where the platform is not the problem. The item closes when the Windows job is green with nothing excluded.",
       "gate": "make each of the eight pass on Windows (the suite's assumption, or the product), one commit each - the item closes when `excluded` is empty and the Windows job is green",
       "windows_not_applicable": [
-        "tests/test_update_script.py"
+        "tests/test_update_script.py",
+        "tests/test_fix_perms.py"
       ]
     },
     {
