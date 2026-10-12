@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-10-12
+
+### Added
+- **`config list [section]` says what is adjustable and what it is set to:** nothing in the verb set showed what a box can tune, so that meant opening config.json - the listing names the sections, then a section's keys with their current values, marks anything that differs from the shipped default with `*`, and never prints a secret's value (tests/test_verbs.py).
+- **The page's header changes the model:** the model in the header was a label - it is a select fed by the reachable catalog now, and a pick switches the model for every conversation through the same command the chat lanes run (tests/test_webui_page.py).
+
+### Changed
+- **Every help surface renders one table:** the chat help block, Telegram's screen and the page's `/help` and `/` palette were three hand-kept lists that had already drifted apart - the chat help is grouped by intent, one command per line, with a worked settings example, and one table feeds all of them (tests/test_interaction_surface.py, tests/test_telegram.py, tests/test_webui.py).
+- **A near-miss command names its likely verb:** `modle` was a dead end on every door - it now answers "Did you mean `model`?", and a word that matches nothing stays plain (tests/test_interaction_surface.py, tests/test_telegram.py, tests/test_webui.py).
+- **`model list` is a numbered menu:** it printed a bare URL per row - the rows are numbered, the model in use is marked, each says where it lives in plain words, and `model <number>` switches (tests/test_model_surface.py).
+- **The page runs the whole command suite:** `/tinycmdr update`, `/reasoning` and `/plan` answered "Unknown command" on the page while both chat lanes ran them - every management verb now runs through the same door there too (tests/test_webui.py).
+- **The mesh door needs no config key:** `web.a2a` is retired - the card and `POST /a2a` exist whenever the page serves, `web.a2a_policy` still bounds arrivals, and a config that carries the old key keeps it silently (tests/test_a2_surface.py).
+- **The shell `update` offers its two follow-ups on a terminal:** the summary ended with a manual restart and, when requirements moved, a manual pip command - a terminal is offered each as one [Y/n] question, and no other door changes (tests/test_verbs.py).
+- **The page recovers from a restart by itself:** it told the reader to reload after a restart or an update - it now reloads once the server answers again, or when it is running older code than the server, and falls back to the manual note if the reload does not take (tests/test_webui_page.py).
+- **The cross-browser rule is readable without a mouse:** it lived in a tooltip no touch device shows - it is a visible caption beside the toggle (tests/test_webui.py).
+- **The empty state pairs the flavor with the plain word once:** "Start a new campaign (new conversation)" and "Resume the last campaign (last conversation)" (tests/test_webui.py).
+
+### Fixed
+- **ADD COHORT names why a box refuses:** a box that serves its page but not its mesh card (an older build, or `web.a2a` off) was read as a wrong address - the reader now asks that box's public health route and names the switch and restart it needs (tests/test_webui.py).
+- **A corrupt approval store keeps its evidence:** one bad byte in confirm-allow.json made a permanent grant evaporate with no log and no copy kept - the reader routes the same loader every other state file uses, which keeps a `.damaged-*` copy and says so (tests/test_guard_battery.py).
+- **A read-only state file is still replaced on Windows:** `os.replace` refuses one there where POSIX lets the directory decide, so a single 0444 file wedged every later save - the Windows path clears the attribute once and retries, and the writer's temp-mode claim is documented as a caveat there (tests/test_state_surface.py).
+
+### Removed
+- **Four unreferenced functions are gone:** the console's duplicate UTF-8 helper, a dead lane snapshot, an unused note helper and the Telegram lane's superseded command runner had no caller anywhere in the tree.
+
 ## [1.1.8] - 2026-10-12
 
 ### Fixed
