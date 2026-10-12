@@ -2593,11 +2593,12 @@
     {
       "id": "legion-broadcast-comitia",
       "title": "one order fanned out to every cohort is not built",
-      "state": "open",
+      "state": "unreleased",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "30c0243",
+        "expect": "untagged"
       },
-      "detail": "The legion ships one cohort at a time on purpose: a second order while one runs is refused 409 with the reason, and each tab keeps its own conversation. The deferred shape is an ALL COHORTS tab that fans one order out to N boxes, collects an answer into each cohort's own tab and badges which have reported. What it needs that does not exist yet: a fan-out that does not trip the host-wide WEB_RUN_LIVE_MAX after two cohorts, an aggregation line for the hub's own transcript, and a rule for a cohort already on campaign when the fan-out starts (skip it, queue it, or refuse the whole assembly). The three open design points were resolved on 2026-10-12 against the repo's own rules: a cohort already on campaign is refused per cohort (legion_send's 409 shape), legion frames are exempt from the page's WEB_RUN_LIVE_MAX (they are bounded by cohorts x one task each), the aggregation line lands in the hub's own transcript, and the per-cohort badge reads the state the rail already derives.",
+      "detail": "The legion ships one cohort at a time on purpose: a second order while one runs is refused 409 with the reason, and each tab keeps its own conversation. The deferred shape is an ALL COHORTS tab that fans one order out to N boxes, collects an answer into each cohort's own tab and badges which have reported. What it needs that does not exist yet: a fan-out that does not trip the host-wide WEB_RUN_LIVE_MAX after two cohorts, an aggregation line for the hub's own transcript, and a rule for a cohort already on campaign when the fan-out starts (skip it, queue it, or refuse the whole assembly). The three open design points were resolved on 2026-10-12 against the repo's own rules: a cohort already on campaign is refused per cohort (legion_send's 409 shape), legion frames are exempt from the page's WEB_RUN_LIVE_MAX (they are bounded by cohorts x one task each), the aggregation line lands in the hub's own transcript, and the per-cohort badge reads the state the rail already derives. Landed 2026-10-12 (30c0243): legion_send_all fans one order through legion_send - each cohort's own tab, per-cohort 409 refusal, never re-sent - the summary is kept in the legion store and returned, a legion claim skips WEB_RUN_LIVE_MAX, and the page's ALL COHORTS row and channel carry the roster, the last summary and the send-all composer while every answer keeps landing in its own cohort's tab.",
       "gate": "the ALL COHORTS tab: one order, N cohorts, an answer per cohort, a badge per report - and the fan-out's own bound"
     },
     {
