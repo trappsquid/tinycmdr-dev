@@ -67,6 +67,7 @@ Hermetic: the staged copy is the module, so `logs/state.json` lands in the stage
     import sys
     import tempfile
     import threading
+    import time
     from pathlib import Path
 
     import requests
@@ -249,6 +250,37 @@ Hermetic: the staged copy is the module, so `logs/state.json` lands in the stage
               "mattermost lane is DOWN" in err_d, err_d[-300:])
     finally:
         T._lock_release_fd(_fd)            # the product's own release, so both platforms match
+
+    # ------------------------------------- a LONG outage is readable after the fact
+    # lane_up knew the window (prior["first"] -> now) and dropped it: once the lane was
+    # back, nothing anywhere said the box had been offline - the 4h45m outage's only
+    # trace was 1654 log lines nobody reads (the item this grades).
+    T.lane_down("mattermost", "connection refused")
+    T.LANE_FAILS["mattermost"]["first"] = time.time() - 17100       # 4h45m
+    T.lane_up("mattermost", "connected as @the-bot")
+    _gap_snap = T.lanes_snapshot()["mattermost"]
+    _gap_rec = _gap_snap.get("recovered") or {}
+    check("a recovery past the threshold keeps its window",
+          abs((_gap_rec.get("seconds") or 0) - 17100) <= 20
+          and _gap_rec.get("window") == "4h45m", _gap_snap)
+    rc, out, err = run_verb(T._verb_status)
+    check("...status prints the window", "4h45m" in out, out)
+    _kind2, _fd2 = T._lock_target()
+    _hold_lock(_kind2, _fd2)               # health only prints lane lines while the lock is held
+    try:
+        rc, out, err = run_verb(T._verb_health)
+    finally:
+        T._lock_release_fd(_fd2)
+    check("...health prints it, naming the catch-up",
+          "back after 4h45m" in err and "picked up" in err, err)
+    _gap_disk = ((T._lane_state_read().get("lanes") or {}).get("mattermost") or {})
+    check("...and a cold reader still finds it on disk",
+          ((_gap_disk.get("recovered") or {}).get("seconds") or 0) > 17000, _gap_disk)
+    T.lane_down("mattermost", "connection refused")
+    T.lane_up("mattermost", "connected as @the-bot")
+    check("...while a short blip leaves no window behind",
+          not T.lanes_snapshot()["mattermost"].get("recovered"),
+          T.lanes_snapshot()["mattermost"])
 
     # --------------------------------- a lane that cannot start is RETRIED, in-process
     # The 2026-09-30 outage: the bot raised, main() exited by design, and launchd respawned the

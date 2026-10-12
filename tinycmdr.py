@@ -1220,7 +1220,7 @@ def config_drift():
                    time.strftime("%Y-%m-%d %H:%M", time.localtime(CONFIG_SOURCE["loaded"]))))
     return ""
 LANE_STATE = {}                  # lane -> {"ok", "detail", "since"} for THIS process
-LANE_FAILS = {}                  # lane -> {"count", "error", "first", "last"}, persisted
+LANE_FAILS = {}                  # lane -> {"count", "error", "reason_class", "first", "last"}, persisted
 _LANE_LOCK = threading.Lock()
 _LANE_FAILS_LOADED = False
 # The lanes THIS process has written (lane_up/lane_down). _lane_state_write merges the
@@ -31049,7 +31049,7 @@ async function poll(my){
  }catch(e){fails++;setStage('trouble');}
  timer=setTimeout(function(){poll(my);},fails?Math.min(5000,700*fails):700);
 }
-var laneWasDown=false;
+var laneWasDown=false,laneRecSeen={};
 // The lane warning is a NOTIFICATION, not a fixture: the operator can dismiss it, and
 // the dismissal is remembered for that exact wording - a different failure (another lane,
 // another reason, a config edit) speaks again, and so does the same one after a recovery.
@@ -31148,6 +31148,12 @@ async function versionCheck(){
   document.title=(dl.length?'CHAT LANE DOWN - ':'')+'tinycmdr'+(j.version?' '+j.version:'');
   if(dl.length&&!laneWasDown){laneWasDown=true;note('chat lane down: '+verEl.title);}
   else if(!dl.length){laneWasDown=false;}
+  // A lane that came back from a LONG outage says so once per page, out of the record
+  // (recovered.window): an operator who opens the page in the morning learns the box
+  // was offline for hours - the log said it once and kept nothing.
+  Object.keys(j.lanes||{}).forEach(function(k){var R=(j.lanes[k]||{}).recovered;
+   if(!R||!R.to){return;}var id=String(R.to);if(laneRecSeen[k]===id){return;}
+   laneRecSeen[k]=id;note(k+' lane is back after '+(R.window||'')+' offline');});
   if(wantReload){reloadPage(j.version||PAGE_VER);return;}
   if(j.version&&PAGE_VER&&j.version!==PAGE_VER){
    if(reloadedFor!==String(j.version)){reloadPage(j.version);return;}
@@ -36092,6 +36098,30 @@ def _lane_fails_load():
 
 
 LANE_PERMANENT_BACKOFF = 600      # a credential the service REFUSED is not an outage
+# A recovery that ENDS a gap this long keeps its WINDOW on the lane's record
+# (lane_up -> lanes_snapshot `recovered` -> status/doctor/health/the page), because
+# once the lane was back nothing readable said the box had been offline: a 4h45m
+# outage left 1654 log lines and no summary. The poll grace's twin - a lane silent
+# this long cannot hear anybody.
+LANE_GAP_NOTICE_S = 300.0
+# Lanes whose reconnect REPLAYS what arrived while they were down (Mattermost's
+# catch-up sweep, Telegram's persistent offset), so the recovery report may say so.
+_LANE_CATCHES_UP = ("mattermost", "telegram")
+
+
+def fmt_gap(seconds):
+    """A window a human reads: 45s, 12m, 4h45m, 2d3h."""
+    seconds = max(0, int(seconds))
+    if seconds < 90:
+        return "%ds" % seconds
+    minutes = seconds // 60
+    if minutes < 90:
+        return "%dm" % minutes
+    hours, minutes = divmod(minutes, 60)
+    if hours < 48:
+        return "%dh%02dm" % (hours, minutes) if minutes else "%dh" % hours
+    days, hours = divmod(hours, 24)
+    return "%dd%dh" % (days, hours)
 
 
 def _lane_reason(exc):
@@ -36188,17 +36218,36 @@ def lane_down(lane, error):
 
 def lane_up(lane, detail=""):
     """Record a lane connecting. A recovery is news ONCE (the supervisor's own words: a
-    silently-recovered bot is indistinguishable from a dead one from the outside)."""
+    silently-recovered bot is indistinguishable from a dead one from the outside).
+
+    A recovery that ends a gap past LANE_GAP_NOTICE_S is also kept as a WINDOW on the
+    lane's record (`recovered`), so the report outlives the process and the log: the
+    log line is for whoever reads logs, and the record is for whoever was asleep."""
     _lane_fails_load()
+    now = time.time()
+    gap_s = 0.0
     with _LANE_LOCK:
         prior = LANE_FAILS.pop(lane, None)
-        LANE_STATE[lane] = {"ok": True, "detail": detail, "since": time.time()}
+        st = {"ok": True, "detail": detail, "since": now}
+        try:
+            gap_s = now - float((prior or {}).get("first"))
+        except (TypeError, ValueError):
+            gap_s = 0.0
+        if prior and gap_s >= LANE_GAP_NOTICE_S:
+            st["recovered"] = {"from": prior["first"], "to": now,
+                               "seconds": int(gap_s)}
+        LANE_STATE[lane] = st
         _LANE_TOUCHED.add(lane)
     _lane_state_write()
     if prior and prior.get("count"):
-        log.warning("%s lane recovered after %d failed start(s), the first at %s",
-                    lane, prior["count"],
-                    time.strftime("%Y-%m-%d %H:%M", time.localtime(prior.get("first") or 0)))
+        first_at = time.strftime("%Y-%m-%d %H:%M",
+                                 time.localtime(prior.get("first") or 0))
+        if gap_s >= LANE_GAP_NOTICE_S:
+            log.warning("%s lane is back after %s offline (was failing from %s)",
+                        lane, fmt_gap(gap_s), first_at)
+        else:
+            log.warning("%s lane recovered after %d failed start(s), the first at %s",
+                        lane, prior["count"], first_at)
 
 
 def lane_poll_failure_due(failing_since, now, grace=300.0):
@@ -36450,6 +36499,12 @@ def lanes_snapshot():
             # the LAST known state, not now (A-186). `stale` is the flag to read.
             "pid_alive": alive,
             "stale": not alive,
+            # The last long outage this lane came back from (lane_up), its window
+            # formatted once here: what status/health/the page show to an operator who
+            # was asleep while it happened, and what the failure record cannot keep.
+            "recovered": (dict(st["recovered"],
+                               window=fmt_gap(st["recovered"].get("seconds") or 0))
+                          if isinstance(st.get("recovered"), dict) else None),
         }
     return out
 
@@ -40952,6 +41007,15 @@ def _cli_command(text):
         if _lanes:
             print("  lanes      %s" % ", ".join("%s=%s" % (n, i["state"])
                                                 for n, i in _lanes.items()))
+            for _n, _i in _lanes.items():
+                _rec = _i.get("recovered")
+                if _rec:
+                    print("  outage     %s was back after %s offline (failing %s -> %s)"
+                          % (_n, _rec.get("window") or "",
+                             time.strftime("%Y-%m-%d %H:%M",
+                                           time.localtime(_rec.get("from") or 0)),
+                             time.strftime("%Y-%m-%d %H:%M",
+                                           time.localtime(_rec.get("to") or 0))))
         strays = strays_in_config()
         if strays:
             print("  ignored    %s (in config.json, never sent)" % ", ".join(strays))
@@ -42248,6 +42312,15 @@ def _verb_status():
     if _lanes:
         print("  lanes     : %s" % ", ".join("%s=%s" % (n, i["state"])
                                              for n, i in _lanes.items()))
+        for _n, _i in _lanes.items():
+            _rec = _i.get("recovered")
+            if _rec:
+                print("  outage    : %s was back after %s offline (failing %s -> %s)"
+                      % (_n, _rec.get("window") or "",
+                         time.strftime("%Y-%m-%d %H:%M",
+                                       time.localtime(_rec.get("from") or 0)),
+                         time.strftime("%Y-%m-%d %H:%M",
+                                       time.localtime(_rec.get("to") or 0))))
     lines, total = _verb_log_lines(1)
     if total:
         print("  log       : %s — %d lines" % (BASE_DIR / "tinycmdr.log", total))
@@ -42912,6 +42985,20 @@ def _verb_health():
                   "record (pid %s, %s) is gone - it is NOT current"
                   % (_name, _info.get("from_pid") or "?",
                      _info.get("as_of") or "no timestamp"), file=sys.stderr)
+        elif _info.get("recovered"):
+            # The window of the outage this lane came back from: the operator who was
+            # asleep learns it here, where they check the box, instead of from a log
+            # whose single summary line nobody kept.
+            _rec = _info["recovered"]
+            print("%s lane: back after %s offline (failing %s -> %s)%s"
+                  % (_name, _rec.get("window") or "",
+                     time.strftime("%Y-%m-%d %H:%M",
+                                   time.localtime(_rec.get("from") or 0)),
+                     time.strftime("%Y-%m-%d %H:%M",
+                                   time.localtime(_rec.get("to") or 0)),
+                     " - anything sent meanwhile is picked up"
+                     if _name in _LANE_CATCHES_UP else ""),
+                  file=sys.stderr)
     return 1 if any(i["state"] == "failed" for i in lanes_state.values()) else 0
 
 
