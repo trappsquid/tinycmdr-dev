@@ -952,6 +952,19 @@ def guard_drift_note(drift):
 ENV_FILE = BASE_DIR / ".env"
 
 
+# The ONE secret-name vocabulary, shared by every side: an environment variable, a
+# config.json path (_secret_config_path: the `config` verb's refusal and the verb-log
+# scrub), and the load-time sweep of keys this build does not read (below) are all
+# graded by the SAME shape, so `config set db.password X` is refused exactly like
+# DB_PASSWORD is redacted. The
+# `password|passwd` arm is the credential-at-any-length rule the env side already used;
+# `token`/`api_key`/`*_api_key` are the arms the config side already accepted.
+# The dotenv loader grades by it too: a secret-named key whose inherited value cannot
+# work never shadows the file's (see _load_env_file).
+_SECRET_NAME_RX = re.compile(
+    r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$")
+
+
 _SECRET_SHAPES = {
     # name -> (regex, what it must look like). A Mattermost bot token is 26 lowercase
     # alphanumerics; a Telegram bot token is "<digits>:<35 chars>". Both are fixed by the
@@ -1010,12 +1023,12 @@ def _load_env_file():
 
     The "wins" is literal: a name already set in the environment - by a service
     manager, a launcher wrapper, a shell profile - keeps its value and the .env line
-    is NOT loaded for it. One exception: an inherited value that cannot BE a working
-    secret (secret_check's rules - a control character, a wrong shape, empty) never
-    shadows the file's value when the file's passes. A box whose TINYCMDR_* token is
-    dead in its service environment used to run with that token for ever - every
-    restart re-inherited it, so `token set` + restart could not heal the lane
-    (A-2026-10-10-12, measured 2026-10-12).
+    is NOT loaded for it. One exception: for a secret-named key, an inherited value
+    that cannot BE a working secret (secret_check's rules - a control character, a
+    wrong shape, empty) never shadows the file's value when the file's passes. A box
+    whose TINYCMDR_* token is dead in its service environment used to run with that
+    token for ever - every restart re-inherited it, so `token set` + restart could
+    not heal the lane (A-2026-10-10-12, measured 2026-10-12).
     """
     if not ENV_FILE.exists():
         return
@@ -1041,11 +1054,13 @@ def _load_env_file():
                 continue
             if k not in os.environ:
                 os.environ[k] = v
-            elif k in _SECRET_SHAPES:
+            elif k in _SECRET_SHAPES or _SECRET_NAME_RX.search(k):
                 # Env wins, with one exception: a value inherited from the service
-                # environment that cannot BE a working secret must not shadow the
-                # file's working one. Every restart re-inherits the corpse, so without
-                # this the lane could never heal (A-2026-10-10-12, measured 2026-10-12).
+                # environment that cannot BE a working secret - any secret-named key
+                # (the shape table above for the lane tokens, secret_check's general
+                # rules otherwise) - must not shadow the file's working one. Every
+                # restart re-inherits the corpse, so without this a lane, the model key
+                # or a provider key could never heal (A-2026-10-10-12, 2026-10-12).
                 try:
                     secret_check(k, v)
                 except ValueError:
@@ -1302,16 +1317,6 @@ _RETIRED_CONFIG_KEYS = frozenset({
     ("agent", "ledger_stale_hours"),
 })
 
-
-# The ONE secret-name vocabulary, shared by every side: an environment variable, a
-# config.json path (_secret_config_path: the `config` verb's refusal and the verb-log
-# scrub), and the load-time sweep of keys this build does not read (below) are all
-# graded by the SAME shape, so `config set db.password X` is refused exactly like
-# DB_PASSWORD is redacted. The
-# `password|passwd` arm is the credential-at-any-length rule the env side already used;
-# `token`/`api_key`/`*_api_key` are the arms the config side already accepted.
-_SECRET_NAME_RX = re.compile(
-    r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$")
 
 # Secret-named config.json values this build DROPPED at load because it does not read
 # their keys: the file is still on disk, the agent can `read_file` it, and a secret the

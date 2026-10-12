@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **A dead token in the process environment stops shadowing `.env`:** an inherited `TINYCMDR_*` value always beat the file under the dotenv rule, so a stale service-environment token made `token set` + restart unable to heal a lane - a known-shape secret whose inherited value cannot work now takes the file's working value, with a warning naming the key (tests/test_fix_env.py).
+- **A dead secret in the process environment stops shadowing `.env`:** an inherited secret-named value always beat the file under the dotenv rule, so a stale service-environment token, model key or provider key made `token set` + restart unable to heal it - a value that cannot work now takes the file's working value instead, with a warning naming the key (tests/test_fix_env.py).
 
 ## [1.1.7] - 2026-10-12
 

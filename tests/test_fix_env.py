@@ -9,9 +9,9 @@ TINYCMDR_SRC points SRC at a reverted build so the fix can be watched going red
 (tests/run_all.py clears it for a normal run).
 
 The same suite grades the env-shadowing exception (A-2026-10-10-12): an inherited
-TINYCMDR_* value that cannot be a working secret (a control character, a wrong
+secret-named value that cannot be a working secret (a control character, a wrong
 shape) must not keep a working .env value from loading - a restart chain made the
-dead value permanent, so `token set` + restart could not heal a lane.
+dead value permanent, so `token set` + restart could not heal it.
 """
 import importlib.util
 import logging
@@ -42,12 +42,17 @@ for name in ("TCM_PROBE_PLAIN", "TCM_PROBE_QUOTED", "TCM_PROBE_QUOTED_SINGLE",
 # byte, the corpse a restart chain used to re-inherit (A-2026-10-10-12).
 os.environ["TINYCMDR_MM_TOKEN"] = "\x16"
 
+# The widened rule: a secret-NAMEd key with no shape of its own (a provider key)
+# loses a dead inherited copy the same way.
+os.environ["DEEPSEEK_API_KEY"] = "\x16"
+
 (STAGE / ".env").write_text(
     "TCM_PROBE_PLAIN=x # a trailing note\n"
     'TCM_PROBE_QUOTED="quoted # not a comment"\n'
     "TCM_PROBE_QUOTED_SINGLE='also # kept'\n"
     "TCM_PROBE_NOSPACE=ab#cd\n"
     "TCM_PROBE_EMPTY=\n"
+    "DEEPSEEK_API_KEY=sk-live-file-value\n"
     "TINYCMDR_MM_TOKEN=%s\n" % ("a" * 26),
     encoding="utf-8")
 
@@ -105,6 +110,15 @@ def main():
     fb._load_env_file()
     check("a usable inherited token still wins",
           g("TINYCMDR_MM_TOKEN") == "b" * 26, repr(g("TINYCMDR_MM_TOKEN")))
+    # The exception keys on the NAME, not the shape table: a provider key too.
+    check("a dead inherited provider key does not shadow the file's value",
+          g("DEEPSEEK_API_KEY") == "sk-live-file-value", repr(g("DEEPSEEK_API_KEY")))
+    check("...and its warning names the key too",
+          any("DEEPSEEK_API_KEY" in m for m in _WARN), _WARN)
+    os.environ["DEEPSEEK_API_KEY"] = "sk-usable-env"
+    fb._load_env_file()
+    check("a usable inherited provider key still wins",
+          g("DEEPSEEK_API_KEY") == "sk-usable-env", repr(g("DEEPSEEK_API_KEY")))
     # The real environment still wins over the file.
     os.environ["TCM_PROBE_PLAIN"] = "from-env"
     fb._load_env_file()
@@ -118,6 +132,7 @@ if __name__ == "__main__":
         rc = main()
     finally:
         os.environ.pop("TINYCMDR_MM_TOKEN", None)
+        os.environ.pop("DEEPSEEK_API_KEY", None)
         shutil.rmtree(STAGE, ignore_errors=True)
     print("\n%d passed, %d failed" % (len(PASSES), len(FAILS)))
     sys.exit(rc if not FAILS else 1)
