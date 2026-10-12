@@ -1239,17 +1239,38 @@ and the timeout path must still behave exactly as before).
         if hb.exists():
             hb.unlink()
         write_heartbeat(hb, script)
+        # The cancel must land while the command is RUNNING - that is the case under test.
+        # A fixed 0.7 s timer raced the child's start on a loaded Windows runner: the
+        # stop fired before PowerShell+Python had written the first heartbeat, the file
+        # never appeared, and `a >= 0` went red on a stop that worked (measured
+        # 2026-10-12, the install surface's Windows tier). Poll for the running child
+        # instead, then stop it - deterministic on every platform.
         ev = threading.Event()
-        threading.Timer(0.7, ev.set).start()
+
+        def stop_once_running():
+            t0 = time.time()
+            while time.time() - t0 < 30:
+                if hb.exists() and hb.stat().st_size > 0:
+                    break
+                time.sleep(0.05)
+            ev.set()
+
+        stopper = threading.Thread(target=stop_once_running, daemon=True)
+        stopper.start()
         t0 = time.time()
         out = fb.tool_shell({"command": shell_run_py(script), "timeout": 120},
                             {"cancel_event": ev})
         dt = time.time() - t0
+        stopper.join(timeout=5)
         a, b = freeze_probe(hb)
         check("shell: a live stop returns STOPPED quickly",
               out.startswith("STOPPED") and dt < 10, f"{out[:80]!r} dt={dt:.1f}s")
+        # The heartbeat ran first (the poll above saw it), so any growth after the stop
+        # is a survivor. The poll gives up at 30 s; if the child never wrote, this is the
+        # one line that says so rather than failing as a silent -1.
         check("shell: the stopped command is dead", a >= 0 and a == b,
-              f"heartbeat kept growing: {a} -> {b}")
+              f"heartbeat never appeared within 30s" if a < 0
+              else f"heartbeat kept growing: {a} -> {b}")
 
 
     def test_tool_execute_code_stops_mid_run():

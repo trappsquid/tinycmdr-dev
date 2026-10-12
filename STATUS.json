@@ -2814,10 +2814,10 @@
     {
       "id": "audit-batch-hardening",
       "title": "the audit batch: hardening, permissions, and the protocol details",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "ef3f451",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The batch behind the next release: the WebUI sends its security headers and stops advertising its Python build; /api/health keeps its detail for the token holder or a loopback peer; uploads are named uniquely, bounded and owner-only, and the session sidecars are 0600; a config.json an older build wrote stops warning about its retired keys; .env follows the dotenv inline-comment rule; Retry-After honours the HTTP-date form; the delete question drops the shell's glue; and the Windows installer's Python fallback is signature-checked and current.",
       "gate": "each fix's suite is red on its pre-fix build and green on the batch; the whole gate green, 0 skipped"
