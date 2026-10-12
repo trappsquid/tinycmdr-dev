@@ -42,7 +42,9 @@ lookup that needs the web then came back "BLOCKED ... allow_cloud_egress is fals
 the operator holding no obvious way to say yes.
 
 The wizard is driven here through a fake tty (it refuses a pipe), with every other
-answer left empty so only the search section is doing anything.
+answer left empty so only the search section is doing anything; the model section also
+grades that an endpoint advertising other ids than the configured model still OFFERS the
+configured one (reported 2026-10-12).
 
     python tests/test_model_surface.py
 """
@@ -319,6 +321,36 @@ answer left empty so only the search section is doing anything.
                   "...and a NUMBER in that list resolves to the model it names",
                   written["llm"]["model"])
 
+            # ...and the model the box is CONFIGURED with is offered, not silently
+            # replaced: "" keeps "main" even though the endpoint advertises other ids
+            # (reported 2026-10-12 - the chooser made the endpoint's first advertised id
+            # the default, so ENTER switched the model away from the configured one)
+            d = stage(work / "live-keep", False)
+            spec = importlib.util.spec_from_file_location("setup_live_keep",
+                                                          d / "tinycmdr.py")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            spec.loader.exec_module(mod)
+            mod.probe_endpoint = lambda url, key=None, **kw: {
+                "ok": True, "ids": ["qwen3-14b", "glm-4.6"], "status": 200, "error": ""}
+            # kind (local), url, model ENTER (keep), Mattermost, Telegram, page x4, egress
+            answers = ["", "http://127.0.0.1:8081/v1", "", "", "", "", "", "", "", ""]
+            old_in = sys.stdin
+            sys.stdin = FakeTTY("\n".join(answers) + "\n")
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    rc = mod.run_setup()
+            finally:
+                sys.stdin = old_in
+            out = buf.getvalue()
+            written = json.loads((d / "config.json").read_text(encoding="utf-8"))
+            check("Model id (number or name) [main]" in out,
+                  "the chooser offers the configured model as the default", out[:700])
+            check(rc == 0 and written["llm"]["model"] == "main",
+                  "...and Enter keeps it instead of the endpoint's first advertised id",
+                  written["llm"]["model"])
+
             # ---- a CLOUD endpoint: key first, bearer probe, then the provider's list ----
             # The bug this exists for: the wizard probed with NO key, so a hosted provider's
             # 401 read as "not reachable" and the model list never came back. Now the key is
@@ -426,6 +458,11 @@ header, so a hosted provider's 401 to GET /v1/models read as "not reachable", th
 list it needed never came back, and the key was asked last and written to `llm.api_key`
 in config.json - a file the agent reads into a prompt. Now the key comes first, rides the
 probe as a bearer, and lands in .env; a 401 is named as a KEY refusal.
+
+The offering defect (reported 2026-10-12): a configured model the endpoint no longer
+advertises vanished from the picker and from its chooser - the cursor landed on the
+add-endpoint row and ENTER walked into the add-endpoint interview. Every configured model
+is offered now, the configured one first and marked current.
 
     python tests/test_model_surface.py
 """
@@ -585,6 +622,95 @@ probe as a bearer, and lands in .env; a 401 is named as a KEY refusal.
                   and "api_key" not in cfg["llm"],
                   "...and its key is .env's TINYCMDR_LLM_API_KEY, not config.json's api_key",
                   (env[-160:], cfg["llm"]))
+
+            # ---- every configured model is OFFERED, on every door ----------------------
+            # Reported 2026-10-12: the box advertised another id than config's model, so
+            # the picker lost the configured row AND its current mark - the cursor sat on
+            # the ADD row and ENTER walked into the add-endpoint interview - and the
+            # endpoint's own chooser silently made its first advertised id the default.
+            mod4 = stage(work / "picker")
+            mod4.CONFIG["llm"]["base_url"] = base
+            mod4.CONFIG["llm"]["model"] = "local-gguf-27b"
+            mod4.CONFIG["llm"]["api_key"] = "sk-good"
+            port2, srv2 = serve(ids=("fb-1", "fb-2"))
+            mod4.CONFIG["llm"]["fallbacks"] = [
+                {"base_url": "http://127.0.0.1:%d/v1" % port2, "model": "team-a",
+                 "alias": "big", "api_key": "sk-good"}]
+            cat = mod4.model_catalog(force=True)
+            names = [e["name"] for e in cat]
+            check(names == ["local-gguf-27b", "cloud-a", "cloud-b", "team-a", "big",
+                            "fb-1", "fb-2"],
+                  "the catalog offers the configured model first, then every endpoint's",
+                  names)
+            rows = mod4.model_pick_rows(cat, "local-gguf-27b")
+            rows.insert(0, (mod4.MODEL_PICK_ADD, "", False))
+            pick = mod4.ModelPick(rows, current="local-gguf-27b", title="Select model")
+            check(pick.picked() == "local-gguf-27b",
+                  "the picker opens ON the configured model, not on the ADD row",
+                  pick.picked())
+            opened = {}
+            mod4.pick_terminal_ready = lambda: True
+
+            def _capture(state):
+                opened["state"] = state
+                return None
+            mod4.run_model_pick = _capture
+            kept = mod4._choose_one_model(base, ["cloud-a", "cloud-b"], "local-gguf-27b")
+            state = opened.get("state")
+            check(bool(state) and state.rows[0][0] == "local-gguf-27b"
+                  and state.rows[0][2],
+                  "the endpoint's own chooser offers the configured model first, marked",
+                  state and state.rows[:3])
+            check(kept == "local-gguf-27b",
+                  "...and ESC keeps it - not the endpoint's first advertised id", kept)
+            rc = mod4._verb_model(["use", "local-gguf-27b"])
+            cfg4 = json.loads((work / "picker" / "config.json").read_text(encoding="utf-8"))
+            check(rc == 0 and cfg4["llm"]["model"] == "local-gguf-27b",
+                  "`model use` reaches the configured model too",
+                  (rc, cfg4["llm"]["model"]))
+            srv2.shutdown()
+            srv2.server_close()
+
+            # the dead-endpoint question is only for a list with nothing else ON it
+            mod5 = stage(work / "deadend")
+            mod5.CONFIG["llm"]["base_url"] = "http://127.0.0.1:9/v1"
+            mod5.CONFIG["llm"]["model"] = "main"
+            mod5.CONFIG["llm"]["fallbacks"] = [
+                {"base_url": base, "model": "team-a", "api_key": "sk-good"}]
+            mod5.pick_terminal_ready = lambda: True
+            mod5.run_model_pick = _capture
+            opened.clear()
+            old_in = sys.stdin
+            sys.stdin = FakeTTY("y\n")        # would answer the offer if it asked
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    mod5._verb_model([])
+            finally:
+                sys.stdin = old_in
+            out = buf.getvalue()
+            check("not usable" in out and "Set up a local or cloud model now?" not in out
+                  and bool(opened.get("state")),
+                  "a dead primary with other endpoints opens the picker, no interview",
+                  out[-300:])
+            check(bool(opened.get("state"))
+                  and any(r[0] == "main" for r in opened["state"].rows),
+                  "...with the configured model on the list", opened.get("state")
+                  and opened["state"].rows[:3])
+
+            mod5.CONFIG["llm"]["fallbacks"] = []
+            opened.clear()
+            old_in = sys.stdin
+            sys.stdin = FakeTTY("y\n")
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    mod5._verb_model([])
+            finally:
+                sys.stdin = old_in
+            check("Set up a local or cloud model now?" in buf.getvalue(),
+                  "...while a one-row list still asks the question",
+                  buf.getvalue()[-200:])
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

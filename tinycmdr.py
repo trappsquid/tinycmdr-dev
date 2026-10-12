@@ -23428,11 +23428,12 @@ _MODEL_CACHE = {"at": 0.0, "entries": []}
 def model_catalog(force=False):
     """Every model name this bot can actually route to, resolved live.
 
-    Names come from three places: the local server's own advertised ids, each
-    fallback's configured model + optional alias, and the ids the fallback
-    endpoint itself advertises (a cloud endpoint answers with its own ids). Each entry
-    carries the exact `send_as` id, so an alias — or a foreign id — is never
-    forwarded verbatim to a server that wouldn't accept it.
+    Names come from four places: the model config.json says (always first), the
+    local server's own advertised ids, each fallback's configured model + optional
+    alias, and the ids the fallback endpoint itself advertises (a cloud endpoint
+    answers with its own ids). Each entry carries the exact `send_as` id, so an
+    alias — or a foreign id — is never forwarded verbatim to a server that wouldn't
+    accept it.
     """
     if (not force and _MODEL_CACHE["entries"]
             and time.time() - _MODEL_CACHE["at"] < 60):
@@ -23463,10 +23464,19 @@ def model_catalog(force=False):
             return []
 
     primary_ids = _ids(primary, primary_key)
-    entries = [{"name": i, "url": primary, "local": True, "alias": False,
-                "send_as": i, "key": primary_key}
-               for i in primary_ids]
+    # What config.json says the model IS stays the FIRST entry, whether or not the
+    # endpoint still advertises that id: a local box advertises only what is loaded, so
+    # a configured name the endpoint no longer lists lost its row AND its "current"
+    # mark, and the picker's cursor landed on the add-endpoint row - ENTER then walked
+    # into the add-endpoint interview instead of keeping the model (measured
+    # 2026-10-12: the local box advertised only its loaded model, not the configured one).
+    model_name = str(CONFIG["llm"]["model"] or "").strip()
+    entries = ([{"name": model_name, "url": primary, "local": True, "alias": False,
+                 "send_as": model_name, "key": primary_key}] if model_name else [])
     _MODEL_CACHE["live"] = bool(primary_ids)
+    for i in primary_ids:
+        entries.append({"name": i, "url": primary, "local": True, "alias": False,
+                        "send_as": i, "key": primary_key})
     for fb in CONFIG["llm"].get("fallbacks", []):
         url = fb["base_url"].rstrip("/")
         key = fb.get("api_key", "none")
@@ -23482,11 +23492,6 @@ def model_catalog(force=False):
             if i.lower() not in have:
                 entries.append({"name": i, "url": url, "local": False,
                                 "alias": False, "send_as": i, "key": key})
-    if not any(e["local"] for e in entries):
-        entries.insert(0, {"name": CONFIG["llm"]["model"], "url": primary,
-                           "local": True, "alias": False,
-                           "send_as": CONFIG["llm"]["model"],
-                           "key": primary_key})
     # an endpoint's advertised id can equal a configured model name — keep the
     # first (configured) entry so /model list stays readable
     deduped, seen_names = [], set()
@@ -39491,18 +39496,26 @@ def _choose_one_model(url, ids, default=""):
     """The model an endpoint serves: pick from what it advertised, or type an id.
 
     A picker when the terminal can host one, a NUMBER-able list otherwise, and the plain
-    prompt when the endpoint advertised nothing (offline, or a custom path). The number
-    resolution matches the installer's own ask_model_id, so "2" means the same thing in
-    every door."""
+    prompt when the endpoint advertised nothing (offline, or a custom path). A configured
+    model the endpoint does not advertise is still OFFERED, first and marked current - a
+    local box advertises only the model it has loaded. The number resolution matches the
+    installer's own ask_model_id, so "2" means the same thing in every door."""
     if not ids:
         print(dim("   no model list came back, so the model id is whatever you type"))
         ans = input("   Model id [%s]: " % default).strip()
         return ans or default
-    if default not in ids:
+    if not default:
         default = ids[0]
+    rows = [(i, "advertised by %s" % url, i == default) for i in ids]
+    if default not in ids:
+        # The configured model is OFFERED even when the endpoint does not advertise the
+        # id, first and marked current, so ENTER keeps it - the old code dropped it and
+        # silently made the endpoint's first advertised id the default (measured
+        # 2026-10-12; see model_catalog's note).
+        rows.insert(0, (default, "configured now - not advertised by %s" % url, True))
     if pick_terminal_ready():
-        state = ModelPick([(i, "advertised by %s" % url, i == default) for i in ids],
-                          current=default, title="Which model? (%d advertised)" % len(ids),
+        state = ModelPick(rows, current=default,
+                          title="Which model? (%d advertised)" % len(ids),
                           scope="ENTER sets the model - ESC keeps %s" % default)
         picked = run_model_pick(state)
         if not picked:
@@ -44505,17 +44518,21 @@ def _verb_model(rest):
         return 1
     current = CONFIG["llm"]["model"]
     # Bare `model` does BOTH jobs now: pick among what answers, or get the wizard. When the
-    # endpoint that must answer does not, a one-row list is useless - say what is wrong and
-    # offer the wizard, so a wrong or dead endpoint is never a dead end. (tty only; a pipe
-    # still gets the plain list it greps.)
+    # endpoint that must answer does not AND there is nothing else configured to pick, a
+    # one-row list is useless - say what is wrong and offer the wizard, so a wrong or dead
+    # endpoint is never a dead end. With other endpoints configured the list IS the offer:
+    # the wizard would re-run the add-endpoint interview while the already-configured
+    # models sit unoffered (reported 2026-10-12), and its ADD row is still one ENTER away.
+    # (tty only; a pipe still gets the plain list it greps.)
     primary_url = CONFIG["llm"]["base_url"].rstrip("/")
     primary = probe_endpoint(primary_url, _primary_api_key(), timeout=10)
     if not primary["ok"] and pick_terminal_ready():
         print(red("  the model endpoint is not usable: %s"
                   % probe_sentence(primary_url, primary)))
-        ans = input("  Set up a local or cloud model now? [Y/n]: ").strip().lower()
-        if ans in ("", "y", "yes"):
-            return _model_setup_wizard()
+        if len(entries) <= 1:
+            ans = input("  Set up a local or cloud model now? [Y/n]: ").strip().lower()
+            if ans in ("", "y", "yes"):
+                return _model_setup_wizard()
     # The picker, exactly as the predecessor harness opens one - ↑↓ to move, type to
     # filter, ENTER to switch, ESC to leave. Its first row is the way to ADD or CHANGE
     # an endpoint, so the wizard is one ENTER away instead of a command to remember.
