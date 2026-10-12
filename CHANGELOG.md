@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.10] - 2026-10-12
+
+### Added
+- **The legion fans one order out to every cohort:** the page gains an ALL COHORTS row and channel - the roster shows each cohort's state and the last fan-out, a cohort already on campaign is refused by name, every answer still lands in its own cohort's tab, and the fan-out's bound is the cohorts themselves (tests/test_legion.py, tests/test_webui_page.py).
+- **A lane that comes back from a long outage says so:** a recovery past five minutes keeps its outage window on the lane record - `status`, `health` and the page print it, the chat lanes note that what arrived meanwhile is picked up, and a cold reader still finds it on disk (tests/test_lane_surface.py).
+- **The Linux installer takes `--python`:** a host can point the install at an interpreter it trusts, the no-python and version-band refusals name the switch, and a fleet push keeps its `TINYCMDR_PYTHON` twin (tests/test_installer_unix.py, tests/test_update_surface.py).
+
+### Changed
+- **In `--app`, a tool call and its one-line result are one frame:** the result rides the call's own box as a dim footer line, and failure or a multi-line preview still draws a box of its own (tests/test_tui.py).
+- **The tools README states what ships and what does not:** the four starter tools and the README ride every package; everything else in `tools/` is host-owned by design, never versioned and never overwritten by an update (tests/test_authority_surface.py).
+
+### Fixed
+- **A job scheduled from the page reports back to the page:** its `web:<conversation>` destination resolves to its own run in that conversation instead of being handed to a chat lane as a channel that cannot exist (tests/test_jobs_surface.py).
+- **A deaf lane reads `failed` before its restart:** the Mattermost listener watchdog and the Telegram poll loop report through one heartbeat-stale path - once per episode, with the reason, and the next thing the lane hears clears it (tests/test_lane_surface.py).
+- **The Linux installer stops guessing at other distributions:** the venv-support messages name the failure and the `--python` door instead of calling apt on a host that may not have it, and the header documents Debian-shaped support (tests/test_installer_unix.py).
+
 ## [1.1.9] - 2026-10-12
 
 ### Added
