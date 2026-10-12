@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-10-12
+
 ### Fixed
 - **The page that carries shell access is hardened:** WebUI responses carried no frame policy, no MIME-sniff guard and no referrer policy, and every response advertised the exact Python build (`Server: BaseHTTP/0.6 Python/3.12.10`) - the handler now sends `Content-Security-Policy` (`frame-ancestors 'none'`, `base-uri 'none'`, `default-src 'self'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` on every reply, and names itself `tinycmdr` with no interpreter version (tests/test_fix_webheaders.py).
 - **`/api/health` stops describing the box to strangers:** the auth-free route carried the pid, every lane's state and the config-drift flag to any caller - a non-loopback, unauthenticated reader now gets `ok`/`version` only, while loopback and token-holding callers keep the full payload the page and monitors read (tests/test_fix_health.py).
