@@ -455,10 +455,10 @@ def main():
                          "default %s)" % DEFAULT_SELECT)
     ap.add_argument("--exclude", action="append", metavar="GLOB",
                     help="drop suites matching this glob (repeatable) and SAY so in the "
-                         "header. The product repo's Windows job uses it for the suites that "
-                         "are red on that platform and are named in STATUS.json's "
-                         "windows-ci-tier2 item; tests/test_contracts.py fails when the two "
-                         "lists disagree, so an exclusion cannot be silent or permanent.")
+                         "header. For ad-hoc developer runs: a platform's declared set "
+                         "belongs in tests/windows-tier.json (each entry reasoned, both "
+                         "Windows jobs name a tier, and tests/test_contracts.py grades "
+                         "the tie) - never in a silent, permanent flag.")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, metavar="SEC",
                     help="per-suite wall clock (default %g)" % DEFAULT_TIMEOUT)
     ap.add_argument("--allow-skips", action="store_true",
