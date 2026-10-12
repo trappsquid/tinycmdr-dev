@@ -12891,6 +12891,28 @@ def a2a_post(url, token, payload, timeout):
         return r.status_code, None
 
 
+def _a2a_closed_door_hint(url, status):
+    """The real cause when a peer 404s its card: a tinycmdr with `web.a2a` off.
+
+    Such a box serves its page and 404s the card BY DESIGN (the card advertises the
+    door), and the plain "answered 404 for its card" sent the operator hunting for a
+    typo in an address that was right (measured 2026-10-12: a cohort reachable in a
+    browser, refused at ADD COHORT). One public GET /api/health names the box and its
+    version; a peer that does not answer it keeps the generic sentence."""
+    if status != 404:
+        return ""
+    try:
+        r = requests.get(url + "/api/health", timeout=3)
+        j = r.json() if r.status_code == 200 else {}
+    except Exception:                                            # noqa: BLE001
+        return ""
+    if not isinstance(j, dict) or not j.get("version"):
+        return ""
+    return ("%s answered 404 for its card - it IS tinycmdr v%s, and its A2A door "
+            "(web.a2a) is off there: run `tinycmdr config set web.a2a true` on that "
+            "box, restart it, then add it again" % (url, j.get("version")))
+
+
 def a2a_fetch_card(url, token, timeout):
     """(card, error) for a peer's AgentCard - the one card reader, tool and relay both."""
     try:
@@ -12899,7 +12921,8 @@ def a2a_fetch_card(url, token, timeout):
     except Exception as e:                                       # noqa: BLE001
         return None, str(e)
     if r.status_code != 200:
-        return None, "%s answered %d for its card" % (url, r.status_code)
+        return None, (_a2a_closed_door_hint(url, r.status_code)
+                      or "%s answered %d for its card" % (url, r.status_code))
     try:
         return r.json(), ""
     except Exception:                                            # noqa: BLE001
@@ -30387,7 +30410,8 @@ function openAddCohort(){
  head.textContent='ADD COHORT';
  const hint=document.createElement('div');hint.className='addcohort-hint';
  hint.textContent='Connect a box that already serves its page: its URL and the '
-  +'TINYCMDR_WEB_TOKEN in its .env, with web.a2a true in its config.';
+  +'TINYCMDR_WEB_TOKEN in its .env, with web.a2a true in its config (on that box: '
+  +'`tinycmdr config set web.a2a true`, then restart it).';
  panel.appendChild(head);panel.appendChild(hint);
  const field=function(id,label,ph,type){
   const lab=document.createElement('label');lab.className='addcohort-field';

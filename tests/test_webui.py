@@ -548,6 +548,40 @@ def main():
                     "url": "http://127.0.0.1:1", "token": _CTOK})
     check(code == 502 and j.get("error"),
           "a box nothing answers at: 502, not a false success", (code, j))
+    # a box whose PAGE answers but whose A2A door is off is NAMED, not left as a bare
+    # 404 to hunt typos over (reported 2026-10-12: a cohort reachable in a browser,
+    # refused at ADD COHORT with "answered 404 for its card")
+    class _ClosedDoorHandler(_CohortHandler):
+        """A reachable tinycmdr with web.a2a off: health answers, the card 404s."""
+
+        def do_GET(self):
+            if self.path.startswith("/api/health"):
+                self._send({"ok": True, "version": "1.1.8"})
+            else:
+                self._send({"error": "not found"}, 404)
+
+    class _NotATinycmdrHandler(_CohortHandler):
+        """Anything that 404s a card and answers nothing useful about itself."""
+
+        def do_GET(self):
+            self._send({"error": "not found"}, 404)
+
+    _closed = _CohortServer(("127.0.0.1", 0), _ClosedDoorHandler)
+    _plain = _CohortServer(("127.0.0.1", 0), _NotATinycmdrHandler)
+    for _srv in (_closed, _plain):
+        threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    code, j = _add({"op": "add-remote", "remote": "closed-door",
+                    "url": "http://127.0.0.1:%d" % _closed.server_address[1],
+                    "token": _CTOK})
+    check(code == 502 and "web.a2a" in (j.get("error") or "")
+          and "1.1.8" in (j.get("error") or ""),
+          "a cohort with its A2A door off gets the switch to flip, named",
+          (code, j.get("error")))
+    code, j = _add({"op": "add-remote", "remote": "not-tinycmdr",
+                    "url": "http://127.0.0.1:%d" % _plain.server_address[1],
+                    "token": _CTOK})
+    check(code == 502 and "web.a2a" not in (j.get("error") or ""),
+          "a box that is not tinycmdr keeps the plain sentence", (code, j.get("error")))
     check((STAGE / "config.json").read_text(encoding="utf-8") == _cfg_before,
           "the refused adds wrote nothing to config.json")
     check(req("POST", "/api/legion",
