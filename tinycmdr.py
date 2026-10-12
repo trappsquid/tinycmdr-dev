@@ -32547,7 +32547,13 @@ def run_webui():
             """A method this server does not serve, refused in the API's own shape.
 
             Python's stock 501 is an HTML error page, which a JSON client cannot
-            read (A-204/A-205)."""
+            read (A-204/A-205).
+
+            The four handlers below are this refusal, not a REST surface: nothing in the
+            tree issues OPTIONS/PUT/DELETE/PATCH, and the `allows` list names OPTIONS
+            because a CORS preflight is what an OPTIONS can be on this page - it is
+            refused like the rest (A-2026-10-11-23, measured 2026-10-12, pinned by
+            tests/test_webui.py)."""
             self._drain()
             self._json({"error": "method not allowed",
                         "method": method,
