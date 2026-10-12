@@ -957,6 +957,12 @@ def _load_env_file():
 
     Keeps secrets out of config.json, which the agent can read, quote into
     chat and ship to a cloud model in a single injected instruction.
+
+    The "wins" is literal: a name already set in the environment - by a service
+    manager, a launcher wrapper, a shell profile - keeps its value and the .env line
+    is NOT loaded for it. A box whose TINYCMDR_* token is stale in its service
+    environment therefore runs with that token and not the file's
+    (A-2026-10-10-12, measured 2026-10-10).
     """
     if not ENV_FILE.exists():
         return
