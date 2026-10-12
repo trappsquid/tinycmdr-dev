@@ -29327,14 +29327,47 @@ WEB_COMMANDS = (
     ("/tinycmdr undo [N]", "drop the last N exchanges"),
     ("/tinycmdr retry", "run my last request again"),
     ("/tinycmdr model [name|list] [--global]", "show, list or switch the model"),
+    ("/tinycmdr reasoning [level]", "reasoning effort for this conversation"),
+    ("/tinycmdr plan [on|off|apply]", "plan mode: look, don't touch - then approve"),
     ("/tinycmdr restart", "restart the bot"),
     ("/tinycmdr version", "the version this page is talking to"),
     ("/tinycmdr help", "this list"),
 )
 
+# One line per management verb the chat lanes run through verb_from_chat. The page
+# lists them from the SAME frozenset those lanes gate on (`_CHAT_VERB_SET`), so a verb
+# added there cannot be missing here - the page answered "Unknown command" for
+# `/update`, the command the fleet is updated with, while both chat lanes ran it
+# (reported 2026-10-12).
+WEB_VERB_HELP = {
+    "update": "update from the published release, then restart onto it",
+    "doctor": "what is configured and what is missing",
+    "health": "the health payload: lanes, sockets, version",
+    "proc": "the bot's processes and children",
+    "config": "read or set config.json keys",
+    "logs": "the tail of this host's log",
+    "clean": "sweep stale files (spins, spills, uploads)",
+    "approvals": "what the confirm gate stopped asking about",
+    "failures": "the recent failures this host recorded",
+}
+
+
+def web_command_rows():
+    """[(cmd, help)] for the page's palette AND its /help - one source, so the two
+    cannot drift, and the management verbs ride in from `_CHAT_VERB_SET`."""
+    rows = list(WEB_COMMANDS)
+    have = {c for c, _h in rows}
+    for v in sorted(_CHAT_VERB_SET):
+        cmd = "/tinycmdr " + v
+        if cmd in have:
+            continue
+        rows.append((cmd, WEB_VERB_HELP.get(v, "run `%s` on this host" % v)))
+    return rows
+
+
 def web_commands(active):
     return [{"cmd": c, "help": h, "active": c.lower() in (active or "")}
-            for c, h in WEB_COMMANDS]
+            for c, h in web_command_rows()]
 
 def web_tasks_view():
     """The ledger the page's Tasks panel shows, newest first, if this build keeps one.
@@ -31644,6 +31677,30 @@ def _web_command(text, key="web"):
     if low == "/model" or low.startswith("/model "):
         parts = text.strip().split(maxsplit=1)
         return ("reply", model_command(key, parts[1] if len(parts) > 1 else ""))
+    if low == "/reasoning" or low.startswith("/reasoning "):
+        parts = text.strip().split(maxsplit=1)
+        return ("reply",
+                reasoning_command(key, parts[1] if len(parts) > 1 else ""))
+    if low == "/plan" or low.startswith("/plan "):
+        # The chat lanes' words, one word everywhere (the console has the same one).
+        parts = text.strip().split(maxsplit=1)
+        arg = (parts[1] if len(parts) > 1 else "").strip().lower()
+        if arg in ("on", "off"):
+            mode = plan_mode_set(key, "plan" if arg == "on" else "execute")
+            if mode == "plan":
+                return ("reply", "🧭 Plan mode ON — this machine is read-only: the "
+                                 "agent investigates and records a plan, and nothing "
+                                 "writes or runs until `/plan apply`.")
+            return ("reply", "🧭 Plan mode OFF — execution resumed.")
+        if arg in ("apply", "approve"):
+            plan_mode_set(key, "execute")
+            body = plan_render(key)
+            return ("reply", "✅ Plan approved — execution mode is on."
+                    + ("\n\n" + body if body else ""))
+        state = ("plan (read-only)" if plan_mode(key) == "plan" else "execute")
+        return ("reply", "🧭 Mode: %s. Usage: `/plan on` (look, don't touch), "
+                         "`/plan apply` (approve and execute), `/plan off` "
+                         "(resume execution)." % state)
     if low == "/restart" or low.startswith("/restart "):
         # no channel to announce into, so a web restart is logged only
         threading.Thread(target=perform_restart, args=(None, None, "web-ui"),
@@ -31684,8 +31741,25 @@ def _web_command(text, key="web"):
     if low == "/help":
         return ("reply",
                 "Commands:\n"
-                + "\n".join(f"{c} — {h}" for c, h in WEB_COMMANDS)
+                + "\n".join(f"{c} — {h}" for c, h in web_command_rows())
                 + "\nEverything else is a task for the agent.")
+    # `/tinycmdr <verb>` for the management verbs: one word per thing, every surface.
+    # Both chat lanes run this set through verb_from_chat; the page did not, so
+    # `/update` - the command the fleet is updated with - answered "Unknown command"
+    # here while the lanes did the work (reported 2026-10-12).
+    _v = low[1:].split()[0] if low.startswith("/") and len(low) > 1 else ""
+    if _v in _CHAT_VERB_SET:
+        line = text.strip()[1:]           # keep the arguments: "config set a b"
+        out = str(verb_from_chat(line))
+        # `/update` must leave the NEW code serving: restart onto it, exactly the way
+        # both chat lanes finish that command. The page reconnects on its own.
+        if _v == "update" and "VERSION " in out and "->" in out \
+                and "already up to date" not in out:
+            threading.Thread(target=perform_restart, args=(None, None, "web-ui"),
+                             daemon=True).start()
+            out += ("\n\n♻️ Restarting onto it now — the page reconnects in a few "
+                    "seconds.")
+        return ("reply", out)
     if cmdr_legacy_prefix(text):
         return ("reply", CMDR_MOVED)
     if low.startswith("/"):

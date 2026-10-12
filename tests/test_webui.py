@@ -730,6 +730,55 @@ def main():
     finally:
         fb.socket = real_socket
 
+    # ---- the command suite: the page runs what both chat lanes run -------------
+    # `/update` and the management verbs answered "Unknown command" on the page while
+    # Mattermost and Telegram ran them through verb_from_chat (reported 2026-10-12).
+    code, body, _ = req("GET", "/api/commands", TOK)
+    cmds = {c.get("cmd") for c in (json.loads(body).get("commands") or [])}
+    check(code == 200 and {"/tinycmdr update", "/tinycmdr doctor", "/tinycmdr config",
+                           "/tinycmdr reasoning [level]",
+                           "/tinycmdr plan [on|off|apply]"} <= cmds,
+          "the page's palette lists the whole command suite", sorted(cmds))
+    cat = fb._web_command("/tinycmdr help", "web")[1]
+    check("/tinycmdr update" in cat and "/tinycmdr doctor" in cat,
+          "...and /help names the same set", cat[:400])
+    seen = []
+    _real_vfc = fb.verb_from_chat
+    _real_pr = fb.perform_restart
+    fb.verb_from_chat = lambda line: (seen.append(line), "```\nlost one\n```")[1]
+    try:
+        kind, out = fb._web_command("/tinycmdr logs 5", "web")
+        check(kind == "reply" and "lost one" in out and seen == ["logs 5"],
+              "a management verb runs through verb_from_chat, arguments kept",
+              (kind, out, seen))
+        kind, out = fb._web_command("/update", "web")
+        check(kind == "reply" and "lost one" in out and seen[-1] == "update",
+              "...and /update is the same command", (kind, out))
+        check("Restarting onto it" not in out,
+              "...with no restart promised for an update that changed nothing", out)
+        fb.verb_from_chat = lambda line: "VERSION 1.0.0 -> 1.0.1"
+        calls = []
+        fb.perform_restart = lambda *a, **k: calls.append(a)
+        kind, out = fb._web_command("/tinycmdr update", "web")
+        for _ in range(40):
+            if calls:
+                break
+            time.sleep(0.05)
+        check("Restarting onto it" in out and calls,
+              "an update that CHANGED the version restarts onto it", (out, calls))
+    finally:
+        fb.verb_from_chat = _real_vfc
+        fb.perform_restart = _real_pr
+    kind, out = fb._web_command("/reasoning high", "web")
+    check(kind == "reply" and "high" in out
+          and fb.AGENT.reasoning_overrides.get("web") == "high",
+          "the page answers /reasoning for this conversation", out)
+    fb._web_command("/reasoning auto", "web")
+    kind, out = fb._web_command("/plan on", "web")
+    check(kind == "reply" and "Plan mode ON" in out and fb.plan_mode("web") == "plan",
+          "the page answers /plan", out)
+    fb._web_command("/plan off", "web")
+
     # ---- the body cap is checked BEFORE the read ----------------------------
     big = b"x" * (fb.WEB_BODY_MAX + 64)
     code, body, _ = req("POST", "/api/run", {**TOK, "Content-Type": "application/json"},
