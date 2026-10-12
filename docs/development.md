@@ -399,8 +399,8 @@ The payload rides the transcript line (`WebRun.add(kind, text, **extra)` -> the 
 surface answers honestly. Tests: `tests/test_a2_surface.py` covers the door and the
 envelope and caps, and the page suite's shim the renderer.
 
-**A2A** — the mesh door, off by default (`web.a2a`):
-- `GET /.well-known/agent-card.json` is public metadata (no token) once enabled;
+**A2A** — the mesh door, published with the page (no separate switch; `web.a2a_policy` bounds arrivals):
+- `GET /.well-known/agent-card.json` is public metadata (no token);
 - `POST /a2a` speaks the v1.0 JSON-RPC binding with the page token as a `Bearer`
   (`_auth_ok` accepts it): `SendMessage` runs one message through this box and returns a
   `Task` (`TASK_STATE_COMPLETED`, or `TASK_STATE_FAILED` when the endpoint never
@@ -435,7 +435,7 @@ envelope and caps, and the page suite's shim the renderer.
   `SendMessage` and every hub dispatch is one log line. Tests: `tests/test_legion.py`,
   the page shim's legion scenario, and `tests/test_webui.py`'s ADD COHORT block.
 
-Verify by hand: set `web.a2a` true, restart, then
+Verify by hand: restart, then
 `curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with
 `-H 'Authorization: Bearer <TINYCMDR_WEB_TOKEN>'`.
 

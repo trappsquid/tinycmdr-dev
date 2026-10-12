@@ -1767,24 +1767,37 @@ def main():
     # its own status - `_body() or {}` fed 411/413/408 refusals to the JSON-RPC
     # path as an empty request, which answered "Invalid Request" for a body it had
     # already refused.
-    fb.CONFIG["web"]["a2a"] = True
-    try:
-        _st121, _hd121, _bd121, _ = probe(
-            "POST", "/a2a", {**TOK, "Content-Length": "abc"})
-        check(_st121 == 411 and b"Content-Length" in _bd121,
-              "a /a2a body with no usable length is refused 411, not read as empty",
-              (_st121, _bd121[:90]))
-        _st121b, _hd121b, _bd121b, _ = probe("POST", "/a2a", TOK, b"[]")
-        check(_st121b == 400 and b"expected a JSON object body" in _bd121b,
-              "a /a2a body that is not a JSON object is refused in the door's words",
-              (_st121b, _bd121b[:90]))
-        _st121c, _hd121c, _bd121c, _ = probe("POST", "/a2a", None,
-                                             b'{"jsonrpc": "2.0", "id": 1}')
-        check(_st121c == 401 and b"unauthorized" in _bd121c,
-              "an unauthenticated /a2a call is still refused, before its body",
-              (_st121c, _bd121c[:90]))
-    finally:
-        del fb.CONFIG["web"]["a2a"]
+    #
+    # ...and the door rides the page now (no `web.a2a` switch): the card is public
+    # metadata and /a2a answers on the token alone.
+    check("a2a" not in (fb.DEFAULT_CONFIG.get("web") or {})
+          and ("web", "a2a") in fb._RETIRED_CONFIG_KEYS,
+          "web.a2a is retired from the defaults, and named so old files do not warn",
+          sorted(fb.DEFAULT_CONFIG.get("web") or {}))
+    _stc, _hdc, _bdc, _ = probe("GET", "/.well-known/agent-card.json", None)
+    _card = json.loads(_bdc) if _stc == 200 else {}
+    check(_stc == 200 and _card.get("name") == "tinycmdr"
+          and _card.get("version") == fb.VERSION,
+          "the agent card is served with no flag and no token", (_stc, _bdc[:120]))
+    _stg, _hdg, _bdg, _ = probe(
+        "POST", "/a2a", {**TOK, "Content-Type": "application/json"},
+        b'{"jsonrpc": "2.0", "id": 1, "method": "GetTask", "params": {"id": "nope"}}')
+    check(_stg == 200 and b'"jsonrpc"' in _bdg,
+          "/a2a answers JSON-RPC on the page token alone", (_stg, _bdg[:120]))
+    _st121, _hd121, _bd121, _ = probe(
+        "POST", "/a2a", {**TOK, "Content-Length": "abc"})
+    check(_st121 == 411 and b"Content-Length" in _bd121,
+          "a /a2a body with no usable length is refused 411, not read as empty",
+          (_st121, _bd121[:90]))
+    _st121b, _hd121b, _bd121b, _ = probe("POST", "/a2a", TOK, b"[]")
+    check(_st121b == 400 and b"expected a JSON object body" in _bd121b,
+          "a /a2a body that is not a JSON object is refused in the door's words",
+          (_st121b, _bd121b[:90]))
+    _st121c, _hd121c, _bd121c, _ = probe("POST", "/a2a", None,
+                                         b'{"jsonrpc": "2.0", "id": 1}')
+    check(_st121c == 401 and b"unauthorized" in _bd121c,
+          "an unauthenticated /a2a call is still refused, before its body",
+          (_st121c, _bd121c[:90]))
 
     # ---- A-227: naming YOUR OWN conversation runs there, not in the shared one --
     # A client whose message is resolved to the shared "web" conversation IS steered

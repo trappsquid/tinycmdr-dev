@@ -382,18 +382,20 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "host": "127.0.0.1",
         "port": 8790,
-        # The A2A door (Agent2Agent v1.0): false by default. True publishes an
-        # AgentCard at /.well-known/agent-card.json and answers JSON-RPC on POST /a2a
-        # with the page token as a Bearer. SendMessage runs one message through this
-        # box and returns a Task; streaming and push are declared unsupported (a
-        # second tinycmdr can still watch the work live through the run-lines
-        # extension the card declares).
+        # The A2A door (Agent2Agent v1.0) rides the page: an AgentCard at
+        # /.well-known/agent-card.json and JSON-RPC on POST /a2a exist whenever the
+        # page serves, with the page token as a Bearer on /a2a. There is no separate
+        # switch - an enable-flag everyone had to flip was a support burden, and the
+        # door's exposure is the page's own (one public metadata card + a second
+        # token-gated ingress; SendMessage runs one message through this box and
+        # returns a Task; streaming and push are declared unsupported - a second
+        # tinycmdr can still watch the work live through the run-lines extension the
+        # card declares).
         #
         # a2a_policy is what a PEER may run here: "full" (the default, and what this
         # door always was) or "read_only", which refuses every write and exec tool
         # for runs that arrived over /a2a while this box's own page keeps all of
         # them. A cohort that a hub only ever asks questions should hold this.
-        "a2a": False,
         "a2a_policy": "full",
     },
     "search": {
@@ -1315,6 +1317,10 @@ _RETIRED_CONFIG_KEYS = frozenset({
     ("agent", "tasks_max_open"),
     ("agent", "tasks_done_keep"),
     ("agent", "ledger_stale_hours"),
+    # The A2A door rides the page now (2026-10-12): an enable-flag everyone had to
+    # flip was a support burden, so the card and POST /a2a exist whenever the page
+    # serves. Files written by the builds that had the switch keep the name.
+    ("web", "a2a"),
 })
 
 
@@ -12499,9 +12505,11 @@ def tool_render_ui(args, ctx):
 
 
 # A2A - the agent mesh door (Agent2Agent v1.0, JSON-RPC binding)
-# Two halves, both off by default, both zero-rent when off:
-#  * the SERVER: `web.a2a` true publishes an AgentCard at /.well-known/agent-card.json
-#    and answers JSON-RPC on POST /a2a. SendMessage runs one message through this box
+# Two halves. The SERVER rides the page: the AgentCard at /.well-known/agent-card.json
+# and JSON-RPC on POST /a2a exist whenever the page serves (the page token gates /a2a;
+# `web.a2a_policy` bounds what an arrival may run). The CLIENT half is off until
+# `agent.a2a_remotes` is set - zero rent when empty:
+#  * the SERVER: SendMessage runs one message through this box
 #    (blocking, which is the spec's default) and returns a Task; GetTask reads the
 #    stored task back. A client taskId is stored WORKING before the run, so a peer
 #    whose read timed out and retried is answered from the store, never re-executed.
@@ -12509,7 +12517,6 @@ def tool_render_ui(args, ctx):
 #    tinycmdr can still WATCH the run: `tinycmdr/GetRunLines` (declared in the card's
 #    capabilities.extensions) returns the same uid-keyed lines the web page draws, so
 #    a hub's Legion tab shows a cohort's work instead of waiting out the reply.
-#    `web.a2a_policy` bounds what a peer may run here (full | read_only).
 #  * the CLIENT: a hidden `a2a` tool that exists ONLY when agent.a2a_remotes is
 #    configured, so a box with no mesh members pays no prompt bytes at all.
 # Auth is the page's own bearer token and the card says so.
@@ -12892,13 +12899,14 @@ def a2a_post(url, token, payload, timeout):
 
 
 def _a2a_closed_door_hint(url, status):
-    """The real cause when a peer 404s its card: a tinycmdr with `web.a2a` off.
+    """The real cause when a peer 404s its card: a build that keeps its mesh door off.
 
-    Such a box serves its page and 404s the card BY DESIGN (the card advertises the
-    door), and the plain "answered 404 for its card" sent the operator hunting for a
-    typo in an address that was right (measured 2026-10-12: a cohort reachable in a
-    browser, refused at ADD COHORT). One public GET /api/health names the box and its
-    version; a peer that does not answer it keeps the generic sentence."""
+    The door rides the page now, so a 404 means the peer runs a build from before
+    that (the switch era), and the plain "answered 404 for its card" sent the
+    operator hunting for a typo in an address that was right (measured 2026-10-12: a
+    cohort reachable in a browser, refused at ADD COHORT). One public GET /api/health
+    names the box and its version; a peer that does not answer it keeps the generic
+    sentence."""
     if status != 404:
         return ""
     try:
@@ -12908,9 +12916,10 @@ def _a2a_closed_door_hint(url, status):
         return ""
     if not isinstance(j, dict) or not j.get("version"):
         return ""
-    return ("%s answered 404 for its card - it IS tinycmdr v%s, and its A2A door "
-            "(web.a2a) is off there: run `tinycmdr config set web.a2a true` on that "
-            "box, restart it, then add it again" % (url, j.get("version")))
+    return ("%s answered 404 for its card - it IS tinycmdr v%s, a build that keeps "
+            "its mesh door off. Update that box (newer builds publish the card with "
+            "the page), or on that build run `tinycmdr config set web.a2a true` and "
+            "restart it" % (url, j.get("version")))
 
 
 def a2a_fetch_card(url, token, timeout):
@@ -30410,8 +30419,8 @@ function openAddCohort(){
  head.textContent='ADD COHORT';
  const hint=document.createElement('div');hint.className='addcohort-hint';
  hint.textContent='Connect a box that already serves its page: its URL and the '
-  +'TINYCMDR_WEB_TOKEN in its .env, with web.a2a true in its config (on that box: '
-  +'`tinycmdr config set web.a2a true`, then restart it).';
+  +'TINYCMDR_WEB_TOKEN in its .env. Its mesh door must answer there - newer builds '
+  +'publish it with the page; older ones need `web.a2a: true` and a restart.';
  panel.appendChild(head);panel.appendChild(hint);
  const field=function(id,label,ph,type){
   const lab=document.createElement('label');lab.className='addcohort-field';
@@ -32545,12 +32554,10 @@ def run_webui():
                     client_is_loopback=_peer_is_loopback(
                         (self.client_address or ("",))[0])))
             elif self.path.startswith("/.well-known/agent-card.json"):
-                # The A2A card (web.a2a): public metadata and no token - it names no
-                # secret, and a peer has to read it before it can authenticate. Every
-                # other route on this server stays token-gated, /a2a included.
-                if not (CONFIG.get("web") or {}).get("a2a"):
-                    self._json({"error": "not found"}, 404)
-                    return
+                # The A2A card: public metadata and no token - it names no secret, and
+                # a peer has to read it before it can authenticate. It rides the page
+                # (the mesh door has no separate switch): every other route on this
+                # server stays token-gated, /a2a included.
                 self._json(a2a_card())
             elif self.path.startswith("/api/events"):
                 if not self._auth_ok():
@@ -33052,13 +33059,10 @@ def run_webui():
                 self._forbidden()
                 return
             if self.path.startswith("/a2a"):
-                # The A2A JSON-RPC endpoint (web.a2a): SendMessage runs one message
-                # through this box and returns a Task. The card route is public; this
-                # one takes the page token as a Bearer.
-                if not (CONFIG.get("web") or {}).get("a2a"):
-                    self._drain()
-                    self._json({"error": "not found"}, 404)
-                    return
+                # The A2A JSON-RPC endpoint: SendMessage runs one message through this
+                # box and returns a Task. It rides the page (no separate switch); the
+                # card route is public, and this one takes the page token as a Bearer.
+                # `web.a2a_policy` bounds what an arrival may run.
                 # The token FIRST, like every other mutating route: reading and
                 # parsing an unauthenticated body spent a worker on a caller with no
                 # claim to one, and `_body() or {}` then fed a 411/413/408 refusal to
