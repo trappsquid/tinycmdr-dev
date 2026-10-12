@@ -1191,18 +1191,63 @@ def _known_config_keys(section):
     return _KNOWN_CONFIG_KEYS.get(section, set())
 
 
+# Names a config written by an OLDER build carried, which that build READ and this one
+# does not. They are not typos, so the load-time warning (and `config set`'s validation)
+# must not treat them as one: the operator of a long-lived box would otherwise see a
+# fixed warning block on every start and every verb, and the one line that IS a typo
+# drowns in it. Kept deliberately small and exact - `(section, key)` - so a genuinely
+# unknown name still warns. A key is removed from here only if a future build reads it
+# again (A-2026-10-12-01, measured 2026-10-12).
+_RETIRED_CONFIG_KEYS = frozenset({
+    # The notes.md era ended with the memory/ OKF bundle (2026-10-04): today's caps are
+    # agent.notes_max_chars (the trailing block) and agent.memory_concept_max_chars
+    # (per concept).
+    ("agent", "notes_max_note_chars"),
+    ("agent", "notes_supersede_share"),
+    ("agent", "notes_supersede_min_words"),
+    ("agent", "notes_keep_entries"),
+    ("agent", "notes_archive_days"),
+    # The task ledger was removed wholesale (2026-10-01); nothing reads these.
+    ("agent", "tasks_max_open"),
+    ("agent", "tasks_done_keep"),
+    ("agent", "ledger_stale_hours"),
+})
+
+
+# The ONE secret-name vocabulary, shared by every side: an environment variable, a
+# config.json path (_secret_config_path: the `config` verb's refusal and the verb-log
+# scrub), and the load-time sweep of keys this build does not read (below) are all
+# graded by the SAME shape, so `config set db.password X` is refused exactly like
+# DB_PASSWORD is redacted. The
+# `password|passwd` arm is the credential-at-any-length rule the env side already used;
+# `token`/`api_key`/`*_api_key` are the arms the config side already accepted.
+_SECRET_NAME_RX = re.compile(
+    r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$")
+
+# Secret-named config.json values this build DROPPED at load because it does not read
+# their keys: the file is still on disk, the agent can `read_file` it, and a secret the
+# sweep never saw reaches the transcript raw (A-2026-10-10-13). Collected here and unioned
+# into _secret_values() so the mask covers the file even for keys nothing loads.
+_DROPPED_SECRET_VALUES = set()
+
+
 def _config_key_known(section, key):
     """Is `section.key` a name something reads? ONE rule for `config set` and the
     load-time warning, so the two surfaces cannot disagree.
 
     A key ending in `_extra` counts when its base does: `_merge_guard_extras` folds
     `<list>_extra` into `<list>`, which is how an operator adds a guard without replacing
-    the shipped one.
+    the shipped one. A RETIRED key counts too: a config written by an older build keeps
+    the names that build read (`notes_keep_entries`, `tasks_max_open` and the rest of
+    `_RETIRED_CONFIG_KEYS`), and warning about them on every start trains the operator to
+    ignore the warning where a real typo surfaces (A-2026-10-12-01, measured 2026-10-12:
+    eight lines on every verb and every start).
     """
     known = _known_config_keys(section)
     if key in known:
         return True
-    return (key.endswith("_extra") and key[:-len("_extra")] in known)
+    return (key.endswith("_extra") and key[:-len("_extra")] in known) \
+        or (section, key) in _RETIRED_CONFIG_KEYS
 
 
 def load_config():
@@ -1245,6 +1290,14 @@ def load_config():
                         log.warning("config.json %s.%s is not a key the harness reads - it "
                                     "is ignored (check the spelling against "
                                     "config.example.json)", section, key)
+                        # The value keeps its old path into CONFIG (a host may keep its
+                        # own extras and readers can still see them), but a secret-named
+                        # one must also be masked: the file is on disk, the agent can
+                        # read it, and an unknown key's value would otherwise reach the
+                        # transcript raw (A-2026-10-10-13, measured 2026-10-10).
+                        if isinstance(value, str) and len(value) >= 6 \
+                                and _SECRET_NAME_RX.search(key):
+                            _DROPPED_SECRET_VALUES.add(value)
                     cfg[section][key] = value
             elif isinstance(cfg.get(section), dict):
                 # A shipped section is a DICT and its readers assume it. A file value that
@@ -3547,14 +3600,9 @@ def _llama_ping_interval():
 _STREAM_UNSUPPORTED = set()
 
 
-# The ONE secret-name vocabulary, shared by both sides: an
-# environment variable (below) and a config.json path (_secret_config_path: the `config`
-# verb's refusal and the verb-log scrub) are graded by the SAME shape, so
-# `config set db.password X` is refused exactly like DB_PASSWORD is redacted. The
-# `password|passwd` arm is the credential-at-any-length rule the env side already used;
-# `token`/`api_key`/`*_api_key` are the arms the config side already accepted.
-_SECRET_NAME_RX = re.compile(
-    r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$")
+# The ONE secret-name vocabulary (see the config constants for its uses).
+# `password|passwd` is the credential-at-any-length rule; `token`/`api_key`/`*_api_key`
+# are the arms both surfaces already accepted.
 
 
 def _secret_values():
@@ -3593,6 +3641,8 @@ def _secret_values():
         if isinstance(v, str) and _SECRET_NAME_RX.search(k) and len(v) >= 6:
             vals.add(v)
     vals.discard("none")
+    # Secret-named values dropped at load (unknown keys): see _DROPPED_SECRET_VALUES.
+    vals |= _DROPPED_SECRET_VALUES
     return vals
 
 
