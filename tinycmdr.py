@@ -967,7 +967,17 @@ def _load_env_file():
                 continue
             k, v = line.split("=", 1)
             k = k.strip()
-            v = v.strip().strip('"').strip("'")
+            v = v.strip()
+            # Inline comments follow the de-facto dotenv rule: an UNQUOTED ` #` starts a
+            # comment (`TOKEN=x # note` stores `x`, not `x # note` - the trailing form
+            # was a silent wrong-token failure; A-2026-10-12-06, measured 2026-10-12),
+            # while a `#` inside quotes or with no space before it is part of the value
+            # (`"quoted # here"` and `ab#cd` both keep it).
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            else:
+                v = v.split(" #", 1)[0].rstrip()
+                v = v.strip('"').strip("'")
             if k and k not in os.environ:
                 os.environ[k] = v
     except Exception as e:  # never block startup on a malformed .env
