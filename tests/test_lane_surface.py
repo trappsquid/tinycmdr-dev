@@ -282,6 +282,27 @@ Hermetic: the staged copy is the module, so `logs/state.json` lands in the stage
           not T.lanes_snapshot()["mattermost"].get("recovered"),
           T.lanes_snapshot()["mattermost"])
 
+    # ---- ONE heartbeat-stale path, every lane (the lane-deafness item) ------------
+    # The MM watchdog restarted with nothing in the record and the TG poll loop wrote
+    # its own shape. Both now end in lane_heartbeat_stale: `failed` with the reason,
+    # once per episode, and lane_up ends the episode.
+    check("the deaf report lands in the one lane record",
+          T.lane_heartbeat_stale("mattermost",
+                                 "the websocket object has been gone for 130s") is True
+          and T.lanes_snapshot()["mattermost"]["state"] == "failed"
+          and "nothing heard" in T.lanes_snapshot()["mattermost"]["detail"],
+          T.lanes_snapshot().get("mattermost"))
+    _d1 = (T._lane_state_read().get("failures") or {}).get("mattermost", {}).get("count")
+    T.lane_heartbeat_stale("mattermost", "the websocket object has been gone for 130s")
+    _d2 = (T._lane_state_read().get("failures") or {}).get("mattermost", {}).get("count")
+    check("...once per episode, not once per tick", _d1 == 1 and _d2 == 1, (_d1, _d2))
+    T.lane_up("mattermost", "connected as @the-bot")
+    T.lane_heartbeat_stale("mattermost", "the websocket object has been gone for 130s")
+    check("...and a lane that heard something starts a fresh episode",
+          (T._lane_state_read().get("failures") or {}).get("mattermost", {}).get("count") == 1,
+          T.lanes_snapshot().get("mattermost"))
+    T.lane_up("mattermost", "connected as @the-bot")
+
     # --------------------------------- a lane that cannot start is RETRIED, in-process
     # The 2026-09-30 outage: the bot raised, main() exited by design, and launchd respawned the
     # whole process every ~10s for the 4h45m the network was gone - 1654 startups of this 22k-line

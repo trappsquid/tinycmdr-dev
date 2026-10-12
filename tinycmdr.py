@@ -1223,6 +1223,7 @@ def config_drift():
     return ""
 LANE_STATE = {}                  # lane -> {"ok", "detail", "since"} for THIS process
 LANE_FAILS = {}                  # lane -> {"count", "error", "reason_class", "first", "last"}, persisted
+_LANE_DEAF = set()               # lanes reported deaf (lane_heartbeat_stale); lane_up ends the episode
 _LANE_LOCK = threading.Lock()
 _LANE_FAILS_LOADED = False
 # The lanes THIS process has written (lane_up/lane_down). _lane_state_write merges the
@@ -35624,6 +35625,10 @@ class MattermostDispatcher:
                     last_msg = getattr(ws, "_last_msg", None) if ws is not None else None
                     deaf = self._listener_deaf(ws, last_msg)
                     if deaf:
+                        # The record FIRST: a deaf lane must read `failed` in health
+                        # and on the page even though this process's answer is the
+                        # restart below (the shared path reports once per episode).
+                        lane_heartbeat_stale("mattermost", deaf)
                         self._restart_deaf(deaf)
                 except Exception:
                     pass
@@ -36305,6 +36310,26 @@ def lane_down(lane, error):
     return count, same, first
 
 
+def lane_heartbeat_stale(lane, reason):
+    """The ONE heartbeat-stale path every lane's silence ends in.
+
+    A lane that cannot hear anybody had three shapes - the Mattermost listener's
+    watchdog restarted the process with nothing written to the record, the Telegram
+    poll loop wrote its own - so "is it up?" disagreed with itself between lanes.
+    Now each lane's watchdog calls this: the lane goes `failed` in the one record
+    every reader renders (`health`, `/status`, `/api/health`), with the reason,
+    ONCE per episode - the one-line-per-STATE rule lane_down follows. lane_up ends
+    the episode: the next thing the lane actually hears is the news. Returns True
+    while the episode stands, so the caller can do its lane's own recovery
+    (restart the websocket, retry the poll)."""
+    with _LANE_LOCK:
+        if lane in _LANE_DEAF:
+            return True
+        _LANE_DEAF.add(lane)
+    lane_down(lane, "nothing heard: %s" % reason)
+    return True
+
+
 def lane_up(lane, detail=""):
     """Record a lane connecting. A recovery is news ONCE (the supervisor's own words: a
     silently-recovered bot is indistinguishable from a dead one from the outside).
@@ -36317,6 +36342,7 @@ def lane_up(lane, detail=""):
     gap_s = 0.0
     with _LANE_LOCK:
         prior = LANE_FAILS.pop(lane, None)
+        _LANE_DEAF.discard(lane)          # the episode is over: news is arriving
         st = {"ok": True, "detail": detail, "since": now}
         try:
             gap_s = now - float((prior or {}).get("first"))
@@ -39405,12 +39431,15 @@ def run_telegram():
             elif lane_poll_failure_due(_failing_since, now):
 
                 # The loop retries for ever in silence: without this, health says the
-                # lane is up while it has heard nothing for minutes. Report through the
-                # same lane record the other lanes use; the reason CLASS accumulates even
-                # though the transport's own message varies per attempt (A-179/A-180).
+                # lane is up while it has heard nothing for minutes. Reported through
+                # the ONE heartbeat-stale path every lane's silence ends in; the reason
+                # CLASS accumulates even though the transport's message varies per
+                # attempt (A-179/A-180), and the episode is reported once, not per
+                # window.
 
-                lane_down("telegram", "poll failing for %d min: %s"
-                          % (int((now - _failing_since) / 60), exc))
+                lane_heartbeat_stale("telegram",
+                                     "poll failing for %d min: %s"
+                                     % (int((now - _failing_since) / 60), exc))
 
                 _failing_since = now
 
