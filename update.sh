@@ -66,7 +66,12 @@ fetch "$BASE/SHA256SUMS" "$WORK/SHA256SUMS" \
          exit 1; }
 # The download is verified BEFORE anything is touched: a truncated transfer must cost
 # nothing, and this file cannot assume the installed code is there to check it.
-WANT="$(grep " $ASSET\$" "$WORK/SHA256SUMS" | awk '{print $1}')"
+# The entry is matched on the FILENAME field, so both sha256sum spellings work: the
+# text mode's two spaces (`<hash>  <name>`) and the binary mode's asterisk
+# (`<hash> *<name>`). A bare `grep " $ASSET\$"` missed the binary form and refused a
+# release this build could verify (A-2026-10-10-10); release.sh writes text mode, so the
+# miss stayed latent until something else wrote the sums file.
+WANT="$(awk -v a="$ASSET" '$2 == a || $2 == "*" a {print $1}' "$WORK/SHA256SUMS")"
 [ -n "$WANT" ] || { echo "update: SHA256SUMS has no entry for $ASSET - the release is broken;" >&2
                     echo "        nothing was changed. Try again later, or install by hand." >&2; exit 1; }
 if command -v sha256sum >/dev/null 2>&1; then

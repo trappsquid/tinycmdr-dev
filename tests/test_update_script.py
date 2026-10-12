@@ -227,6 +227,31 @@ def main():
               out3[-400:])
         check('VERSION = "9.9.9"' in (inst2 / "tinycmdr.py").read_text(encoding="utf-8"),
               "...and the damaged tree now runs the release build")
+
+        # A-2026-10-10-10: the sums line was matched with `grep " <asset>$"`, which only
+        # sees sha256sum's TEXT mode (`<hash>  <name>`); the binary mode's asterisk
+        # (`<hash> *<name>`) read as "no entry for <asset> - the release is broken".
+        # The extractor is now field-based; this runs the same awk expression the script
+        # runs against a binary-mode file, and the text mode beside it.
+        script_text = SCRIPT.read_text(encoding="utf-8")
+        m = re.search(r'^WANT="\$\(awk -v a="\$ASSET" (.+?) "\$WORK/SHA256SUMS"\)"$',
+                      script_text, re.M)
+        check(m is not None, "the sums extractor is the field-based awk one",
+              [l for l in script_text.splitlines() if "SHA256SUMS" in l][:3])
+        if m:
+            prog = m.group(1)[1:-1]        # the shell's single quotes around the program
+            sums = work / "SHA256SUMS.binary"
+            sums.write_text("%s  text-mode.zip\n%s *binary-mode.zip\n"
+                            % ("a" * 64, "b" * 64), encoding="utf-8")
+            for asset, want in (("binary-mode.zip", "b" * 64),
+                                ("text-mode.zip", "a" * 64)):
+                got = subprocess.run(
+                    ["awk", "-v", "a=%s" % asset, prog, str(sums)],
+                    capture_output=True, text=True).stdout.strip()
+                check(got == want,
+                      "the matcher reads %s (%s mode)"
+                      % (asset, "binary" if asset.startswith("binary") else "text"),
+                      got)
     finally:
         if srv is not None:
             srv.shutdown()
