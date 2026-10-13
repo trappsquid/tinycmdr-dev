@@ -2864,6 +2864,17 @@
       },
       "detail": "The batch behind the next release: a question's wait line says what a timeout really does - stop, carry on with a stated assumption, or skip the command at the approval gate - and the approval prompt states that 'always' covers every confirm-pattern command on this box; the evidence footer ignores fenced and inline-quoted text; soul.md is bounded by agent.soul_max_chars with a visible cut marker; and the what-it-is document's claims and command table match the code (tests/test_stall.py, tests/test_checkin.py, tests/test_agent_surface.py, tests/test_measured_doc.py).",
       "gate": "all four named suites green on the batch tree; the wait-line, recitation and soul checks are RED on the pre-fix build; the whole gate green, 0 skipped"
+    },
+    {
+      "id": "delegate-gate-endpoint-slots",
+      "title": "a delegate batch's pool was sized per call, so stacked callers could exceed the endpoint's slots",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "10bc663",
+        "expect": "untagged"
+      },
+      "detail": "The delegate pool is sized per CALL, so a second delegate_task call in one assistant turn (the tool-batch executor runs both calls on its threads) - or a second lane delegating at once - ran its own pool of endpoint_slots() children beside the first: two 2-task batches put four concurrent children, four model requests, on a two-slot endpoint. Every child run now passes one process-wide gate per endpoint root, sized by endpoint_slots() exactly like the pool planner; measured in tests/test_delegation.py, two racing 2-task batches were 4 concurrent children on the pre-fix build and 2 after.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     }
   ]
 }

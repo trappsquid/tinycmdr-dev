@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.12] - 2026-10-13
+
+### Fixed
+- **A delegate batch's size is the endpoint's own slots, whoever calls it:** the pool was sized per call, so a second `delegate_task` call in one turn - or two lanes delegating at once - could put four concurrent children on a two-slot endpoint; every child run now passes one process-wide gate per endpoint, sized by the slots the endpoint reports (tests/test_delegation.py).
+
 ## [1.1.11] - 2026-10-13
 
 ### Fixed
