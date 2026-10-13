@@ -2853,6 +2853,17 @@
       },
       "detail": "The batch behind the next release: one help table feeds the chat block, Telegram's screen and the page's /help and palette; config list [section] shows what is adjustable and what is set, a secret's value never printed; model list is a numbered menu and a number switches; near-miss commands name their likely verb; the shell update offers the venv reconcile and the restart as [Y/n] on a terminal only; the page reloads itself after a restart or a version change; the cross-browser rule is a visible caption; the approval store keeps a damaged copy and warns; the atomic writer replaces a read-only destination on Windows; four unreferenced functions deleted.",
       "gate": "each landed behavior's suite is green; the corrupt-store checks are RED on the pre-fix build; the read-only replace is graded on the Windows tier; the whole gate green, 0 skipped"
+    },
+    {
+      "id": "truth-pass-doors-and-docs",
+      "title": "the truth pass: the question lines, the approval scope, and the what-it-is claims",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "6957732",
+        "expect": "untagged"
+      },
+      "detail": "The batch behind the next release: a question's wait line says what a timeout really does - stop, carry on with a stated assumption, or skip the command at the approval gate - and the approval prompt states that 'always' covers every confirm-pattern command on this box; the evidence footer ignores fenced and inline-quoted text; soul.md is bounded by agent.soul_max_chars with a visible cut marker; and the what-it-is document's claims and command table match the code (tests/test_stall.py, tests/test_checkin.py, tests/test_agent_surface.py, tests/test_measured_doc.py).",
+      "gate": "all four named suites green on the batch tree; the wait-line, recitation and soul checks are RED on the pre-fix build; the whole gate green, 0 skipped"
     }
   ]
 }

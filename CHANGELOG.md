@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.11] - 2026-10-13
+
+### Fixed
+- **The wait line under a question says what silence really does:** a timeout stops the run, carries on with a stated assumption, or - at the approval gate - skips the command, and the line promised "I carry on with my own judgment" in every one of those shapes until now (tests/test_stall.py).
+- **Quoted text is not a work claim:** the evidence footer stamped a fenced recitation of instructions, or a pasted log, as unchecked work because the quoted words read as change verbs; fenced and inline-quoted text is excluded from the check now (tests/test_checkin.py).
+
+### Changed
+- **`soul.md` is read through a cap:** the persona was the one prompt-assembly input with no ceiling - `agent.soul_max_chars` (default 4000) cuts with a visible marker naming the key (tests/test_agent_surface.py).
+- **The approval prompt states the `always` scope:** choosing it grants every confirm-pattern command on this box, and the prompt now says so where the choice is made (tests/test_stall.py).
+- **The what-it-is document's claims match the code:** `search_files` is described as the regex walk it is, delegation as the one parallel batch with nesting refused, the browser note names the shipped starter, and the command table is rebuilt from the harness's own verb sets and graded against them; the README's multi-box example drops a retired switch (tests/test_measured_doc.py).
+
 ## [1.1.10] - 2026-10-12
 
 ### Added
