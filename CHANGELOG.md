@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.13] - 2026-10-13
+
+### Fixed
+- **A supervised restart never opens a browser tab:** the auto-open's six-hour window was the only brake, so a relaunch past it - the Windows supervisor, launchd, a logon task - put one more tinycmdr tab into the machine's session; the open now requires a console start and refuses under `TINYCMDR_SUPERVISED=1`, while `--web` and the `web` verb still open on request (tests/test_webui.py).
+
 ## [1.1.12] - 2026-10-13
 
 ### Fixed
