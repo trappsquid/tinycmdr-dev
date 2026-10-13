@@ -528,6 +528,11 @@ DEFAULT_CONFIG = {
         # prefill per session, not per call.
         "context_files": True,
         "context_files_max_chars": 4000,
+        # The operator's persona (soul.md), read at the head of every system prompt.
+        # Bounded like its siblings: a cut carries a visible marker naming this cap
+        # (measured 2026-10-12: it was the one assembly input with no ceiling at all).
+        # Unset or 0 means this default.
+        "soul_max_chars": 4000,
         # The skills index that rides the static prompt: one line per runbook (`hidden`,
         # `always` and parked ones excluded). Bounded like every sibling surface - the
         # descriptions go before the names, because a NAME is what the `skill` tool is asked
@@ -13794,11 +13799,26 @@ def _mutation_target(name, args):
     return ""
 
 
+def _unquoted(text):
+    """The answer minus fenced blocks and inline code: what the model SAID, not what
+    it pasted.
+
+    The evidence check grades the run's own claims, and a recitation of the system
+    prompt (or a pasted log) inside a fence is neither: measured 2026-10-12, a run
+    asked to recite its prompt was stamped "claims work ... made no tool call at
+    all" for words the PROMPT contains. A warning that cries wolf is worse than no
+    warning at all."""
+    t = re.sub(r"```.*?```", " ", text or "", flags=re.S)
+    t = re.sub(r"~~~.*?~~~", " ", t, flags=re.S)
+    return re.sub(r"`[^`\n]*`", " ", t)
+
+
 def _annotate_evidence(answer, muts, calls):
     """Append the machine's own view of what the run did, or return unchanged."""
     notes = []
-    if calls == 0 and (_CHANGE_CLAIM_RE.search(answer or "")
-                       or _RESULT_CLAIM_RX.search(answer or "")):
+    claim = _unquoted(answer)
+    if calls == 0 and (_CHANGE_CLAIM_RE.search(claim)
+                       or _RESULT_CLAIM_RX.search(claim)):
         notes.append("this report claims work or a measured value but the run "
                      "made no tool call at all — nothing here was checked "
                      "against the box")
@@ -15276,8 +15296,8 @@ class Scheduler:
         _job_say(disp, channel_id,
                  _ask_format(question, options)
                  + "\n_(Answer here — or it waits "
-                 f"{max(1, int((timeout or 300) / 60))} min and carries on "
-                 f"with its own judgment.)_")
+                 f"{max(1, int((timeout or 300) / 60))} min; "
+                 f"{_ask_timeout_note()}.)_")
         return row
 
     def close_question(self, key, disp=None):
@@ -15458,6 +15478,25 @@ def _ask_wait_cap():
     except (TypeError, ValueError):
         cap = 300.0
     return max(5.0, min(cap, 900.0))
+
+
+def _ask_timeout_note(kind=""):
+    """The sentence that ends a question's wait line: what SILENCE will do.
+
+    The post-timeout line was fixed on 2026-10-10 ("one branch, two honest texts")
+    after the console was measured promising "I am applying my own judgment" and then
+    stopping - but the QUESTION-side text kept promising the same thing on every door
+    that renders one: with ask_timeout_continues false (the default) a timed-out
+    ask_user STOPS the run (OperatorStop), so the promise was the opposite of what the
+    operator got. A confirm-gate question is the second caller of this text: its
+    timeout SKIPS the command and the run carries on, whatever that key says - which
+    is why this branches on the caller and not only on the config.
+    """
+    if kind == "confirm":
+        return "if nothing arrives the command is skipped"
+    if CONFIG["agent"].get("ask_timeout_continues", False):
+        return "if nothing arrives I carry on with my own judgment"
+    return "if nothing arrives I stop here rather than act on an assumption"
 
 
 def parse_duration(text):
@@ -18506,8 +18545,31 @@ def preserve_edited_soul(stamp):
 
 
 def soul_text():
-    """Who this agent is, for the head of the system prompt."""
-    return _SOUL
+    """Who this agent is, for the head of the system prompt - bounded.
+
+    Bounded by `agent.soul_max_chars`, and the bound is VISIBLE: a soul that is cut
+    carries a marker naming the cap. The persona sits at the very head of the cached
+    prefix and every request pays it, and it was the one assembly input with no
+    ceiling at all (context files 4000, skills index 2000, notes 8000) - an operator
+    could paste a book into soul.md without the harness saying anything.
+    """
+    text = _SOUL or ""
+    try:
+        limit = int(CONFIG["agent"].get("soul_max_chars") or 4000)
+    except (TypeError, ValueError):
+        limit = 4000
+    if limit <= 0:
+        limit = 4000
+    if len(text) <= limit:
+        return text
+    piece = _clip_at_line(text, limit)
+    log.warning("soul.md cut at %d of %d chars (agent.soul_max_chars = %d); the rest "
+                "is on disk and the prompt carries the marker",
+                len(piece), len(text), limit)
+    return piece + ("\n<!-- soul.md CUT at %d of %d chars (agent.soul_max_chars = %d)%s"
+                    " - raise it in config.json or trim the file -->"
+                    % (len(piece), len(text), limit,
+                       "" if piece else ": not even one complete line fits"))
 
 
 _SUBAGENT_PROMPT_SUBS = (
@@ -23842,7 +23904,7 @@ class Destination:
     def drop(self, ref):
         pass
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def ask(self, question, options=None, wait=300.0, label=None, kind=""):
         """Return the operator's answer, or None when nobody can be asked."""
         return None
 
@@ -24576,11 +24638,12 @@ class RunReporter:
                 edit, "status",
                 f"{self.label} {steps} step(s), last: `{name}`{suffix}", src)
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def ask(self, question, options=None, wait=300.0, label=None, kind=""):
         """Ask the operator, wherever this run's destination can reach one."""
         if not self.dest.has_human:
             return None
-        return self.dest.ask(question, options, wait, label or "this conversation")
+        return self.dest.ask(question, options, wait,
+                             label or "this conversation", kind=kind)
 
     def confirm(self, command, wait=300.0):
         """A command matched agent.confirm_patterns, so ASK before running it.
@@ -24611,10 +24674,11 @@ class RunReporter:
         answer = self.ask(
             "⚠️ This command matches a confirm-pattern. Allow it?\n"
             f"```\n{str(command)[:800]}\n```\n"
-            "`session` = this conversation only · `always` = never ask again "
+            "`session` = this conversation only · `always` = never ask again, for "
+            "EVERY confirm-pattern command on this box "
             "(`tinycmdr approvals clear` to undo)",
             list(_CONFIRM_CHOICES),
-            wait, "this conversation")
+            wait, "this conversation", kind="confirm")
         if answer is None:
             if getattr(self.dest, "wait_outcome", "") == "stopped":
                 # The door already drew "stopped": a stop is not the operator's
@@ -24661,7 +24725,8 @@ class RunReporter:
                                      "(`tinycmdr approvals clear` to undo)")
             elif scope == "always":
                 confirm_allow("always")
-                self._draw("system", "✅ confirmed permanently — not asking again "
+                self._draw("system", "✅ confirmed permanently — every confirm-pattern "
+                                     "command, not asking again "
                                      "(`tinycmdr approvals clear` to undo)")
             else:
                 self._draw("system", "✅ confirmed, running")
@@ -26023,10 +26088,10 @@ class CliDestination(Destination):
             except Exception:
                 pass
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def ask(self, question, options=None, wait=300.0, label=None, kind=""):
         """A question at the terminal, answered through the reader (never by a
         second read of the terminal: see cli_ask_line). None = no answer."""
-        del label
+        del label, kind
         self._close()
         return cli_ask_line(question, options, wait, out=self.out,
                             colour=self.colour)
@@ -28655,12 +28720,13 @@ class WebDestination(Destination):
                 "transcript text, so repeat anything load-bearing in words."
                 % (summary or "(no text)"))
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def ask(self, question, options=None, wait=300.0, label=None, kind=""):
         """Ask the page: a question row the operator answers with /api/steer.
 
         Returns the operator's words, or None if nobody answered in the wait, so
         the reporter's confirm is the same code here as in chat.
         """
+        del kind
         row = self.run.opener(question, options, wait, label)
         numbered = [f"{i}. {o}" for i, o in enumerate(options or [], 1)]
         tail = (" — " + " · ".join(numbered)) if numbered else ""
@@ -34851,7 +34917,7 @@ class MattermostDestination(Destination):
         """
         self._draft = ref
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def ask(self, question, options=None, wait=300.0, label=None, kind=""):
         """Post the question and wait for the reply, as the confirm prompt did.
 
         Returns the operator's own words, or None if nobody answered in time: the
@@ -34883,7 +34949,7 @@ class MattermostDestination(Destination):
             self.d.pending[self.channel_id] = row  # the old one is answered: take over
         try:
             self.line("ask", self.d._ask_prompt(self.channel_id, question,
-                                                options, wait))
+                                                options, wait, kind))
         except Exception:
             if self.d.pending.get(self.channel_id) is row:
                 self.d.pending.pop(self.channel_id, None)
@@ -35046,9 +35112,11 @@ class MattermostDispatcher:
         return ("reply here or @mention me (in a channel Mattermost only hands me "
                 "messages addressed to me)")
 
-    def _ask_prompt(self, channel_id, question, options, timeout):
+    def _ask_prompt(self, channel_id, question, options, timeout, kind=""):
         """The question as the channel sees it: numbered options, how to answer,
-        how to cancel, and how long the wait is.
+        how to cancel, and how long the wait is - and what a timeout DOES, from
+        `_ask_timeout_note` (the confirm gate renders through here too, and its
+        timeout skips the command instead of ending the run).
 
         Both question paths render through this - the ask_user door and the confirm
         gate - because a question is one affordance, whichever code asked it. The
@@ -35061,8 +35129,8 @@ class MattermostDispatcher:
         return (_ask_format(question, options)
                 + "\n_(" + self._ask_label(channel_id) + " — or `/tinycmdr stop` to "
                 "cancel this run. Waiting up to "
-                f"{max(1, int((timeout or 300) / 60))} min; if nothing "
-                f"arrives I carry on with my own judgment.)_")
+                f"{max(1, int((timeout or 300) / 60))} min; "
+                f"{_ask_timeout_note(kind)}.)_")
 
     def open_question(self, session_key, question, options, timeout):
         """Open a question for this session: register it and post it. NO wait here.
@@ -37943,7 +38011,7 @@ class TelegramDestination(Destination):
 
 
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def ask(self, question, options=None, wait=300.0, label=None, kind=""):
 
         """Post the question with the options as buttons, and wait for either a press
 
@@ -37959,6 +38027,7 @@ class TelegramDestination(Destination):
 
         (A-144)."""
 
+        del kind                     # the button post carries no promise text to branch
         row = self._open_question(question, options)
 
         if row is None:
@@ -39060,7 +39129,7 @@ class TelegramDispatcher:
             return None
         return (sent[0] or {}).get("message_id") if sent else None
 
-    def _ask_prompt(self, channel_id, question, options, timeout):
+    def _ask_prompt(self, channel_id, question, options, timeout, kind=""):
         """The question as this chat sees it: the Mattermost dispatcher's twin.
 
         `MattermostDestination.ask` renders whatever this returns, so a scheduled
@@ -39071,8 +39140,8 @@ class TelegramDispatcher:
         del channel_id
         return (_ask_format(question, options)
                 + "\n_(reply in this chat — or `/stop` to cancel this run. Waiting up "
-                f"to {max(1, int((timeout or 300) / 60))} min; if nothing arrives I "
-                "carry on with my own judgment.)_")
+                f"to {max(1, int((timeout or 300) / 60))} min; "
+                f"{_ask_timeout_note(kind)}.)_")
 
     def _edit(self, post_id, channel_id, text, color=None):
         del color

@@ -960,6 +960,33 @@ def test_a_second_promise_is_reported_not_asked_forever():
     check("two promises: the second one is delivered", "gathering the logs" in out, out)
 
 
+def test_a_recitation_in_a_fence_is_not_a_work_claim():
+    """The evidence check graded the whole answer, so a run asked to recite its system
+    prompt was stamped "claims work ... made no tool call at all" for words the PROMPT
+    contains (external audit 2026-10-12). Fenced and inline-quoted text is quoted
+    material, not the run's own claim; the narrowing must not touch plain claims."""
+    recital = ("Here is the prompt:\n\n```\nYou are tinycmdr. The harness was installed "
+               "and updated on this machine; tools are created by create_tool and the "
+               "configured providers are never changed without a confirm.\n```\n")
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": recital},
+        {"role": "assistant", "content": recital},
+    ])
+    check("recitation: the answer is delivered as written",
+          recital.strip() == out.strip(), out)
+    check("recitation: no evidence stamp for fenced words",
+          "evidence check" not in out, out)
+
+    plain, seen2 = scripted_run_with_usage([
+        {"role": "assistant",
+         "content": "I installed the service and updated the config."},
+        {"role": "assistant",
+         "content": "I installed the service and updated the config."},
+    ])
+    check("a plain claim still gets the evidence stamp",
+          "evidence check" in plain, plain)
+
+
 def test_a_plain_answer_is_not_nudged():
     """The fence is 'the run made no tool call at all' PLUS a promise in the text: an
     answer that needed no tool (a status line, a report, a question back) ends the run

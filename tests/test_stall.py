@@ -1023,6 +1023,65 @@ def test_the_confirm_question_renders_like_the_ask_door():
     check("the answer still lands", got.get("v") == "yes", got)
 
 
+def _run_question(d, ch, needle, opener, answer="yes", wait=8.0):
+    """Open one question in a thread, read its posted body, answer it, join."""
+    t = threading.Thread(target=opener, daemon=True)
+    t.start()
+    time.sleep(0.4)
+    shown = [text for _, text in d.posted if needle in text]
+    row = d.pending.get(ch)
+    if row is not None:
+        row["answer"] = answer
+        row["event"].set()
+    t.join(8)
+    return shown[-1] if shown else ""
+
+
+def test_the_wait_line_says_what_silence_does():
+    """The question-side text promised "I carry on with my own judgment" on every
+    door, while the default configuration STOPS a timed-out run (OperatorStop) - the
+    post-timeout line got the honest branch on 2026-10-10, the question side did not
+    (external audit 2026-10-12). A confirm-gate question renders through the same
+    text and ITS timeout skips the command while the run carries on, so the note
+    branches per caller and per config; all three shapes are pinned here."""
+    saved = fb.CONFIG["agent"].get("ask_timeout_continues")
+    try:
+        fb.CONFIG["agent"]["ask_timeout_continues"] = False
+        d1 = _dispatcher()
+        body = _run_question(
+            d1, "chan-wait-stop", "Proceed?",
+            lambda: fb.MattermostDestination(d1, "chan-wait-stop", None).ask(
+                "Proceed?", ["yes", "no"], wait=8))
+        check("default timeout: the wait line promises the STOP",
+              "if nothing arrives I stop here rather than act on an assumption" in body,
+              body)
+        check("default timeout: the old carry-on promise is gone",
+              "carry on with my own judgment" not in body, body)
+        fb.CONFIG["agent"]["ask_timeout_continues"] = True
+        d2 = _dispatcher()
+        body2 = _run_question(
+            d2, "chan-wait-go", "Proceed?",
+            lambda: fb.MattermostDestination(d2, "chan-wait-go", None).ask(
+                "Proceed?", ["yes", "no"], wait=8))
+        check("ask_timeout_continues: the wait line promises the carry-on",
+              "if nothing arrives I carry on with my own judgment" in body2, body2)
+    finally:
+        if saved is None:
+            fb.CONFIG["agent"].pop("ask_timeout_continues", None)
+        else:
+            fb.CONFIG["agent"]["ask_timeout_continues"] = saved
+    # The confirm path, through RunReporter.confirm: its timeout SKIPS the command
+    # and the run carries on, whatever ask_timeout_continues says.
+    d3 = _dispatcher()
+    rep = fb.RunReporter(fb.MattermostDestination(d3, "chan-wait-confirm", None), "s")
+    body3 = _run_question(d3, "chan-wait-confirm", "Allow",
+                          lambda: rep.confirm("rm -rf build/k", wait=8), answer="no")
+    check("confirm: the wait line promises the SKIP",
+          "if nothing arrives the command is skipped" in body3, body3)
+    check("confirm: the always scope is stated where the choice is made",
+          "EVERY confirm-pattern command" in body3, body3)
+
+
 def test_a_question_is_not_painted_like_routine_noise():
     """A-282 (2026-10-06): `_color` mapped ask to COLOR_STATUS - the same white as
     checkin, say and status - on the lane where a question blocks a run."""

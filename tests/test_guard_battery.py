@@ -542,7 +542,7 @@ class _ApprovalDest:
         self.lines.append(text)
         return ("fake", len(self.lines))
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def ask(self, question, options=None, wait=300.0, label=None, kind=""):
         self.options = options
         return self.answer
 

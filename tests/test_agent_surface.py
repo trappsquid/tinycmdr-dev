@@ -403,9 +403,66 @@ losing the shape.
     sys.exit(1 if FAILS else 0)
 
 
+def _suite_soul_bound():
+    """soul.md was the one prompt-assembly input with no cap (external audit
+    2026-10-12): every sibling surface is bounded and a cut is visible, and an
+    unbounded persona silently re-prices every request at the head of the cached
+    prefix.
+
+    python tests/test_agent_surface.py
+    """
+    import importlib.util
+    import os
+    import sys
+    from pathlib import Path
+
+    PASSES = []
+    FAILS = []
+
+    def check(name, cond, detail=""):
+        (PASSES if cond else FAILS).append(name)
+        print(("ok   " if cond else "FAIL ") + name + ("" if cond else "   " + str(detail)))
+
+    BASE = Path(__file__).resolve().parent.parent
+    SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
+    spec = importlib.util.spec_from_file_location("tinycmdr_soul_under_test", SRC)
+    fb = importlib.util.module_from_spec(spec)
+    sys.modules["tinycmdr_soul_under_test"] = fb
+    spec.loader.exec_module(fb)
+
+    saved_soul = fb._SOUL
+    saved_cap = fb.CONFIG["agent"].get("soul_max_chars")
+    big = "\n".join("persona line %03d %s" % (i, "x" * 70) for i in range(60))
+    try:
+        fb.CONFIG["agent"]["soul_max_chars"] = 4000
+        fb._SOUL = big
+        cut = fb.soul_text()
+        check("a soul past the cap is cut to it",
+              4000 <= len(cut) <= 4300, (len(cut), len(big)))
+        check("the cut carries a visible marker naming the key",
+              "soul.md CUT at" in cut and "agent.soul_max_chars = 4000" in cut,
+              cut[-190:])
+        fb._SOUL = "a small persona"
+        check("a soul under the cap passes through untouched",
+              fb.soul_text() == "a small persona", fb.soul_text())
+        fb.CONFIG["agent"]["soul_max_chars"] = 0
+        fb._SOUL = big
+        check("unset or 0 means the 4000 default, not unbounded",
+              4000 <= len(fb.soul_text()) <= 4300, len(fb.soul_text()))
+    finally:
+        fb._SOUL = saved_soul
+        if saved_cap is None:
+            fb.CONFIG["agent"].pop("soul_max_chars", None)
+        else:
+            fb.CONFIG["agent"]["soul_max_chars"] = saved_cap
+    print()
+    print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
+    return 1 if FAILS else 0
+
+
 def main():
     rc = 0
-    for name, fn in (("test_toolsmith", _suite_test_toolsmith), ("test_subagent_result", _suite_test_subagent_result)):
+    for name, fn in (("test_toolsmith", _suite_test_toolsmith), ("test_subagent_result", _suite_test_subagent_result), ("test_soul_bound", _suite_soul_bound)):
         rc |= _run(name, fn)
     return 1 if rc else 0
 
