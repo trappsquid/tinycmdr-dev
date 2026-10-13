@@ -2879,10 +2879,10 @@
     {
       "id": "no-tab-from-service-restarts",
       "title": "a supervised restart opened a browser tab into the machine's session",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4f1681f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The auto-open's only brake was the six-hour per-token+port window, and on Windows the GUI check is true everywhere: nothing asked whether a person was at the machine, so every supervised or service relaunch past the window - the Windows supervisor's pythonw child, launchd, a logon task - opened one more tab into the operator's session, one per /update in a remote-only stretch. The open now requires an attached console and refuses under TINYCMDR_SUPERVISED=1; the window and the --web force stay for console starts. Falsified red on the v1.1.12 build (tests/test_webui.py: a no-console start and a supervised forced start both opened).",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
