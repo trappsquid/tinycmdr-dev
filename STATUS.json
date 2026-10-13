@@ -2868,10 +2868,10 @@
     {
       "id": "delegate-gate-endpoint-slots",
       "title": "a delegate batch's pool was sized per call, so stacked callers could exceed the endpoint's slots",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "10bc663",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The delegate pool is sized per CALL, so a second delegate_task call in one assistant turn (the tool-batch executor runs both calls on its threads) - or a second lane delegating at once - ran its own pool of endpoint_slots() children beside the first: two 2-task batches put four concurrent children, four model requests, on a two-slot endpoint. Every child run now passes one process-wide gate per endpoint root, sized by endpoint_slots() exactly like the pool planner; measured in tests/test_delegation.py, two racing 2-task batches were 4 concurrent children on the pre-fix build and 2 after.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
