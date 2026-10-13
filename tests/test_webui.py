@@ -1574,6 +1574,55 @@ def main():
           "the captured second start prints no token either")
     fb.CONFIG["web"]["port"] = 0
 
+    # ---- a tab belongs to a person at a console (2026-10-13, operator-reported) --
+    # A supervised or service relaunch has no console: the Windows supervisor spawns
+    # the bot with CREATE_NO_WINDOW and its stdout captured to a log, launchd points
+    # stdout at a file. The open used to fire anyway once the window above had lapsed,
+    # so a remote-only stretch of /update and /restart calls left one more tab per
+    # restart in the operator's session - found as a pile on the next RDP. The gate
+    # is _console_attached() plus the supervisor's own TINYCMDR_SUPERVISED=1.
+    import types
+    calls = []
+    fake_wb = types.SimpleNamespace(open=lambda url: calls.append(url))
+    saved_wb = sys.modules.get("webbrowser")
+    saved_sup = os.environ.get("TINYCMDR_SUPERVISED")
+    saved_tty = fb._console_attached
+    saved_due = fb._browser_open_due
+    saved_possible = fb._browser_possible
+    fb._browser_possible = lambda: True
+    fb._browser_open_due = lambda tok, port, ttl=None: True
+    try:
+        sys.modules["webbrowser"] = fake_wb
+        fb._console_attached = lambda: False
+        with contextlib.redirect_stdout(io.StringIO()):
+            fb._announce_web(8790)
+        check(calls == [],
+              "a start with no console never opens (the service/supervisor shape)",
+              calls)
+        fb._console_attached = lambda: True
+        calls.clear()
+        with contextlib.redirect_stdout(io.StringIO()):
+            fb._announce_web(8790)
+        check(len(calls) == 1, "a console start still opens (window logic intact)",
+              calls)
+        calls.clear()
+        os.environ["TINYCMDR_SUPERVISED"] = "1"
+        with contextlib.redirect_stdout(io.StringIO()):
+            fb._announce_web(8790, force=True)
+        check(calls == [], "TINYCMDR_SUPERVISED=1 never opens, even forced", calls)
+    finally:
+        fb._console_attached = saved_tty
+        fb._browser_open_due = saved_due
+        fb._browser_possible = saved_possible
+        if saved_sup is None:
+            os.environ.pop("TINYCMDR_SUPERVISED", None)
+        else:
+            os.environ["TINYCMDR_SUPERVISED"] = saved_sup
+        if saved_wb is None:
+            sys.modules.pop("webbrowser", None)
+        else:
+            sys.modules["webbrowser"] = saved_wb
+
     # ---- the web verb -------------------------------------------------------
     fb._browser_possible = lambda: False
     buf = io.StringIO()

@@ -34681,7 +34681,8 @@ def _browser_open_due(tok, port, ttl=None):
     any rotation. The marker records (token digest, port, time): the same pair inside the
     TTL skips the open with a log line (never silent), a rotated token or a different port
     opens at once, and the `web` verb bypasses this entirely because typing it IS the
-    asking. Never raises; an unwritable marker never stops the announce.
+    asking. Never raises; an unwritable marker never stops the announce. The console gate
+    at the call site is what keeps a supervised relaunch from reaching this at all.
     """
     ttl = _WEB_OPEN_TTL if ttl is None else ttl
     key = hashlib.sha1(("%s|%d" % (tok, port)).encode("utf-8", "replace")).hexdigest()[:16]
@@ -34708,6 +34709,9 @@ def _console_attached():
     tokenized link printed there is a secret at rest (measured 2026-10-09: every
     supervised start wrote one into its log). pythonw has no stdout at all, which reads
     as no console; so does any pipe or file.
+
+    It is also the auto-open's gate: a tab belongs to a person at the machine, so a
+    start with no console (a supervisor relaunch, launchd, a logon task) never opens one.
     """
     try:
         return bool(sys.stdout and sys.stdout.isatty())
@@ -34718,6 +34722,8 @@ def _console_attached():
 def _announce_web(port, open_browser=True, force=False):
     """Say where the page is - the tokenized link at a terminal, the bare URL anywhere
     else (a log must not hold the token; `tinycmdr web` is the deliberate door to it).
+    The browser OPEN is for a console start only - see the condition below; a supervised
+    or service relaunch never fires it.
 
     The token rides the FRAGMENT: it never reaches the server, so it cannot land
     in its log or a Referer header. The page hands the fragment to /api/login once,
@@ -34747,7 +34753,17 @@ def _announce_web(port, open_browser=True, force=False):
     else:
         print("  from another machine: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
               % (port, port))
-    if open_browser and _browser_possible() and (force or _browser_open_due(tok, port)):
+    # A tab belongs to a PERSON at this machine. A supervised or service start has no
+    # console (the Windows supervisor spawns the bot with CREATE_NO_WINDOW and its stdout
+    # captured in a log; launchd and a scheduled task are the same shape) and never opens:
+    # an /update or /restart relaunch past the window below used to drop a fresh tab into
+    # the operator's session, so a remote-only stretch ended with a pile of them on the
+    # next RDP. The console gate is the fix; the window stays for the human case (a
+    # launcher double-clicked repeatedly). TINYCMDR_SUPERVISED=1 is the supervisor's own
+    # statement of the same thing, kept as an explicit belt.
+    if (open_browser and _console_attached()
+            and os.environ.get("TINYCMDR_SUPERVISED") != "1"
+            and _browser_possible() and (force or _browser_open_due(tok, port))):
         try:
             import webbrowser
             webbrowser.open(base + (("#token=" + tok) if tok else ""))
@@ -42647,8 +42663,9 @@ A bare `tinycmdr` from a shell opens the app in this folder (the same as --app);
 inline lane is `--cli`, and a terminal that cannot host the app falls back to it.
 `tinycmdr --app` opens the same session as a full-screen terminal app (alternate
 screen, live status bar, in-pane scrolling); it falls back to inline cards when the
-terminal cannot host it. A bare `tinycmdr` also starts the page and opens a browser
-when the machine has one; `--no-web` turns the page off for that run. The terminal
+terminal cannot host it. A bare `tinycmdr` also starts the page and opens a browser when
+the machine has one AND a person started this run at a console - a service or supervised
+relaunch never opens one; `--no-web` turns the page off for that run. The terminal
 flags themselves need no port, server or browser.
 
 A chat lane is chosen by the token that is set; when BOTH a Mattermost and a
