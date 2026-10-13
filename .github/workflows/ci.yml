@@ -43,7 +43,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        # macos-14, not -latest: measured 2026-10-13, the macos-latest pool assigned this
+        # account no runner for an hour - the jobs queued, then were cancelled. A pinned
+        # image is also what GitHub recommends; revisit when latest's pool recovers.
+        os: [macos-14, ubuntu-latest]
         python: ["3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -198,7 +201,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        # macos-14, not -latest: measured 2026-10-13, the macos-latest pool assigned this
+        # account no runner for an hour - the jobs queued, then were cancelled. A pinned
+        # image is also what GitHub recommends; revisit when latest's pool recovers.
+        os: [macos-14, ubuntu-latest]
     env:
       TINYCMDR_SMOKE_BASE_URL: ${{ secrets.TINYCMDR_SMOKE_BASE_URL }}
       TINYCMDR_SMOKE_MODEL: ${{ vars.TINYCMDR_SMOKE_MODEL }}

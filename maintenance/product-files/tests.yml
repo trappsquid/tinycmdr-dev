@@ -31,7 +31,9 @@ jobs:
             python: "3.12"
             jobs: 3
             gate: --tier windows
-          - os: macos-latest
+          # macos-14, not -latest: the macos-latest pool assigned no runner on
+          # 2026-10-13 (queued jobs cancelled); keep in step with dev ci.yml.
+          - os: macos-14
             python: "3.12"
             jobs: 3
             gate: ""
