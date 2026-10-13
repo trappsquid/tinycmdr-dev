@@ -3671,6 +3671,36 @@ def batch_workers(tool_calls, url):
     return min(workers, slots) if slots else workers
 
 
+# ONE gate per endpoint root, shared by every child run in this process. The pool in
+# _run_delegate_batch is sized per CALL, and that is not the same number: an assistant
+# turn that emits two delegate_task calls runs them on two executor threads, and each
+# call then runs its own pool of `slots` children - four concurrent model requests
+# against a box that answers /props with total_slots=2. Two lanes delegating at once
+# stack the same way, and neither caller can see the other. The gate reads the box's
+# own number once, so ALL children queue behind the same slots wherever they came from.
+_DELEGATE_GATES = {}
+_DELEGATE_GATES_LOCK = threading.Lock()
+
+
+def _delegate_gate(url):
+    """The semaphore every delegate child passes through, keyed to the endpoint root.
+
+    Width is `endpoint_slots() or 1` - the same number _run_delegate_batch sizes its
+    pool to, and 0-says-nothing means one at a time, never a guess. Read once at
+    creation: a probe that failed at process start keeps the strict width, and the
+    log line names the width every child then ran under.
+    """
+    root = _endpoint_root(url)
+    with _DELEGATE_GATES_LOCK:
+        gate = _DELEGATE_GATES.get(root)
+        if gate is None:
+            width = max(1, endpoint_slots(url) or 1)
+            gate = threading.Semaphore(width)
+            _DELEGATE_GATES[root] = gate
+            log.info("delegate gate for %s: %d concurrent child run(s)", root, width)
+        return gate
+
+
 # The last decode rate this process MEASURED per endpoint, tokens/second, from the server's own
 # usage line. This is the only honest way to size a generation to a box: measured 2026-09-29, the
 # same endpoint served 8-57 tok/s depending on how many requests were in flight against its two
@@ -14419,13 +14449,18 @@ def _run_delegate_one(task, context, model, timeout, ctx):
     usage = None
     answer = ""
     try:
-        answer = AGENT.run(key, body,
-                           depth=ctx.get("depth", 0) + 1,
-                           source=sub_src,
-                           cancel_event=ctx.get("cancel_event"),
-                           system_prompt=build_system_prompt(subagent=True),
-                           max_seconds=(cap or None),
-                           **_relay_callbacks(ctx, sub_src))
+        # The box's own concurrency, process-wide (see _delegate_gate): the pools in
+        # _run_delegate_batch are sized per CALL, so without this a second
+        # delegate_task call in the same turn - or a second lane delegating at once -
+        # would run its own pool alongside this one.
+        with _delegate_gate(AGENT.llm_url):
+            answer = AGENT.run(key, body,
+                               depth=ctx.get("depth", 0) + 1,
+                               source=sub_src,
+                               cancel_event=ctx.get("cancel_event"),
+                               system_prompt=build_system_prompt(subagent=True),
+                               max_seconds=(cap or None),
+                               **_relay_callbacks(ctx, sub_src))
     except Exception as e:                  # noqa: BLE001 - a crash is a typed failure
         log.warning("sub-agent %s raised %s: %s", sub_src, type(e).__name__, e)
         answer = "The sub-agent failed: %s: %s" % (type(e).__name__, e)
@@ -14444,7 +14479,11 @@ def _run_delegate_one(task, context, model, timeout, ctx):
 
 
 def _run_delegate_batch(items, context, ctx):
-    """Run a slice batch in parallel, sized to the endpoint's own slots, ordered out."""
+    """Run a slice batch in parallel, sized to the endpoint's own slots, ordered out.
+
+    This pool is per CALL; every child also passes the process-wide `_delegate_gate`,
+    so stacked callers cannot exceed the endpoint's slots between them.
+    """
     clean = []
     for i, item in enumerate(items):
         if isinstance(item, str):

@@ -13,6 +13,7 @@ import json
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -159,6 +160,59 @@ def main():
         out = fb._run_delegate_batch([{"task": "ok"}, {"name": "no task"}], "", {"depth": 0})
         check(out.startswith("ERROR") and "tasks[1]" in out,
               "a malformed entry refuses the whole batch", out[:120])
+
+        # ---- stacked callers: one gate, the box's slots between them all ---------
+        # batch_workers sizes the BATCH pool; it does not serialize the calls. Two
+        # delegate_task calls in one assistant turn run on two of those executor
+        # threads, and each call used to size its OWN pool - two 2-task batches put
+        # four children, four model requests, on a two-slot endpoint at once. The
+        # gate is process-wide, so it also holds for a second lane that never sees
+        # this one (two lanes delegating at once stacked the same way).
+        real_slots = fb.endpoint_slots
+        getattr(fb, "_DELEGATE_GATES", {}).clear()
+        fb.endpoint_slots = lambda url: 2
+        live = {"now": 0, "max": 0}
+        live_lock = threading.Lock()
+        start = threading.Barrier(2)
+        errs = []
+
+        def gated_run(session_key, user_text, **kw):
+            with live_lock:
+                live["now"] += 1
+                live["max"] = max(live["max"], live["now"])
+            time.sleep(0.15)
+            with live_lock:
+                live["now"] -= 1
+            A.last_usage.pop(session_key, None)
+            return CONTRACT_ANSWER
+
+        def racer():
+            start.wait()
+            try:
+                fb._run_delegate_batch([{"task": "one"}, {"task": "two"}], "",
+                                       {"depth": 0})
+            except Exception as e:                             # noqa: BLE001
+                errs.append(repr(e))
+
+        A.run = gated_run
+        try:
+            threads = []
+            for _ in range(2):
+                t = threading.Thread(target=racer, daemon=True)
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join(timeout=15)
+        finally:
+            A.run = real_run
+            fb.endpoint_slots = real_slots
+        check(not errs, "both racing batches completed", errs)
+        check(not [t for t in threads if t.is_alive()],
+              "the racing batches finished", len([t for t in threads if t.is_alive()]))
+        check(live["max"] <= 2,
+              "two 2-task batches on a 2-slot box run at most 2 children at once",
+              live["max"])
+        check(live["max"] == 2, "...and both slots are actually used", live["max"])
 
         # ---- the tool door
         check(fb.tool_delegate_task({}, {"depth": 0}).startswith("ERROR"),
