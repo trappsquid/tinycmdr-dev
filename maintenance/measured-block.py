@@ -249,7 +249,7 @@ def render(name, f):
             "                    and `tinycmdr` itself: the PAGE (a bare invocation opens the\n"
             "                    web UI) or a terminal session (`tinycmdr cli` / `--cli`\n"
             "                    inline cards, `--app` full-screen); a host with no chat\n"
-            "                    token is CLI-only\n"
+            "                    token still gets the page and the console\n"
             "core tools          %d, of which %d are always-on; the rest answer by name (section 2)\n"
             "custom tools        %d example tools ship in ./tools/ (native .py, register-style .py,\n"
             "                    <name>.tool.json); a working box's own drop-ins load from the same\n"

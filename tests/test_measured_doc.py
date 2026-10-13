@@ -93,6 +93,23 @@ def _prose(doc):
     return "".join(out)
 
 
+def _section(doc, start, end):
+    """The slice between two headings, or "" when either is missing."""
+    a = doc.find(start)
+    b = doc.find(end)
+    return doc[a:b] if a != -1 and b != -1 and b > a else ""
+
+
+# Verbs the 2026-10-12 feature audit measured as phrased-but-never-real: zero quoted
+# hits in the source, while section 3.1's table carried them as commands. Denied at a
+# LINE START (a table row), so later prose may still say "compress" about a feature.
+_PHANTOM_VERBS = ("compress", "queue", "agents", "whoami", "sethome", "goal")
+
+
+def _phantom_verbs(text):
+    return [v for v in _PHANTOM_VERBS if re.search(r"(?m)^\s*%s\b" % v, text)]
+
+
 def main():
     check("the generator is in the tree", GENERATOR.exists(), GENERATOR)
     if not GENERATOR.exists():
@@ -247,6 +264,49 @@ def main():
             check("every 'per tool at 80 tools' figure in %s is measured" % path.name,
                   bool(figures) and all(abs(float(f) - measured) < 0.05 for f in figures),
                   "%s states %s; measured %.1f" % (path.name, figures, measured))
+
+    # ---- the command and tool tables in the hand-written prose (audit 2026-10-12) ------
+    # Section 3.1 advertised verbs the build has never had (compress, queue, agents,
+    # whoami, sethome, goal - zero quoted hits in the source) while the real set is the
+    # help table plus the CLI verbs; section 2's prose claimed a "ripgrep-backed"
+    # search_files (it is a pure-Python regex walk), a missing sub-agent fan-out
+    # (delegate_task runs one parallel batch; only nesting is refused) and "no browser
+    # automation" against a tree that ships a computer_use starter. Each claim has a
+    # check now, and the phantom check falsifies on a doctored table.
+    sec31 = _section(doc, "### 3.1 Commands", "### 3.2 Budgets")
+    sec2 = _section(doc, "## 2. Tool surface", "Custom tools are the extension path")
+    check("section 3.1's command table is present", bool(sec31), sec31[:60])
+
+    help_block = app.split("_HELP_ROWS = (", 1)[1].split("\n)", 1)[0]
+    help_verbs = {m.split()[0] for m in
+                  re.findall(r'^\s*\("[^"]*", "([a-z][^"]*)"', help_block, re.M)}
+    verbs_mo = re.search(r"^VERBS = \(([^)]*)\)", app, re.M)
+    cli_verbs = set(re.findall(r'"([a-z_]+)"', verbs_mo.group(1))) if verbs_mo else set()
+    check("the source's verb tables parse",
+          len(help_verbs) >= 20 and len(cli_verbs) >= 15,
+          (sorted(help_verbs), sorted(cli_verbs)))
+    missing = sorted(v for v in (help_verbs | cli_verbs)
+                     if not re.search(r"\b%s\b" % re.escape(v), sec31))
+    check("section 3.1 names every real verb (help rows + CLI verbs)", not missing, missing)
+    check("section 3.1 lists no phantom verbs", not _phantom_verbs(sec31),
+          _phantom_verbs(sec31))
+    check("the phantom check can fail (a doctored table is caught)",
+          _phantom_verbs("new  fresh\nqueue  inspect what is waiting\n") == ["queue"])
+
+    core_block = app.split("CORE_TOOLS = {", 1)[1].split("\n}", 1)[0]
+    core_tools = set(re.findall(r'^    "([a-z_]+)":', core_block, re.M))
+    gated = set(re.findall(r'"([a-z_]+)": "agent\.', app))
+    check("the tool registry parses", len(core_tools) >= 18, sorted(core_tools))
+    unnamed = sorted(t for t in (core_tools | gated)
+                     if not re.search(r"(?m)^%s\b" % re.escape(t), sec2))
+    check("section 2 names every core and gated tool", not unnamed, unnamed)
+
+    check("the doc does not claim a ripgrep-backed search",
+          "ripgrep" not in doc, "the ripgrep claim is back")
+    check("the doc does not deny sub-agent fan-out",
+          "no sub-agent fan-out" not in doc, "the fan-out denial is back")
+    check("the browser note names the shipped starter",
+          "computer_use.py" in doc, "the starter is not named")
 
     print()
     if FAILS:

@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                46,503 lines / 2.18 MB in ONE file, no package, no framework
+code                46,572 lines / 2.19 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -29,7 +29,7 @@ interfaces          Mattermost bot (DMs + @mentions), Telegram DM, `--once "task
                     and `tinycmdr` itself: the PAGE (a bare invocation opens the
                     web UI) or a terminal session (`tinycmdr cli` / `--cli`
                     inline cards, `--app` full-screen); a host with no chat
-                    token is CLI-only
+                    token still gets the page and the console
 core tools          21, of which 11 are always-on; the rest answer by name (section 2)
 custom tools        4 example tools ship in ./tools/ (native .py, register-style .py,
                     <name>.tool.json); a working box's own drop-ins load from the same
@@ -37,10 +37,10 @@ custom tools        4 example tools ship in ./tools/ (native .py, register-style
 chat commands       21 CLI verbs, 13 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               60 suites / 50,189 lines / 5,400 checks that need no model, plus a graded
+tests               60 suites / 50,392 lines / 5,422 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
-config              config.json, 6 blocks: llm 30, telegram 4, mattermost 6, web 4, search 3, agent 119
+config              config.json, 6 blocks: llm 30, telegram 4, mattermost 6, web 4, search 3, agent 120
                     (all of section 3 is configurable)
 state on disk       sessions/*.json (per channel), memory/ (OKF knowledge),
                     notes.md (legacy, still read), jobs.json (cron), uploads/, logs
@@ -55,7 +55,7 @@ execute_code    run Python in a subprocess (killable on timeout or a stop)
 read_file       read text, including UTF-16 and null-padded files
 write_file      create/overwrite a file
 edit_file       exact-string replacement, automatic .bak
-search_files    ripgrep-backed content and filename search
+search_files    content and filename search (a regex walk of the tree; no external binary)
 fetch_url       fetch and strip a page to text (off-LAN gated like search)
 web_search      configured provider chain (anysearch ships; searxng/your own are added), off-LAN gated
 create_tool     the agent writes a new tool; hot-loaded, live on the next call
@@ -101,26 +101,41 @@ means by it.
 
 ```
 new / reset      fresh session for this conversation
+save / fork      export this conversation to a file / branch it into a copy
 stop             stop the run, with truthful states (stopping / already flagged / nothing running)
+undo [N]         drop the last N exchanges
+retry            run my last request again
+bg <task>        run it in the background
+pause            hold new tasks until resumed (`pause off`)
+plan             read-only planning: look, don't touch, then approve
+model            show, list or switch the model (`list` numbers them; a number switches;
+                 `--global` for every conversation)
+reasoning        how hard it thinks, for this conversation
+config           get, set, unset or list settings - e.g. `config set agent.max_steps 40`
+approvals        what the confirm gate stopped asking about (`approvals clear` asks again)
+status           this host: model, context, limits, uptime
+doctor           what is configured and what is missing (exits 1 when it is)
+health           one line + exit code, no network (for scripts)
+logs [n]         the tail of this host's log
+proc             the bot's processes and children
+clean            sweep stale files (spins, spills, uploads)
+failures         the recent failures this host recorded
 restart          hand the process over to whoever supervises it, then come back
-retry / undo     re-run, or back up N turns and re-prompt
-model            per-conversation model or endpoint, /tinycmdr model <name> --global everywhere
-pause / resume   hold new tasks until told otherwise
-steer            inject a correction into a run that is already going
-queue            inspect or clear what is waiting
-status           version, endpoint, model, sampling policy, budgets, guardrail state
-context          what is filling the context window
-compact          compress the conversation, keeping the recent tail
-compress
-skills           list/read/search the prose runbooks from chat
-sessions         list, inspect, search stored sessions
-memory / profile operator memory and the bot's own profile
-agents           the sub-agent/delegation view
-goal / title     naming and intent for the session
-commands         the command index itself
-background / bg  run something without blocking the conversation
-save             export the session
-usage / update / version / whoami / sethome / help (h)
+update           update from the published release, then restart onto it
+version          the version running here
+help             this list (`h` in a shell)
+
+Shell-only management (`tinycmdr help` prints these; a chat lane refuses them by name
+and lists what it can run):
+setup            the wizard: model, chat lanes, the page, web search
+token            where the secrets live; `token set NAME` reads one value from stdin
+web              the page: check it answers first, then print the tokenized link
+search           the web-search providers: state, add, remove, allow, test
+run              start the agent in this window, exactly as the file does
+quit (kill, exit)
+                 take THIS install down: stop its service, then its processes
+model setup      the model wizard; `model use/add/remove/endpoint/failover` manage endpoints
+update <src>     put a newer build in place by hand (file, zip or folder); `clean --yes`
 ```
 
 ### 3.2 Budgets and limits (defaults from `config.example.json`)
@@ -325,14 +340,15 @@ Interop and ecosystem
   SERVER: nothing here answers MCP clients yet
   no ACP/agent-protocol integration, no plugin market
   no LSP or language tooling; no repo map, no symbol index, no call-graph tooling (an Aider
-  strength); search is ripgrep plus the model's own reading
+  strength); search is a regex walk of the tree plus the model's own reading
   no native Anthropic/Google message formats: OpenAI-compatible endpoints only
-  no browser automation built in (a computer-use tool can be installed separately where one
-  is needed)
+  no browser automation built in (GUI control can come from the shipped starter,
+  ./tools/computer_use.py - docs/computer-use.md)
 
 Agent architecture
   no plan/act phases, no explicit plan-approval gate, no graph or state-machine orchestration
-  no sub-agent fan-out: delegate_task is one level deep by design and refuses to nest
+  no nested sub-agents: delegate_task fans out one BATCH of children in parallel (each
+  with a throwaway context), and a child cannot delegate further - one level by design
   no parallel worker pool beyond one worker per channel
   no RAG or vector memory, no embeddings, no document ingestion pipeline
   no voice input/output; vision is agent.vision plus whatever the endpoint
@@ -418,7 +434,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 46,503-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 46,572-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -437,8 +453,9 @@ sessions/memory               per-channel JSON,           conversation store,   
                               search, no vectors
 sub-agents                    one level, throwaway        delegation in SDK      subagents (own         no
                               context                                            context, MCP access)
-interfaces                    Mattermost bot, --app,      web UI, CLI,           terminal, IDE,         terminal, IDE
-                              --cli, --once, Telegram DM  IDE, API               headless mode
+interfaces                    the page (default),         web UI, CLI,           terminal, IDE,         terminal, IDE
+                              Mattermost bot, --app,      IDE, API               headless mode
+                              --cli, --once, Telegram DM
 ops features                  stall watchdog,             runtime lifecycle      hooks for enforcing    git-native undo
                               check-ins, live             control, security      workflow at commit     and diff review
                               steering, /stop, restart
@@ -461,7 +478,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     measured by hand in section 4.1 - est_tokens as sent on
                           a clean unpack, plus the endpoint's own count when it
                           answers /tokenize; the command and both legs are there
-readability               46,503 lines, one file, no dependency tree to audit
+readability               46,572 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

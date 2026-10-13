@@ -61,8 +61,9 @@ streams that box's work line by line, exactly like a local run:
 ```
 
 ```json
-// each cohort: config.json   (its own page needs nothing else)
-"web": {"a2a": true, "a2a_policy": "read_only"}
+// each cohort: config.json   (its own page needs nothing else; the mesh door rides
+// the page - no enable switch on current builds)
+"web": {"a2a_policy": "read_only"}
 ```
 
 The hub relays server-to-server over the agent-to-agent protocol; `token_env` names a variable in
