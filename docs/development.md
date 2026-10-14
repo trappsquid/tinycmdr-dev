@@ -334,6 +334,12 @@ CI runs the same gate over exactly what a push or a PR adds (the `leak` job), an
 scans the range it is about to push. The patterns come from this host's private inventory
 (`maintenance/private_rules.py`, gitignored) or, on a runner, from the repository secret
 `TINYCMDR_LEAK_PATTERNS`; with neither, the job grades the shipped example and says so in its log.
+The secret carries that file's own text, so changing the inventory means re-setting the secret in
+the same breath:
+
+```bash
+gh secret set TINYCMDR_LEAK_PATTERNS -R trappsquid/tinycmdr-dev < maintenance/private_rules.py
+```
 
 ## Looking at the page
 
