@@ -2695,22 +2695,60 @@ def _reasoning_400_verdict(body):
     return None
 
 
-def _messages_for_wire(messages, url):
-    """The history as THIS endpoint may see it - the echo decision, applied at send time.
+def _content_parts(content):
+    """`content` as OpenAI multipart pieces, for joining two user messages into one."""
+    if isinstance(content, list):
+        return [dict(p) if isinstance(p, dict) else {"type": "text", "text": str(p)}
+                for p in content]
+    text = "" if content is None else str(content)
+    return [{"type": "text", "text": text}] if text else []
 
-    The history keeps the reasoning text unconditionally (that is what lets an endpoint
-    which LATER says the field is required be served without replaying the turn), so the
-    strip belongs here, not at capture. Returning `messages` itself when the echo is on
-    keeps the wire bytes for the local templates byte-identical to what they were.
+
+def _join_user_messages(a, b):
+    """Two adjacent user messages as one: plain text joins with a blank line, and a
+    multimodal side switches the pair to the parts list (never dropping an image)."""
+    ca, cb = a.get("content"), b.get("content")
+    if isinstance(ca, str) and isinstance(cb, str):
+        return ca + "\n\n" + cb
+    return _content_parts(ca) + _content_parts(cb)
+
+
+def _messages_for_wire(messages, url):
+    """The history as THIS endpoint may see it: the echo decision and the join.
+
+    Two per-request repairs live here, because the stored history must keep the
+    unrepaired shape:
+
+    * THE ECHO: the reasoning strip for an endpoint that may not see the field
+      (see _replay_reasoning_ok). The history keeps the reasoning text
+      unconditionally (that is what lets an endpoint which LATER says the field is
+      required be served without replaying the turn), so the strip belongs here,
+      not at capture.
+    * THE JOIN: consecutive `user` messages are coalesced into one. The harness
+      builds them on purpose - the volatile state block is inserted before the
+      operator's message, tool images are appended after it, a carried tool-result
+      block and a nudge each stand alone - and the local llama.cpp template folds
+      them silently, but strict ones (Mistral/Gemma/Llama-3 jinja) answer 400/500
+      "roles must alternate user/assistant". One joined user message is the one
+      shape every engine reads the same way.
+
+    Returning `messages` itself when nothing needs changing keeps the wire bytes
+    for the local templates byte-identical to what they were.
     """
-    if _replay_reasoning_ok(url):
-        return messages
+    replay = _replay_reasoning_ok(url)
     out = []
+    changed = False
     for m in messages:
-        if isinstance(m, dict) and m.get("reasoning_content"):
+        if isinstance(m, dict) and m.get("reasoning_content") and not replay:
             m = {k: v for k, v in m.items() if k != "reasoning_content"}
-        out.append(m)
-    return out
+            changed = True
+        if (isinstance(m, dict) and m.get("role") == "user" and out
+                and isinstance(out[-1], dict) and out[-1].get("role") == "user"):
+            out[-1] = {"role": "user", "content": _join_user_messages(out[-1], m)}
+            changed = True
+        else:
+            out.append(m)
+    return out if changed else messages
 
 
 def _session_cache_key(session_key):

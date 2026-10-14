@@ -430,6 +430,42 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
             check(len(seen[-1]["messages"]) >= 3,
                   "the payload kept the full turn sequence", len(seen[-1]["messages"]))
 
+            # ---- the wire join: consecutive user messages coalesce -----------------
+            # The harness builds them on purpose (state block before the order, tool
+            # images after it, the carry block, a nudge), and strict templates answer
+            # 400/500 on role alternation - _payload inserts the state block before
+            # the operator's message on every run, so every real payload had the pair.
+            _wf = fb._messages_for_wire
+            _msgs = [{"role": "system", "content": "s"},
+                     {"role": "user", "content": "carry"},
+                     {"role": "user", "content": "state"},
+                     {"role": "user", "content": "order"},
+                     {"role": "assistant", "content": "a"}]
+            _joined = _wf(_msgs, "")
+            _roles = [m.get("role") for m in _joined]
+            check(all(a != "user" or b != "user"
+                      for a, b in zip(_roles, _roles[1:])),
+                  "the wire join leaves no adjacent user messages", _roles)
+            check(_joined[1]["content"] == "carry\n\nstate\n\norder",
+                  "...joining the parts in order", _joined[1])
+            _listed = _wf([{"role": "user", "content": "look"},
+                           {"role": "user", "content": [
+                               {"type": "text", "text": "at this"},
+                               {"type": "image_url",
+                                "image_url": {"url": "data:image/png;base64,AA"}}]}],
+                          "")
+            check(_listed[0]["content"][0] == {"type": "text", "text": "look"}
+                  and _listed[0]["content"][1] == {"type": "text", "text": "at this"}
+                  and _listed[0]["content"][2]["type"] == "image_url",
+                  "...and a multimodal join keeps every part", _listed)
+            _adj = any(
+                m.get("role") == "user" and n.get("role") == "user"
+                for _p in seen
+                for m, n in zip(_p.get("messages") or [], (_p.get("messages") or [])[1:]))
+            check(not _adj,
+                  "no captured payload of a real run carries adjacent user messages",
+                  [[m.get("role") for m in _p.get("messages") or []] for _p in seen[:2]])
+
             # ---- switch off: the field is gone
             fb.CONFIG["llm"]["replay_reasoning"] = False
             seen = []
