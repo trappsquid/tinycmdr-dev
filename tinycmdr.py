@@ -334,7 +334,10 @@ DEFAULT_CONFIG = {
                                      # -1 = no pings. Only sent to a confirmed
                                      # llama.cpp endpoint.
         "no_think": False,   # True for qwen3-style thinking models that
-                             # answer empty (sends enable_thinking: false)
+                             # answer empty on the CHAT wire (sends
+                             # chat_template_kwargs enable_thinking: false;
+                             # the /responses wire has no proven place for
+                             # the field and logs a one-time warning instead)
         # Replay assistant `reasoning_content` on history turns TO LOCAL endpoints (a
         # template rebuilds the <think> block from it, keeping the replayed prefix
         # byte-aligned for the KV cache); a remote endpoint gets no such field. The cap
@@ -20093,6 +20096,31 @@ def apply_reasoning(payload, url=None, model=None, max_tokens=None):
         payload["reasoning_effort"] = wire
 
 
+_NO_THINK_WIRE_WARNED = [False]
+
+
+def _no_think_field(wire):
+    """The chat_template_kwargs for llm.no_think on the wire that carries it, else None.
+
+    `enable_thinking` is a TEMPLATE switch: llama.cpp/vLLM take it on the chat body, and
+    a server that does not support it ignores the field (the comment the default
+    carries). The /responses body has no proven place for it, and a cloud /responses
+    endpoint was never asked to take an unknown field - so on that wire the setting is
+    met with a one-time warning instead of a body a provider may reject (BUG-31).
+    """
+    if not CONFIG["llm"].get("no_think"):
+        return None
+    if wire == "chat":
+        return {"enable_thinking": False}
+    if not _NO_THINK_WIRE_WARNED[0]:
+        _NO_THINK_WIRE_WARNED[0] = True
+        log.warning("llm.no_think is set, but this endpoint speaks the /responses wire: "
+                    "the template switch is only sent on the chat wire, so a qwen3-style "
+                    "model may still answer with an empty think block. Pin the chat "
+                    "endpoint, or turn llm.no_think off.")
+    return None
+
+
 def _wire_for(url):
     """Which request SHAPE this endpoint gets: "responses" or "chat".
 
@@ -21835,10 +21863,12 @@ class Agent:
             if use_tools and wire == "chat":
                 payload["tools"] = _wire_tools
                 payload["tool_choice"] = "auto"
-            if wire == "chat" and CONFIG["llm"].get("no_think"):
-                # qwen3-style thinking models: ask the template to skip the
-                # think block (ignored by servers that don't support it)
-                payload["chat_template_kwargs"] = {"enable_thinking": False}
+            _no_think = _no_think_field(wire)
+            if _no_think:
+                # qwen3-style thinking models: ask the template to skip the think block
+                # (ignored by servers that don't support it). Chat wire only - see
+                # _no_think_field for why /responses gets a warning instead.
+                payload["chat_template_kwargs"] = _no_think
             if wire == "chat" and stream_on and url not in _STREAM_UNSUPPORTED:
                 payload["stream"] = True
                 if _is_local_url(url):

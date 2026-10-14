@@ -1252,6 +1252,26 @@ On the pre-fix build these helpers do not exist, so every check must come back r
             got("...and the fact is PERSISTED across a restart",
                 lambda: fb._wire_for(chat_url), lambda v: v == "responses")
 
+            # ---- llm.no_think rides the CHAT wire only (BUG-31) -------------------
+            # The default's comment said "sends enable_thinking: false"; the field is a
+            # template switch, sent on the chat body only - on /responses the setting
+            # used to be dropped in silence.
+            _saved_nt = fb.CONFIG["llm"].get("no_think")
+            try:
+                fb.CONFIG["llm"]["no_think"] = True
+                got("no_think asks the template to skip the think block on the chat wire",
+                    lambda: fb._no_think_field("chat"),
+                    lambda v: v == {"enable_thinking": False})
+                got("...and is NOT put on a /responses body (no proven field there)",
+                    lambda: fb._no_think_field("responses"),
+                    lambda v: v is None)
+                fb.CONFIG["llm"]["no_think"] = False
+                got("with llm.no_think off, the field is not sent anywhere",
+                    lambda: fb._no_think_field("chat"),
+                    lambda v: v is None)
+            finally:
+                fb.CONFIG["llm"]["no_think"] = _saved_nt
+
             if FAILS:
                 print("\n%d FAILED: %s" % (len(FAILS), "; ".join(FAILS)))
                 return 1
