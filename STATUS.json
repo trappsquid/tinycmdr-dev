@@ -3044,10 +3044,10 @@
     {
       "id": "ask-waiting-status",
       "title": "status_text's WAITING half read a dispatcher key nothing installs",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "23061b5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "status_text's ask_user line read CONFIG[\"_dispatcher\"] in its WAITING branch - a key nothing ever installs - so _pending was always None and a chat lane never named the parked question while the terminal /status did. Fixed 2026-10-14 (23061b5): it reads _ask_user_pending(), the same source the terminal status uses.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3055,10 +3055,10 @@
     {
       "id": "pwsh-quote-rules",
       "title": "the PowerShell quote scan treated backslash as a quote escape",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "926250e",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "_pwsh_chain_and treated a backslash as a quote escape inside PowerShell strings, but PowerShell escapes with the backtick and only inside double quotes: the closing quote of a trailing-slash path read as escaped, the scan stayed inside the string and the && was never translated into the PS 5.1 ParserError. Fixed 2026-10-14 (926250e): backtick-aware string scanning; trailing-backslash path, single-quote body and backtick-escaped quote all translate.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3066,10 +3066,10 @@
     {
       "id": "event-outcome-verdicts",
       "title": "the event log counted every non-ERROR result as ok",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "fe5ecf1",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "_event_outcome answered ok=True for every tool result that was not literally an ERROR: TIMEOUT, BLOCKED, DECLINED, STOPPED, REFUSED, NOT EXECUTED and NOT RE-EXECUTED read as fine in the session event log - the field the rework question reads. Fixed 2026-10-14 (fe5ecf1): the same verdict prefixes the result cards use.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3077,10 +3077,10 @@
     {
       "id": "field-note-gap-formats",
       "title": "the field-note gap:N parse demanded seconds while the recorder writes minutes",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "5774e15",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The field-note recorder writes last at minute precision while match_field_notes parsed with seconds, so the gap:N parse raised ValueError on every read, last stayed 0.0, and a gap note fired on every matching failure as if no gap were set. Fixed 2026-10-14 (5774e15): both formats parse; a note inside its gap stays quiet and fires once the gap has passed.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3088,10 +3088,10 @@
     {
       "id": "telegram-drop-tombstone",
       "title": "TelegramDestination.drop renumbered the lines the reporter held by index",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "36bedeb",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "TelegramDestination.drop popped self.lines by index, so narrating_drop dropping the streamed draft renumbered every line behind it - and RunReporter (tool_ref, card_last, stream_ref) and the ask row keep raw indices, so a later update or _resolve_ask wrote into whatever slid forward. Fixed 2026-10-14 (36bedeb): the slot is tombstoned and _live_text filters it.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3099,10 +3099,10 @@
     {
       "id": "pwsh-unwrap-one-body",
       "title": "the redundant-wrapper unwrap mangled multi-statement PowerShell",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "be173b4",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The redundant-wrapper unwrap stripped any body whose first and last character were both quotes: a trailing statement after a quoted body became broken text, a piped tail was re-scoped, and backslash-escaped bodies were mangled. Fixed 2026-10-14 (be173b4): a PowerShell-semantics quote scan; anything that is not one quoted run leaves the whole line for PowerShell to parse.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3110,10 +3110,10 @@
     {
       "id": "window-probe-budget",
       "title": "a dark endpoint cost ~51.5s of window probes before the first request",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "d582749",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "With the endpoint dark and packets dropped, _detect_window walked all four metadata routes at the full 10s timeout, then slept 1.5s and retried - ~51.5s before the first chat request. Fixed 2026-10-14 (d582749): every metadata GET carries a 2.5s connect budget and a ConnectTimeout settles the host; a refused connection is instant and still gets the blip retry.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3121,10 +3121,10 @@
     {
       "id": "narration-reveal-vocabulary",
       "title": "a tool word in echoed prose revealed a hidden tool",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "194d388",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "_narration_tool_name matched any registered tool word inside an echo/printf, so output like `echo \"checking process list\"` revealed the hidden custom tool process - its schema then rode every request - and attached the narration hint. Fixed 2026-10-14 (194d388): a bare word counts only for core vocabulary; a hidden tool needs the narration shape (a snake_case name or a call-shaped body).",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3132,10 +3132,10 @@
     {
       "id": "search-files-resolver",
       "title": "search_files resolved against the process cwd",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1878564",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "tool_search_files resolved relative paths against the process cwd while read_file, write_file, edit_file and the shell resolve against BASE_DIR: a search of \".\" listed files the follow-up read answered \"does not exist\" for. Fixed 2026-10-14 (1878564): it goes through _tool_path, the one resolver.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3143,10 +3143,10 @@
     {
       "id": "pwsh-call-operators",
       "title": "PowerShell's dot-source and call operators were not guard keywords",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "d98d38e",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "PowerShell's dot-source and call operators (. and &) were not in the guard vocabulary, so `. { format D: }` and the quoted call form reached every token arm with the operator as the verb - the never tier and delete risk returned None, and the quoted form had no gate. Fixed 2026-10-14 (d98d38e): both words join _GUARD_KEYWORDS.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3154,10 +3154,10 @@
     {
       "id": "dump-modes",
       "title": "payload dumps were written at the umask's mode",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "d16f7b3",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "dump_payload wrote raw request payloads with the process umask (0644 measured) and created its directory with the default mode, while its docstring calls the folder sensitive. Fixed 2026-10-14 (d16f7b3): files and any created directory are 0600/0700; the payload stays unscrubbed on purpose.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3165,10 +3165,10 @@
     {
       "id": "address-classifier",
       "title": "addresses were judged by string prefix",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "896c6e8",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "_addr_is_local/_host_is_local judged by string prefix: the IPv4-mapped loopback ::ffff:127.0.0.1, IPv4/IPv6 link-local and zoned forms read as REMOTE, while a dotted literal bypassed the resolver. Fixed 2026-10-14 (4ccb92a): one ipaddress-based classifier for literals, resolved addresses and IPv6 forms. a4d9123 then corrected it to exactly RFC 1918 / ULA / loopback / link-local (ipaddress.is_private over-covers RFC 5737), and 896c6e8 reads the ranges off ip.packed so no address literal ships.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3176,10 +3176,10 @@
     {
       "id": "shell-body-both-launches",
       "title": "the auto-background path lost the UTF-8 lever and strict mode",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "b9d1ee1",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "tool_shell's blocking path prepended the console UTF-8 lever and Set-StrictMode to the PowerShell body while the auto-background path and drop-in spawns ran the command translation alone, so on Windows every command past auto_background_seconds lost both. Fixed 2026-10-14 (b9d1ee1): both paths come through _shell_argv/_windows_pwsh_body; POSIX stays bash -c.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3187,10 +3187,10 @@
     {
       "id": "windows-quit-walk",
       "title": "the Windows ancestor walk stopped after one hop",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "974f603",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "_ancestor_pids stopped after os.getppid() on Windows, so tinycmdr quit's sweep spared one level: a grandparent whose command line named the install folder (an interactive cmd.exe opened there, a ps1 launcher) was killed while the operator typed in it. Fixed 2026-10-14 (974f603): a Toolhelp32 snapshot parent map (stdlib ctypes, one snapshot), falling back to the single hop when it fails.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3198,10 +3198,10 @@
     {
       "id": "no-think-wire",
       "title": "llm.no_think was dropped in silence on the /responses wire",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4de04be",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "llm.no_think sends chat_template_kwargs only on the chat body; on the /responses wire the setting was dropped in silence while the default's comment claimed it \"sends enable_thinking: false\". Fixed 2026-10-14 (4de04be): _no_think_field returns the kwargs on the chat wire and warns once on the /responses wire (the field was never proven there).",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3209,10 +3209,10 @@
     {
       "id": "memory-reason-scrubbed",
       "title": "the memory deprecate/forget reason reached the log unscrubbed",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "9a4570f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "tool_memory's deprecate/forget reason reached memory/log.md and the reply unscrubbed and unbounded while every other field was scrubbed; a pasted secret rode the log file and a huge reason broke the log's at-most-2x-64k size claim. Fixed 2026-10-14 (9a4570f): one scrub, then a 400-char bound.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3220,10 +3220,10 @@
     {
       "id": "responses-stream-keying",
       "title": "a fragment without output_index merged parallel streamed calls",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "eeab783",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A function_call item announces its name on response.output_item.added while its argument fragments carry only item_id, and the adapter threw item_id away: a delta without output_index fell to _stream_chat's last-opened slot, so two parallel /responses calls interleaved into one garbled call (or split one across an empty-name and an empty-arguments slot). Fixed 2026-10-14 (eeab783): the adapter records each item's announced slot (index and call_id) and stamps every fragment with it.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3231,10 +3231,10 @@
     {
       "id": "wrapup-session-key",
       "title": "the forced wrap-up omitted session_key",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "2c5d9b5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The forced final-report call left session_key off _payload/_chat, so _cache_key_for dropped prompt_cache_key on the largest call of the run (sticky routing lost) and the envelope was computed for an anonymous caller. Fixed 2026-10-14 (2c5d9b5): both calls carry the session.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3242,10 +3242,10 @@
     {
       "id": "fence-parity-cut",
       "title": "the fence-closing cut did not re-read parity after the backoff",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "0eef3c7",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The fence-parity test ran at the pre-backoff cut and was never re-read: when the backoff moved the cut back above the opening fence the prefix was balanced, yet the code still appended a closing fence and prepended an opening one - an empty fence pair at the boundary, every later marker shifted by one. Fixed 2026-10-14 (0eef3c7): parity is re-read at the cut that is emitted.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3253,10 +3253,10 @@
     {
       "id": "result-claim-class",
       "title": "the path class in the measured-value detector swallowed the alternation",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "8cef622",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "In the raw string, one backslash escaped the closing bracket inside the path class, so the class stayed open across the alternation and matched any 2-4 letter word: the \"attached to something on this box\" gate was satisfied by short words like 'in', 'are', 'ed', and ordinary prose beside a unit word fired the fabrication scold. Fixed 2026-10-14 (8cef622): both branches carry the escaped class.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3264,10 +3264,10 @@
     {
       "id": "batch-window-sized",
       "title": "the tool batch's window was unrelated to the calls it held",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "00bf6ac",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The batch's window was shell_timeout+grace+30 whatever the batch held, so a delegate batch (up to subagent_timeout_seconds per child) or a shell call with a longer timeout was declared hung while its workers were inside their legitimate deadlines; on elapse, shutdown(wait=False) cancelled only queued futures and running workers kept going unsupervised. Fixed 2026-10-14 (00bf6ac): the window is the calls' own ceiling times the worker waves, and elapse sets a batch cancel the workers' ctx reads.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3275,10 +3275,10 @@
     {
       "id": "fuzzy-edit-indent",
       "title": "a fuzzy edit spliced the block at the anchor's indentation",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "6a22239",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A fuzzy match spliced new_string as typed, at the anchor's indentation: a dedented old_string put a 4-space block inside an 8-space method - a Python/YAML syntax error, paid with a repair turn. Fixed 2026-10-14 (6a22239): the new block is re-based onto the disk's first matched line before the splice.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3286,10 +3286,10 @@
     {
       "id": "reasoning-verdict-stands",
       "title": "the auto-learn overwrote a 400 verdict about the reasoning field",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "ff2c600",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The retry after a reasoning 400 is answered with reasoning_content again, and the auto-learn re-taught \"on\" unconditionally - flipping the endpoint's own \"unsupported\" verdict back and paying the echo 400 on every turn, forever. Fixed 2026-10-14 (ff2c600): only a first observation teaches; a recorded verdict (off, none) stands until the endpoint says otherwise, and llm.replay_reasoning=always stays the override.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3297,10 +3297,10 @@
     {
       "id": "config-reload-agent",
       "title": "the running agent kept its construction-time endpoint and key",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "d530fb9",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "_config_reload_live swapped CONFIG but never the Agent's startup snapshot, so a live config set of llm.base_url or llm.api_key left the process calling the old endpoint with the old key until restart. Fixed 2026-10-14 (d530fb9): the reload re-derives llm_url and the auth header, the same derivation Agent.__init__ uses.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3308,10 +3308,10 @@
     {
       "id": "secret-name-sweep",
       "title": "PGPASSWORD-style names never joined the secret sweep",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "a0eeb01",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The name test required ^ or _ before the keyword, so PGPASSWORD-style names never joined the sweep and env/printenv printed the value into the prompt, the log and the chat. Fixed 2026-10-14 (a0eeb01): token/password/passwd/secret/credential/apikey match at the END of a name with or without a separator; key/pat keep the separator.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3319,10 +3319,10 @@
     {
       "id": "direct-script-run",
       "title": "a directly executed script was read by no tier",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "b7aaf1e",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The run-time script check looked only past an interpreter prefix (bash x.sh), so a script the run had just written was read by no tier when executed directly or named inside a payload. Fixed 2026-10-14 (b7aaf1e): a command with no interpreter contributes its first word (argv[0]); a payload contributes its first word; the mtime rule still exempts the box's own files.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3330,10 +3330,10 @@
     {
       "id": "process-query-path",
       "title": "the process query treated the folder as a pattern and dropped powershell rows",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "02a12bd",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The POSIX query interpolated the install folder into a single-quoted sh -c line and handed it to grep as a regular expression: a path with a bracket or a quote matched nothing (or broke the shell). Windows dropped every row containing \"powershell\", hiding a legitimate child. Fixed 2026-10-14 (02a12bd): the folder rides grep -Fi as a positional argument, and the Windows query excludes its own shell by PID.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3341,10 +3341,10 @@
     {
       "id": "memory-fields-reachable",
       "title": "memory's declared fields and trust tier had no door",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "195a082",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "tool_memory had no way to record a verification - every concept stayed \"unverified\" unless the YAML was hand-edited - and the schema declared six of the fields the handler reads, which a grammar-constrained engine cannot emit. Fixed 2026-10-14 (195a082): a verify action appends a machine entry (newest 16 kept, never human:*), and the schema declares type/description/tags/stale_after/sources/supersedes. docs/memory.md carries the re-measured rent (static 4,740).",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3352,10 +3352,10 @@
     {
       "id": "web-download-fallback",
       "title": "download links 404'd once a run aged out of the table",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "f2a4b28",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "/api/download resolved an offered file only through the in-memory WEB_RUNS table, so a transcript link 404'd as soon as its run aged out while the record and the file were both on disk. Fixed 2026-10-14 (f2a4b28): the handler falls back to the run log - the record the transcript itself is rendered from.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3363,10 +3363,10 @@
     {
       "id": "responses-json-body",
       "title": "a JSON body on the /responses wire was discarded and re-bought",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "7faf2aa",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A server that ignores stream:true answers with the whole Responses body as one JSON line; the adapter dropped every non-data line, so _stream_chat called the stream empty and the caller discarded a valid, already-generated answer and re-bought it. Fixed 2026-10-14 (7faf2aa): the body becomes the one terminal chat chunk the accumulator reads.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3374,10 +3374,10 @@
     {
       "id": "span-pop-guard",
       "title": "a late span unwind deleted a newer run's id",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "f15eb54",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A wedged run the watchdog abandons can unwind long after a newer run took the session key, and _RunSpan.__exit__ popped _EVENT_RUN[key] unconditionally - deleting the newer run's id so its events logged without a run. Fixed 2026-10-14 (f15eb54): the pop checks the id this span wrote.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3385,10 +3385,10 @@
     {
       "id": "mixed-delete-count",
       "title": "replace_all deleted only whole-line copies while reporting all",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "303fa8e",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The whole-line deletion shape (the line and its newline) was taken whenever a whole-line match existed anywhere, so with replace_all a substring occurrence elsewhere survived while the reply claimed every occurrence was replaced. Fixed 2026-10-14 (303fa8e): the shape is taken only when EVERY occurrence is a whole line; otherwise the plain replace runs and the reported count is what happened.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3396,10 +3396,10 @@
     {
       "id": "lock-interrupt-safety",
       "title": "an interrupt in the file-lock wait leaked a descriptor and froze the rlock",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "3f3cdf0",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "OperatorStop/KeyboardInterrupt are BaseException: raised inside _ip_take nothing caught them, so the RLock stayed held (a with whose __enter__ raised never runs __exit__, and every later writer to that path deadlocked for the process's life) and the descriptor opened for the lock leaked. Fixed 2026-10-14 (3f3cdf0): the take closes its fd before re-raising, and _FileLock.__enter__ releases the rlock.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3407,10 +3407,10 @@
     {
       "id": "ipv6-url-brackets",
       "title": "IPv6 hosts printed unbracketed URLs",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1f6d1ff",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The bind side accepts an IPv6 web.host, but a2a_base_url, _web_base_urls and web_busy_note formatted the literal into a URL authority without brackets (http://::1:8790), which browsers and HTTP clients reject. Fixed 2026-10-14 (1f6d1ff): one _url_host helper brackets \":\"-bearing hosts and every format site uses it.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3418,10 +3418,10 @@
     {
       "id": "editfile-newline-majority",
       "title": "one stray CRLF flipped a whole file",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "dc5de8f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "edit_file chose the file's newline convention by PRESENCE of a CRLF, so one stray CRLF line flipped every line of a mostly-LF file to CRLF and a one-line edit became a whole-file diff (and the reverse for a mostly-CRLF file holding one LF). Fixed 2026-10-14 (dc5de8f): the majority of the file's line endings decides; a tie stays LF.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
@@ -3429,10 +3429,10 @@
     {
       "id": "web-slot-freed",
       "title": "a finish that raised left the checkpoint slot behind",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "95ea510",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A run's checkpoint-throttle slot was cleared only on the finish path's last line: a reporter that raised between done=True and the pop left an entry, and eviction never cleared slots either. Fixed 2026-10-14 (95ea510): the pop sits in a finally, and _web_register_run clears the slot of every run it drops.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
