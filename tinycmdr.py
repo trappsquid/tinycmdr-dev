@@ -17348,12 +17348,17 @@ def _event_args(args):
 def _event_outcome(name, output):
     """ok / exit code / size / digest / spill for a tool result.
 
-    Read from what the harness already knows: a refused or failed call comes back as an
-    "ERROR:" result, and a command's exit code is in its own output. This is the field the
-    rework question needs - it is what the log has never recorded.
+    Read from what the harness already knows: a failed call comes back under one of the
+    harness's verdict prefixes (_FAILURE_MARKERS - ERROR, BLOCKED, DECLINED, TIMEOUT,
+    STOPPED), a call the gates answered without running under _NOT_RUN_PREFIXES
+    (REFUSED, NOT EXECUTED, NOT RE-EXECUTED, STOP.), and a command's exit code is in its
+    own output. This is the field the rework question needs - it is what the log has
+    never recorded. Checking "ERROR" alone logged every timed-out, blocked, declined,
+    deduped and stopped call as ok=True (BUG-17).
     """
     text = output or ""
-    ok = not text.lstrip().startswith("ERROR")
+    head = text.lstrip()
+    ok = not head.startswith(_FAILURE_MARKERS) and not head.startswith(_NOT_RUN_PREFIXES)
     code = None
     m = re.search(r"exit_code=(-?\d+)", text)
     if m:

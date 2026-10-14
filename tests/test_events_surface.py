@@ -167,6 +167,22 @@ to be asserted here or it is a hope.
         check("outcome: exit 0 is ok", ok_out["ok"] and ok_out["exit"] == 0, ok_out)
         check("outcome: a nonzero exit is not ok", not bad_out["ok"] and bad_out["exit"] == 7, bad_out)
         check("outcome: a refused call is not ok", not err_out["ok"], err_out)
+        # ...and the WHOLE verdict set, not just "ERROR": a call that was blocked, timed
+        # out, declined, deduped or stopped never finished its job, and this ok field is
+        # the telemetry the rework question reads (BUG-17).
+        for verdict in ("TIMEOUT after 60s — the command was killed",
+                        "BLOCKED: this command is refused by is_blocked",
+                        "DECLINED: the operator declined",
+                        "REFUSED: tool 'x' is denied by agent.tool_policy",
+                        "STOPPED by the operator (`/tinycmdr stop`)",
+                        "NOT EXECUTED: the operator stopped the run while this batch waited",
+                        "NOT RE-EXECUTED: you already ran this identical call",
+                        "STOP. Edits have been a byte-identical no-op 3 times in a row"):
+            _o = fb._event_outcome("shell", verdict)
+            check("outcome: %r is not ok" % verdict.split()[0], not _o["ok"], _o)
+        _o = fb._event_outcome("read_file", "line one mentions NOT EXECUTED in prose")
+        check("outcome: a verdict word inside content is not a failed call",
+              _o["ok"], _o)
         check("outcome: the size and digest are recorded",
               ok_out["bytes"] > 0 and len(ok_out["digest"]) == 12, ok_out)
 
