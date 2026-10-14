@@ -2446,6 +2446,19 @@ def test_payload_dump_is_off_unless_configured(tmp=None):
                   body)
             check("dump: session key is filename-safe", ":" not in files[0].name,
                   files[0].name)
+            # BUG-26: the dump is where secrets can land, so its files and any directory
+            # it creates must not be group/other-readable.
+            if os.name != "nt":
+                _mode = files[0].stat().st_mode & 0o777
+                check("dump: a payload file is 0600, not world-readable",
+                      _mode == 0o600, oct(_mode))
+        _sub = d / "sub"
+        fb.CONFIG["agent"]["debug_dump_dir"] = str(_sub)
+        fb.dump_payload({"model": "main"}, "mm-test")
+        if os.name != "nt":
+            _dmode = _sub.stat().st_mode & 0o777
+            check("dump: a directory it creates is 0700",
+                  _dmode == 0o700, oct(_dmode))
         # a bad path must not take the run down with it. The path is a FILE used as a
         # directory (ENOTDIR everywhere) rather than r"Z:\nope\<bad>|path": on POSIX that
         # is a RELATIVE name, so the dump created `Z:\nope\<bad>|path/` inside the checkout
@@ -2462,7 +2475,10 @@ def test_payload_dump_is_off_unless_configured(tmp=None):
         except Exception as exc:
             check("dump: bad path is swallowed", False, repr(exc))
         for f in d.glob("*"):
-            f.unlink()
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink()
         d.rmdir()
     finally:
         fb.CONFIG["agent"].clear()

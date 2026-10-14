@@ -19950,14 +19950,19 @@ def dump_payload(payload, label="chat", note=""):
         return
     try:
         target = Path(os.path.expandvars(d))
-        target.mkdir(parents=True, exist_ok=True)
+        # 0o700/0o600: this is the one artifact that carries the payload raw, and the
+        # docstring already says to treat the folder as sensitive - the files should not
+        # also be group/other-readable on the box (BUG-26). os.open's mode is the
+        # creation mode, and a umask can only clear bits a 0600 request never set.
+        target.mkdir(parents=True, exist_ok=True, mode=0o700)
         n = len(list(target.glob("*.json"))) + 1
         stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{n:03d}"
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(label))
         name = f"{stamp}-{safe}{note}.json"
         # newline="": a dump is diffed against the next run's, and the platform's
         # newline translation would rewrite every line on Windows
-        with (target / name).open("w", encoding="utf-8", newline="") as f:
+        fd = os.open(target / name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(json.dumps(payload, indent=1, ensure_ascii=False))
     except Exception as exc:
         # warn, not debug: a dump that silently does nothing is worse than no
