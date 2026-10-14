@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.14] - 2026-10-13
+
+### Fixed
+- **Strict chat templates get role-alternating payloads:** the harness's own user-role messages (state block, carry, tool images, nudges) could ride back to back, which the Mistral/Gemma/Llama-3 jinja templates answer with 400/500; the wire view joins adjacent user messages while the stored history is untouched (tests/test_retry_surface.py).
+- **An in-flight turn's reasoning replays whole:** the reasoning text was truncated before it was stored, so the turn the server had just generated replayed a different token sequence and the prefix KV-cache missed from the cut onward on every tool round; history keeps the full text and only completed turns take the cap (tests/test_retry_surface.py).
+- **Synthetic tool-call ids fit strict engines:** every id the harness invents - an inline-parsed call, a legacy `function_call`, a repaired duplicate, one the model left out - takes the nine-alphanumeric shape Mistral-class engines require instead of drawing a 400 one failover away (tests/test_envelope.py, tests/test_stall.py).
+- **JSON `<tool_call>` blocks run instead of being posted:** templates that put a JSON object inside the tag (Qwen3, Hermes, Llama-3.1 through llama.cpp/Ollama) left the raw call in chat and spent the turn on the use-the-interface nudge; both shapes parse, strip and count as a whole reply (tests/test_stall.py).
+- **A thinking budget respects the call's output cap:** Anthropic-style APIs reject `budget_tokens` at or above `max_tokens` and the level table could exceed the envelope's cap, and a 400 naming the reasoning field was fatal; the budget is clamped to leave 1024 output tokens and dropped when the cap cannot hold the floor, and `thinking`/`reasoning`/`reasoning_effort` join the drop-and-retry field list (tests/test_protocol_surface.py).
+- **Screenshots ride the `/responses` wire:** an attached image was silently dropped when an endpoint used the OpenAI Responses API; image parts become `input_image` items now (tests/test_stream_surface.py).
+- **Compaction's evictions stick:** a cut removed old exchanges from the request but not from the session file, so every later run re-compacted the same span and re-archived it to the transcript; the history loses exactly what the payload lost, marker included (tests/test_spill_state_surface.py).
+- **A cleared model override stays cleared:** `/model default` (and `/reasoning auto`) wrote the removal nowhere and the next load resurrected the disk copy, because the touched-keys map was never instantiated (tests/test_state_surface.py).
+- **Quoted mentions no longer trip the confirm gate:** `git commit -m "fix taskkill handling"`, `grep "stop-service"` and `echo "diskpart"` raised the operator's question - a flat DECLINED with nobody at the door; the confirm tier now reads the command that would actually run, keeping quotes only where the command executes that text (tests/test_guard_battery.py).
+- **A `#` inside a Python string is no longer a comment:** the comment stripper cut at the first hash anywhere on a line, so code after a string containing `#` reached the confirm, cost and endpoint guards with its dangerous half deleted; it walks real string state now, comments still stripped (tests/test_guard_battery.py).
+- **The bot's own identity files take the write question:** `soul.md`, `config.json`, `.env` and `jobs.json` join `notes.md` on the surface gate for both file doors and the shell door, with whole-name matching so `prod.env` and `notes.mdx` stay someone else's files (tests/test_guard_battery.py).
+- **Token estimates count digits:** timestamp/pid logs, ps/netstat tables, hex dumps and numeric JSON under-counted by 18-58% against a real tokenizer - compacting late, at the fullest moment - and numeric density now picks its own divisor (measured against o200k_base; tests/test_cost_surface.py).
+- **MCP servers spawn UTF-8, and a failed handshake is reaped:** the stdio pipes decoded with the locale codec (one UTF-8 line could kill the reader on Windows) with no hidden-console flag, and a server that never answered the handshake stayed alive with its pipes open; the spawn names utf-8/replace, stdin closes on failure, and a child still alive past the window is terminated (tests/test_protocol_surface.py).
+- **`/save` scrubs and writes atomically:** a secret pasted into chat reached the export in the clear at the umask's mode; the export goes through the same scrub and atomic 0600 write as every state file (tests/test_state_surface.py).
+
 ## [1.1.13] - 2026-10-13
 
 ### Fixed

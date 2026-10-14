@@ -2886,6 +2886,160 @@
       },
       "detail": "The auto-open's only brake was the six-hour per-token+port window, and on Windows the GUI check is true everywhere: nothing asked whether a person was at the machine, so every supervised or service relaunch past the window - the Windows supervisor's pythonw child, launchd, a logon task - opened one more tab into the operator's session, one per /update in a remote-only stretch. The open now requires an attached console and refuses under TINYCMDR_SUPERVISED=1; the window and the --web force stay for console starts. Falsified red on the v1.1.12 build (tests/test_webui.py: a no-console start and a supervised forced start both opened).",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "adjacent-user-messages",
+      "title": "strict templates 400/500 on the harness's own consecutive user messages",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "39e6efd",
+        "expect": "untagged"
+      },
+      "detail": "Real payloads carried two or three consecutive role:\"user\" messages - the state block before the operator's message, the carry block, tool images and nudges each standing alone (measured ['system','user','user'] on a run's first call) - which Mistral/Gemma/Llama-3 jinja templates and Anthropic's API answer with 400/500. Fixed 2026-10-13 (39e6efd): the wire view coalesces adjacent user messages (text with a blank line, parts lists for multimodal) while the stored history keeps its shape.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "inflight-reasoning-replay",
+      "title": "a sliced reasoning replay made the server's prefix cache miss on every tool round",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "5db94bd",
+        "expect": "untagged"
+      },
+      "detail": "The captured reasoning text was truncated to replay_reasoning_max_chars (4000) before storage, so the turn the server had JUST generated replayed a different token sequence than its cache held - the <think> cut shifts every later token, and the prefix KV-cache missed from the cut onward on every tool round of every thinking model. Fixed 2026-10-13 (5db94bd): history keeps the full text and the send-time policy replays the turn still in flight whole (boundary: the last operator user message) while completed turns take the cap.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "tool-call-id-shape",
+      "title": "synthetic tool-call ids violated the nine-alphanumeric shape strict engines demand",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "211ef0d",
+        "expect": "untagged"
+      },
+      "detail": "Strict engines (Mistral/Devstral/Codestral, cloud and their local jinja templates) answer 400 'Tool call id must be a-z, A-Z, 0-9, with a length of 9'; every id the harness invented broke it - inline0 (repeated per inline turn), call_<epoch>_<i>, call_legacy_0 and the _dup1 repair suffix - so an inline parse or a duplicate repair drew a 400 one failover away from working. Fixed 2026-10-13 (211ef0d): _mint_tool_call_id gives all four synthetic sites the one shape.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "json-tool-call-parsing",
+      "title": "a JSON <tool_call> body was posted raw instead of executed",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "d74f2b5",
+        "expect": "untagged"
+      },
+      "detail": "parse_inline_tool_calls knew only the qwen-coder <function=...> XML shape, so the JSON object Qwen3/Hermes-2/3/Llama-3.1 templates leak inside <tool_call> parsed to no calls: the raw call reached chat and the turn went to the use-the-interface nudge instead of running the tool. Fixed 2026-10-13 (d74f2b5): the JSON form (plain, nested arguments, wrapped {\"function\": {...}}) parses, strips and counts as a whole reply.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "thinking-budget-cap",
+      "title": "a thinking budget at or above max_tokens 400ed, and the 400 was fatal",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "a2ddda6",
+        "expect": "untagged"
+      },
+      "detail": "apply_reasoning set thinking.budget_tokens from the level table (10000 at high) without looking at the call's max_tokens - the envelope's clamped reply, 4096 on a 16k window and less when max_call_seconds bites - and Anthropic-style APIs reject budget_tokens >= max_tokens, so every reasoned call was a guaranteed 400; a 400 naming 'thinking' then killed the endpoint because the optional-field drop list carried no reasoning fields. Fixed 2026-10-13 (a2ddda6): the budget is clamped to leave 1024 output tokens (dropped under the floor) and thinking/reasoning/reasoning_effort are dropped and retried once.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "responses-wire-images",
+      "title": "images were silently dropped on the /responses wire",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "f053f56",
+        "expect": "untagged"
+      },
+      "detail": "responses_payload ran user content through _delta_text, which extracts text parts only: a screenshot attached by a tool (or an uploaded image) was deleted from the request with no note, so the model was told to look at something the payload did not carry. Fixed 2026-10-13 (f053f56): list content maps text parts to input_text and image parts to input_image with the string image_url the Responses wire takes.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "compaction-eviction-stick",
+      "title": "a compaction cut stayed in the session file and was re-compacted every run",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "dd7b3cd",
+        "expect": "untagged"
+      },
+      "detail": "The run's message list is built FROM self.histories[key]; a cut dropped blocks from the list only, so the next run rebuilt the same oversized history, compacted the same span again and re-wrote it to the transcript (measured pre-fix: the first exchange archived twice and the second cut never reached the next exchange) while the model kept answering from history the payload no longer matched. Fixed 2026-10-13 (dd7b3cd): a real cut evicts the same objects from the session history by identity and leaves the elision marker at its front.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "cleared-override-resurrects",
+      "title": "/model default resurrected on the next load",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "566856a",
+        "expect": "untagged"
+      },
+      "detail": "_OverrideMap sat below AGENT = Agent() in the file and was never instantiated - Agent.__init__ filled plain dicts - so _save_overrides read an empty touched set and merged the disk copy straight back: a cleared per-session model or reasoning override came back at the next start (measured pre-fix: the cleared entry present again after save). Fixed 2026-10-13 (566856a): the class moved above Agent and both override maps are built with it.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "confirm-tier-quoted-echo",
+      "title": "quoted mentions of machine verbs raised the confirm question",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "cf51a1e",
+        "expect": "untagged"
+      },
+      "detail": "_confirm_hit matched the raw text while is_blocked carefully stripped quoted arguments, so git commit -m \"fix taskkill handling\", grep -rn \"stop-service\" and echo \"diskpart\" all raised the operator's question - a flat DECLINED on a lane with nobody to answer. Fixed 2026-10-13 (cf51a1e): the confirm tier reads the same subject is_blocked reads (quotes stripped unless the command hands that text to something that executes it).",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "python-comment-strip",
+      "title": "a # inside a Python string hid code from the guards",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "86b3d22",
+        "expect": "untagged"
+      },
+      "detail": "_strip_py_comments was a quote-blind # regex: a # inside a string literal started a comment, so x = \"#\"; subprocess.run(\"shutdown /r /t 0\", shell=True) reached the confirm tier, code_cost_risk and the endpoint gate with its dangerous half deleted. Fixed 2026-10-13 (86b3d22): the stripper walks real string state (single, double, triple, raw prefixes, escapes) and still strips true comments.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "identity-files-write-gate",
+      "title": "a model write to soul.md, config.json, .env or jobs.json was unasked",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "c6c1467",
+        "expect": "untagged"
+      },
+      "detail": "The surface gate's file list held notes.md, atlas.md, field-notes*.md and memory/ only: soul.md (which heads every system prompt), config.json (the guard lists and mcp_servers), .env (every secret) and jobs.json (every scheduled job) passed write_file, edit_file and the shell door with no question - the shape indirect injection reaches for. Fixed 2026-10-13 (c6c1467): all four are gated on both doors, and the shell alternation carries whole-name boundaries so prod.env and notes.mdx no longer match.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "digit-token-estimate",
+      "title": "token estimates under-counted digit-heavy payloads by up to 58%",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "92d2e6f",
+        "expect": "untagged"
+      },
+      "detail": "est_tokens counted no digits, so timestamp/pid logs, ps/netstat tables, hex dumps and numeric JSON fell through to the 3.0/3.4-char divisors and under-counted by 18-58% against o200k_base (measured 0.42-0.82x of real) - the direction that fires compaction late, at the fullest moment. Fixed 2026-10-13 (92d2e6f): numeric-density arms (0.22/0.33/0.40+hex/0.60 of the sample) land those classes at 0.90-1.07x; prose and source estimates are unchanged.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "mcp-spawn-reap",
+      "title": "MCP stdio pipes decoded with the locale codec and a failed handshake was never reaped",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "917b026",
+        "expect": "untagged"
+      },
+      "detail": "The stdio spawn used text=True with no encoding - the pipes decoded with the process locale (cp1252 on a Windows service), so one UTF-8 line killed the reader thread - and no hidden-console flags under pythonw; a server that never answered the handshake stayed in _MCP_PROCS with its pipes open for ever, the fail window only answering the next call from memory. Fixed 2026-10-13 (917b026): encoding utf-8/errors replace plus hidden_proc_kwargs, stdin closed on a failed handshake (EOF is the polite exit), and a child still alive past the window terminated so the next call starts fresh.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "save-export-scrub",
+      "title": "the /save export wrote secrets in the clear at the umask's mode",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1aabc28",
+        "expect": "untagged"
+      },
+      "detail": "session_export used a plain open(w): a secret the operator pasted into chat reached sessions/export-<ts>.md in the clear, the mode came from the umask (0644 measured) and a crash mid-write left a truncated file. Fixed 2026-10-13 (1aabc28): the export goes through atomic_write_text(scrub(...)) like every other state write - redacted and 0600.",
+      "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     }
   ]
 }
