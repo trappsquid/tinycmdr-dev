@@ -10365,28 +10365,39 @@ def _ip_take(key):
                 pass
         fd = os.open(str(_ip_lock_file(key)),
                      os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
-        if os.name != "nt":
+        try:
+            if os.name != "nt":
+                try:
+                    # os.open's mode is filtered through the umask; another uid needs the
+                    # file writable (flock does not, but the next open with O_RDWR does).
+                    if stat.S_IMODE(os.fstat(fd).st_mode) != 0o666:
+                        os.fchmod(fd, 0o666)
+                except OSError:
+                    pass
+            deadline = time.time() + _IP_TIMEOUT
+            while True:
+                if _ip_try(fd):
+                    break
+                if time.time() >= deadline:
+                    log.error("waited %ds for the lock on %s: another process is holding it "
+                              "(or the lock file is on a filesystem without flock). Writing "
+                              "anyway; the file itself is still replaced atomically.",
+                              int(_IP_TIMEOUT), Path(key).name)
+                    break
+                time.sleep(_IP_POLL)
+        except BaseException:
+            # Between the open and `_IP_FDS[key] = fd` nothing owns the descriptor, and
+            # OperatorStop/KeyboardInterrupt are BaseException, so no handler below
+            # catches them: an interrupt mid-poll leaked one fd per take
+            # (A-2026-10-14-52). Close, then let the stop travel.
             try:
-                # os.open's mode is filtered through the umask; another uid needs the
-                # file writable (flock does not, but the next open with O_RDWR does).
-                if stat.S_IMODE(os.fstat(fd).st_mode) != 0o666:
-                    os.fchmod(fd, 0o666)
+                os.close(fd)
             except OSError:
                 pass
+            raise
     except OSError as e:
         log.debug("inter-process lock unavailable for %s: %s", key, e)
         return
-    deadline = time.time() + _IP_TIMEOUT
-    while True:
-        if _ip_try(fd):
-            break
-        if time.time() >= deadline:
-            log.error("waited %ds for the lock on %s: another process is holding it "
-                      "(or the lock file is on a filesystem without flock). Writing "
-                      "anyway; the file itself is still replaced atomically.",
-                      int(_IP_TIMEOUT), Path(key).name)
-            break
-        time.sleep(_IP_POLL)
     with _IP_FDS_GUARD:
         _IP_FDS[key] = fd
 
@@ -10441,14 +10452,23 @@ class _FileLock:
 
     def __enter__(self):
         self.rlock.acquire()
-        if self.depth == 0:
-            try:
-                _ip_take(self.key)
-            except Exception:                                    # noqa: BLE001
-                # The RLock accounting must stay balanced whatever happens here: a lock
-                # that wedges the process is the failure mode this file keeps paying for.
-                log.warning("inter-process lock failed for %s", self.key, exc_info=True)
-        self.depth += 1
+        try:
+            if self.depth == 0:
+                try:
+                    _ip_take(self.key)
+                except Exception:                                    # noqa: BLE001
+                    # The RLock accounting must stay balanced whatever happens here: a lock
+                    # that wedges the process is the failure mode this file keeps paying for.
+                    log.warning("inter-process lock failed for %s", self.key, exc_info=True)
+            self.depth += 1
+        except BaseException:
+            # OperatorStop and KeyboardInterrupt are BaseException, so nothing above
+            # caught them: the RLock is already held, __exit__ never runs for a with
+            # whose __enter__ raised, and every later writer to this path deadlocks
+            # on the frozen RLock for the rest of the process's life
+            # (A-2026-10-14-52). Release, then let the stop travel.
+            self.rlock.release()
+            raise
         return self
 
     def __exit__(self, *exc):

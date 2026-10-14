@@ -802,6 +802,82 @@ if ok and mode == "hold":
             print("  (this volume is case-SENSITIVE: the fold is graded by the check above)")
 
 
+    def test_an_interrupted_lock_take_releases_everything():
+        """OperatorStop/KeyboardInterrupt are BaseException: raised inside _ip_take they
+    were caught by nothing, so the RLock stayed held (every later writer to that path
+    deadlocked for the rest of the process's life) and the descriptor opened for the
+    lock leaked (A-2026-10-14-52)."""
+        import threading
+        fb = load()
+        lock = fb._FileLock(str(STAGE / "probe-interrupted.state"))
+        real_take = fb._ip_take
+
+        def stop_take(key):
+            raise fb.OperatorStop("stopped while waiting for the lock")
+
+        fb._ip_take = stop_take
+        raised = False
+        try:
+            try:
+                with lock:
+                    pass
+            except fb.OperatorStop:
+                raised = True
+        finally:
+            fb._ip_take = real_take
+        free = {"yes": False}
+
+        def probe():
+            got = lock.rlock.acquire(blocking=False)
+            free["yes"] = got
+            if got:
+                lock.rlock.release()
+
+        t = threading.Thread(target=probe, daemon=True)
+        t.start()
+        t.join(5)
+        check(raised and free["yes"],
+              "a stopped acquisition leaves the rlock free for the next writer",
+              (raised, free["yes"]))
+        with lock:
+            pass
+        check(lock.depth == 0, "and the lock is usable again, with balanced depth",
+              lock.depth)
+
+        # The descriptor half: interrupted between the open and its registration.
+        before = None
+        fd_dir = None
+        if os.name != "nt":
+            for d in ("/dev/fd", "/proc/self/fd"):
+                try:
+                    before = len(os.listdir(d))
+                    fd_dir = d
+                    break
+                except OSError:
+                    continue
+        if before is None:
+            print("  (no fd directory on this host: the descriptor half is not graded here)")
+            return
+
+        def exploding_try(fd):
+            raise fb.OperatorStop("stopped inside the poll loop")
+
+        real_try = fb._ip_try
+        fb._ip_try = exploding_try
+        raised_fd = False
+        try:
+            try:
+                fb._ip_take(str(STAGE / "probe-interrupted.state"))
+            except fb.OperatorStop:
+                raised_fd = True
+        finally:
+            fb._ip_try = real_try
+        after = len(os.listdir(fd_dir))
+        check(raised_fd and after <= before,
+              "an interrupted take closes the descriptor it opened",
+              (before, after, raised_fd))
+
+
     def main():
         stage()
         tests = [v for k, v in sorted(_ns.items()) if k.startswith("test_")]
