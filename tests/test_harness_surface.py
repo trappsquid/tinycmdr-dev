@@ -215,6 +215,23 @@ produces on a real box.
             stats({"flaky DNS": {"fired": 3, "last": "2026-10-01 10:00:00"}})
             check(fb.match_field_notes("ERROR: no such host: dns.lan") == [],
                   "`repeat: once` stays quiet after it has fired")
+            # `repeat: gap:N` reads the DAYS since `last` - and the recorder writes `last`
+            # at MINUTE precision while the check parsed with seconds, so the parse raised
+            # on every read and every gap note fired on every match (BUG-18). Both formats
+            # a stats file can hold suppress inside the gap and fire once it has passed.
+            notes.write_text("## slow blip\nmatch: no such host, name resolution\n"
+                             "scope: any\nnote: x.\nrepeat: gap:1\n", encoding="utf-8")
+            fb._FIELD_NOTES_CACHE["mtime"] = None
+            stats({"slow blip": {"fired": 1,
+                                 "last": time.strftime("%Y-%m-%d %H:%M")}})
+            check(fb.match_field_notes("ERROR: no such host: dns.lan") == [],
+                  "`repeat: gap:N` stays quiet inside the gap (the recorder's own format)")
+            stats({"slow blip": {"fired": 1,
+                                 "last": time.strftime(
+                                     "%Y-%m-%d %H:%M:%S",
+                                     time.localtime(time.time() - 2 * 86400))}})
+            got = fb.match_field_notes("ERROR: no such host: dns.lan")
+            check(len(got) == 1, "and fires again once the gap has passed", got)
 
             # A renamed or deleted entry must not leave a ghost tally - the
             # counters are keyed by title, and doctor's "never fired" list is a claim about the

@@ -5881,11 +5881,18 @@ def match_field_notes(text):
                         gap_days = float(repeat.split(":", 1)[1])
                     except ValueError:
                         gap_days = 0.0
-                    try:
-                        last = _dt.datetime.strptime(str(slot.get("last") or ""),
-                                                     "%Y-%m-%d %H:%M:%S").timestamp()
-                    except ValueError:
-                        last = 0.0
+                    # The recorder writes `last` at MINUTE precision ("%Y-%m-%d %H:%M");
+                    # parsing seconds only raised on every read, last stayed 0.0, and
+                    # every gap note fired on every match (BUG-18). Both formats a stats
+                    # file can hold are read.
+                    last = 0.0
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                        try:
+                            last = _dt.datetime.strptime(
+                                str(slot.get("last") or ""), fmt).timestamp()
+                            break
+                        except ValueError:
+                            continue
                     if gap_days > 0 and last and (time.time() - last) < gap_days * 86400:
                         continue
             out.append(e)
