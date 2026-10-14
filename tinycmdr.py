@@ -20497,17 +20497,57 @@ def _is_session_file(path):
     return not str(getattr(path, "name", path)).endswith(_SESSION_SIDECAR_SUFFIXES)
 
 
+class _OverrideMap(dict):
+    """Per-conversation model choices, remembering which keys THIS process set.
+
+    A save must not replace the file's whole map from this process's snapshot: measured
+    across two lanes, the web process's save dropped the bot's `/model` choice
+    (`{mattermost:chan-1: model-from-bot}` -> `{web:tab-2: model-from-web}`).
+    Only the keys in `touched` are written over the file; every other lane's key is left
+    alone. Loading goes through dict.update(), which is the C fast path and does NOT call
+    __setitem__, so a freshly loaded map is correctly "untouched".
+
+    This class sat BELOW `AGENT = Agent()` in the file and was never instantiated -
+    `Agent.__init__` filled plain dicts - so `_save_overrides` read `touched` from
+    nothing, and `/model default` (a pop) left the disk entry for every other lane to
+    resurrect on the next load. The class must be defined before the module-level
+    Agent() so __init__ can use it.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.touched = set()
+
+    def __setitem__(self, key, value):
+        self.touched.add(key)
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        self.touched.add(key)
+        super().__delitem__(key)
+
+    def pop(self, key, *default):
+        self.touched.add(key)
+        return super().pop(key, *default)
+
+    def clear(self):
+        self.touched.update(self.keys())
+        super().clear()
+
+
 class Agent:
     def __init__(self):
         self.histories = {}          # session_key -> list[message]
         self.locks = {}
         # session_key -> model name (via /model), reloaded from state.json so
         # a restart doesn't silently drop every conversation back to the
-        # config default
-        self.model_overrides = dict(_state().get("model_overrides") or {})
+        # config default. _OverrideMap, not dict: _save_overrides merges only the
+        # keys this process TOUCHED over the file's copy, and a cleared key (pop)
+        # must be in that set or the merge resurrects the disk entry.
+        self.model_overrides = _OverrideMap(_state().get("model_overrides") or {})
         # session_key -> reasoning level (via /reasoning), persisted the same way: a
         # restart must not silently drop a conversation back to `auto`.
-        self.reasoning_overrides = dict(_state().get("reasoning_overrides") or {})
+        self.reasoning_overrides = _OverrideMap(_state().get("reasoning_overrides") or {})
         self.last_usage = {}         # session_key -> token/time stats of last run
         self.live_usage = {}         # session_key -> stats of the run IN PROGRESS
         self.llm_url = CONFIG["llm"]["base_url"].rstrip("/") + "/chat/completions"
@@ -23923,36 +23963,6 @@ def restore_global_model():
     return prev, err
 
 
-class _OverrideMap(dict):
-    """Per-conversation model choices, remembering which keys THIS process set.
-
-    A save must not replace the file's whole map from this process's snapshot: measured
-    across two lanes, the web process's save dropped the bot's `/model` choice
-    (`{mattermost:chan-1: model-from-bot}` -> `{web:tab-2: model-from-web}`).
-    Only the keys in `touched` are written over the file; every other lane's key is left
-    alone. Loading goes through dict.update(), which is the C fast path and does NOT call
-    __setitem__, so a freshly loaded map is correctly "untouched".
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.touched = set()
-
-    def __setitem__(self, key, value):
-        self.touched.add(key)
-        super().__setitem__(key, value)
-
-    def __delitem__(self, key):
-        self.touched.add(key)
-        super().__delitem__(key)
-
-    def pop(self, key, *default):
-        self.touched.add(key)
-        return super().pop(key, *default)
-
-    def clear(self):
-        self.touched.update(self.keys())
-        super().clear()
 def _save_overrides(replace=False):
     """Persist per-conversation model choices so a restart doesn't silently
     drop them. Derived sub/bg/sched keys are transient and skipped.
@@ -27607,19 +27617,13 @@ def reasoning_command(session_key, arg, llm_url=""):
                 % (cur, CONFIG["llm"].get("reasoning") or "auto",
                    "|".join(REASONING_LEVELS)))
     if arg == "auto":
+        # pop marks the key touched on _OverrideMap itself, so the merge in
+        # _save_overrides writes the removal instead of resurrecting the disk copy.
         over.pop(session_key, None)
-        try:
-            over.touched.add(session_key)
-        except Exception:
-            pass
         _save_overrides()
         return "\U0001f9e0 Reasoning effort back to auto (no field sent)."
     if arg in REASONING_LEVELS or arg == "off":
         over[session_key] = arg
-        try:
-            over.touched.add(session_key)
-        except Exception:
-            pass
         _save_overrides()
         wire = {"effort": "reasoning_effort",
                 "responses": "reasoning.effort",

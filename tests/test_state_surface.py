@@ -293,6 +293,7 @@ untouched.
     python tests/test_state_surface.py
 """
     import importlib.util
+    import json
     import os
     import shutil
     import sys
@@ -339,6 +340,28 @@ untouched.
             check("a healthy state.json is read, and no second copy is made",
                   got.get("model_overrides") == {"x": "m"}
                   and len(sorted(work.glob("state.json.damaged-*"))) == 1, got)
+
+            # ---- a cleared override must not resurrect --------------------------
+            # _save_overrides merges only the keys this process TOUCHED over the file;
+            # that set lives on _OverrideMap, and Agent.__init__ must actually build
+            # one. With plain dicts (the bug) `/model default` - a pop - was invisible
+            # to the merge, so the disk entry came straight back and the next load
+            # resurrected the very choice the operator had cleared.
+            st_file.write_text(json.dumps({
+                "model_overrides": {"chan-1": "m1"},
+                "reasoning_overrides": {"chan-1": "high"}}), encoding="utf-8")
+            fb.AGENT.model_overrides["chan-2"] = "m2"     # this process's own choice
+            fb.AGENT.model_overrides.pop("chan-1", None)  # /model default for chan-1
+            fb._save_overrides()
+            disk = json.loads(st_file.read_text(encoding="utf-8"))
+            check("a cleared model override is removed, not resurrected",
+                  disk.get("model_overrides") == {"chan-2": "m2"},
+                  disk.get("model_overrides"))
+            check("...and an untouched lane's reasoning override stays",
+                  disk.get("reasoning_overrides") == {"chan-1": "high"},
+                  disk.get("reasoning_overrides"))
+            fb.AGENT.model_overrides.clear()              # leave the module as found
+            fb.AGENT.model_overrides.touched.clear()
 
             # ---- the lane failure record ---------------------------------------
             lane = work / "lane-state.json"
