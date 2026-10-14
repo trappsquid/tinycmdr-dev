@@ -990,6 +990,15 @@ def test_a_written_script_cannot_carry_a_declined_command():
     check("...and the target is still there", target.exists())
     out = fb.tool_shell({"command": "sudo bash %s" % late}, ctx_none)
     check("...a prefix does not change it", out.startswith("DECLINED"), out[:160])
+    # Direct execution has no interpreter prefix to unwrap: `/tmp/x.sh` and a script
+    # named inside sh -c's payload were read by no tier (A-2026-10-14-44).
+    out = fb.tool_shell({"command": str(late)}, ctx_none)
+    check("shell: a directly executed script is read back like an interpreted one",
+          out.startswith("DECLINED") and str(late) in out, out[:160])
+    check("...and the target is still there", target.exists())
+    out = fb.tool_shell({"command": "sh -c '%s arg'" % late}, ctx_none)
+    check("shell: a script named inside sh -c's payload is read back too",
+          out.startswith("DECLINED") and str(late) in out, out[:160])
     out = fb.tool_shell({"command": "bash %s" % late}, ctx_yes)
     check("...and an approved run goes through",
           not out.startswith("DECLINED") and not target.exists(), out[:120])

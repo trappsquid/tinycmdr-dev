@@ -10183,10 +10183,11 @@ def _wrapped_script_file(command):
 
     `bash run.sh` is a command line with no delete verb in it; the verb sits in the file
     the run itself wrote. The tokens are unwrapped by the same prefix rule every guard
-    reads (sudo, env, glue), a run-the-rest switch (`sh -c`, `cmd /c`) is already the
-    command tier's own business, and only a payload that IS one path counts. A file older
-    than this process is the box's own, not something this run put out of sight - that
-    mtime test is why a hand-written script keeps running without a question.
+    reads (sudo, env, glue); a run-the-rest switch (`sh -c`, `cmd /c`) contributes its
+    payload's first word; and a command with NO interpreter prefix contributes argv[0]
+    itself, which is how directly executed scripts are reached. A file older than this
+    process is the box's own, not something this run put out of sight - that mtime test
+    is why a hand-written script keeps running without a question.
     """
     for segment in _SEGMENT_RX.split(_guard_join_continuations(str(command or ""))):
         argv = _shlex_words(segment)
@@ -10195,11 +10196,20 @@ def _wrapped_script_file(command):
         argv, payload = _guard_unwrap(argv)
         cand = None
         if payload is not None:
+            # The payload's first word is the program the shell will run, and it may BE
+            # the script file (`sh -c "/tmp/x.sh arg"`). A word that is not a recently
+            # written file falls out at the stat below.
             words = _shlex_words(payload)
-            cand = words[0] if len(words) == 1 else None
+            cand = words[0] if words else None
         elif argv and _guard_interpreter(argv[0]) is not None:
             rest = [w for w in argv[1:] if not w.startswith("-") and w != "--"]
             cand = rest[0] if rest else None
+        if not cand and payload is None and argv:
+            # Direct execution (`/tmp/x.sh`, `./run.ps1`): there is no interpreter
+            # prefix to unwrap, so the file the run just wrote IS argv[0] - and it was
+            # never read back, which is the interpreter rule one spelling away
+            # (A-2026-10-14-44).
+            cand = argv[0]
         if not cand:
             continue
         p = Path(cand).expanduser()
