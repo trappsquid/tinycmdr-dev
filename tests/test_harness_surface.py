@@ -819,6 +819,31 @@ def _suite_test_harness_refinements():
                 f_path.unlink(missing_ok=True)
                 pathlib.Path(str(f_path) + ".bak").unlink(missing_ok=True)
 
+        def test_tool_edit_file_fuzzy_keeps_the_disk_indentation(self):
+            """A fuzzy (dedented or differently indented) anchor must not splice the new
+    block at the ANCHOR's depth: a 4-space block landed inside an 8-space method, a
+    Python syntax error paid with a repair turn (A-2026-10-14-39)."""
+            with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".py") as f:
+                f.write("class A:\n    def m(self):\n        x = 1\n        return x\n")
+                f_path = pathlib.Path(f.name)
+
+            try:
+                res = tool_edit_file({
+                    "path": str(f_path),
+                    "old_string": "x = 1\nreturn x",
+                    "new_string": "x = 2\nreturn x + 1",
+                }, {})
+                self.assertIn("OK: replaced 1 occurrence", res)
+                content = f_path.read_text(encoding="utf-8")
+                self.assertEqual(
+                    content,
+                    "class A:\n    def m(self):\n        x = 2\n        return x + 1\n",
+                    content)
+                self.assertIn("indentation-insensitive", res)
+            finally:
+                f_path.unlink(missing_ok=True)
+                pathlib.Path(str(f_path) + ".bak").unlink(missing_ok=True)
+
         def test_tool_edit_file_deletion_mixed_line_and_substring(self):
             """replace_all deleting a single word must not delete only the whole-line
     copy: the regex path removed whole lines while a substring occurrence elsewhere

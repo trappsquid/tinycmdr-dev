@@ -9309,6 +9309,24 @@ def _edit_find_fuzzy(lines, old_lines):
     return None, "ambiguous (%d candidate regions)" % len(hits)
 
 
+def _indent_of(lines):
+    """Leading whitespace of the first line that has content ("" when there is none)."""
+    for ln in lines or []:
+        if ln.strip():
+            return ln[:len(ln) - len(ln.lstrip())]
+    return ""
+
+
+def _reindent_line(line, old_indent, disk_indent):
+    """`line` as authored under `old_indent`, re-based onto `disk_indent`."""
+    if not line.strip():
+        return line
+    cut = 0
+    while cut < len(old_indent) and cut < len(line) and line[cut] in " \t":
+        cut += 1
+    return disk_indent + line[cut:]
+
+
 # Byte-identical applies, per (session, path): the payload hash and how many times in a
 # row it produced no change. A successful mutation clears the entry. An edit that
 # parses and applies but writes the
@@ -10840,6 +10858,16 @@ def tool_edit_file(args, ctx):
                     f"surrounding lines to make it unique, or set replace_all." + stale)
         old_lines = lf_old.split("\n")
         new_lines = lf_new.split("\n") if lf_new else []
+        # A fuzzy match means the disk's indentation differs from the anchor's, and the
+        # new block belongs at the DISK's depth: spliced as typed, a 4-space block landed
+        # inside an 8-space method - a Python/YAML syntax error paid with a repair turn
+        # (A-2026-10-14-39).
+        if new_lines:
+            _disk_ind = _indent_of(lines[idx:idx + len(old_lines)])
+            _old_ind = _indent_of(old_lines)
+            if _disk_ind != _old_ind:
+                new_lines = [_reindent_line(_l, _old_ind, _disk_ind)
+                             for _l in new_lines]
         lines = lines[:idx] + new_lines + lines[idx + len(old_lines):]
         new_lf = "\n".join(lines)
         strategy = why
