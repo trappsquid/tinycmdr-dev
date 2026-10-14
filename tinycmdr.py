@@ -2003,6 +2003,16 @@ def _host_is_local(host):
     return all(_addr_is_local(str(info[4][0])) for info in infos)
 
 
+# The ranges "local" means, one definition each (the docstring's list): RFC 1918 for
+# IPv4, ULA for IPv6; loopback and link-local come from ipaddress's own properties.
+# NOT ipaddress's is_private: that taxonomy also covers special-purpose space that is
+# neither this machine nor this LAN - the RFC 5737 documentation ranges, 240/4 - and
+# doctor's off-LAN/on-LAN advice is keyed on this verdict (the gate caught a
+# 192.0.2.10 fixture reading as on-LAN, 2026-10-14).
+_LOCAL_NETS = tuple(ipaddress.ip_network(n) for n in
+                    ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"))
+
+
 def _addr_is_local(addr):
     """One resolved address: loopback, or an RFC 1918 / ULA / link-local range.
 
@@ -2020,7 +2030,9 @@ def _addr_is_local(addr):
         return False
     if getattr(ip, "ipv4_mapped", None):
         ip = ip.ipv4_mapped
-    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
+    if ip.is_loopback or ip.is_link_local:
+        return True
+    return any(ip.version == net.version and ip in net for net in _LOCAL_NETS)
 
 
 _cloud_skip_warned = False
