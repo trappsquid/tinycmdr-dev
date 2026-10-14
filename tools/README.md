@@ -43,6 +43,7 @@ and the file defines four things:
         return "clear text result"
 
     MUTATES = True        # only if the tool changes local state
+    REQUIRES_ENV = ["SOME_KEY"] # optional: env vars the tool cannot run without
     CATEGORY = "files & edit"   # optional: the shelf it is listed under in the prompt
 
 `run` returns text. Handle your errors and return a message: an exception becomes a tool
@@ -53,6 +54,9 @@ description points at):
 
     config       the bot config (the same dict the harness reads)
     depth        how deep this run is (0 = the top-level run; higher for delegated ones)
+    credential  ctx["credential"]("KEY") reads one secret: os.environ (the .env
+                file is loaded into it). The one seam tools read credentials
+                through - secrets stay out of config.json, which the model reads
     model        the model this session runs on
     session_key  this session's key (hidden-tool state is keyed on it)
     source       what this run reports through
@@ -94,7 +98,9 @@ import time and may register SEVERAL tools in one file:
                                "properties": {"who": {"type": "string"}}}},
         handler=lambda args, **kw: hello(args),
         check_fn=lambda: True,          # optional: skip when it cannot run here
-        requires_env=["SOME_KEY"],      # optional: skip without the env var
+        requires_env=["SOME_KEY"],      # optional: the tool answers "not usable"
+                                        # until the env var is set (the file still
+                                        # loads; other tools in it are unaffected)
         mutates=True)                   # optional: the tool changes local state
 
 The handler receives the args dict and returns text.
@@ -127,7 +133,8 @@ too: greet.tool.json carries "name": "greet".
       "command": ["bash", "greet.sh"],
       "timeout": 60,
       "mutates": false,
-      "category": "messaging & chat"
+      "category": "messaging & chat",
+      "requires_env": ["SOME_KEY"]
     }
 
 `command` is an argv list (or one shell string). It runs with this folder as

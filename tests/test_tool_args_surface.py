@@ -583,9 +583,158 @@ none of this changes what a tool returns or refuses anything.
     return main()
 
 
+def _suite_test_dispatch_args_gate():
+    """The dispatch-level argument check and the call-time requires_env gate.
+
+Adapted from the skillware skill contract (2026-10-14): a tool call is checked
+against the JSON-Schema subset the tool declares BEFORE its handler runs, so the
+model is answered with the path and the expected type instead of the handler's
+KeyError; and an env key a tool declares is answered at call time through the
+credential seam instead of refusing the tool's whole file at load. Both gates are
+silent when the call is good - zero prompt cost.
+
+    python tests/test_tool_args_surface.py
+"""
+    import shutil
+    import sys
+    import tempfile
+    from pathlib import Path
+    BASE = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(BASE / "tests"))
+    import run_scenario  # noqa: E402
+    FAILS = []
+
+    def check(name, cond, detail=""):
+        if cond:
+            print(f"ok   {name}")
+        else:
+            FAILS.append(name)
+            print(f"FAIL {name}: {detail}")
+
+    def main():
+        workdir = Path(tempfile.mkdtemp(prefix="fbarggate-"))
+        try:
+            run_scenario.stage_install(workdir, 24000)
+            fb = run_scenario.load(workdir)
+            # Late-bound: a pre-fix build has no seam, so the run answers a FAIL
+            # there instead of crashing at import time.
+            ctx = {"session_key": "s-arggate",
+                   "credential": lambda k: fb.tool_credential(k)}
+            ran = []
+
+            def fn(args, c):
+                ran.append(args)
+                return "ran"
+
+            fb.REGISTRY.custom["arggate"] = {
+                "fn": fn,
+                "schema": {"type": "function", "function": {
+                    "name": "arggate", "description": "probe",
+                    "parameters": {"type": "object", "required": ["path"],
+                                   "properties": {"path": {"type": "string"},
+                                                  "n": {"type": "integer"},
+                                                  "mode": {"type": "string",
+                                                           "enum": ["a", "b"]},
+                                                  "tags": {"type": "array",
+                                                           "items": {"type": "string"}}},
+                                   "additionalProperties": False}}},
+                "mutates": False, "requires_env": []}
+
+            def call(args):
+                return fb.Agent._exec_tool(fb.AGENT, {"function": {
+                    "name": "arggate", "arguments": args}}, ctx)[2]
+
+            # ---- a good call is silent: the handler runs, nothing is added
+            out = call({"path": "x"})
+            check("a good call runs the handler untouched",
+                  out.splitlines()[0] == "ran", out)
+
+            # ---- a missing required argument is answered before the handler
+            out = call({})
+            check("a missing required argument is named",
+                  "missing the required argument 'path'" in out and out.startswith("ERROR"),
+                  out)
+            check("the handler never ran", ran == [{"path": "x"}], ran)
+
+            # ---- mismatches name the path, and bool is not an integer
+            check("a type mismatch names the path",
+                  "'path' must be a string" in call({"path": 5}), call({"path": 5}))
+            check("bool is not an integer", "'n' must be an integer" in call({"path": "x", "n": True}),
+                  call({"path": "x", "n": True}))
+            check("an enum miss names the values",
+                  "must be one of" in call({"path": "x", "mode": "c"}),
+                  call({"path": "x", "mode": "c"}))
+            check("array items are walked",
+                  "'tags[1]' must be a string" in call({"path": "x", "tags": ["ok", 3]}),
+                  call({"path": "x", "tags": ["ok", 3]}))
+            check("additionalProperties=false is honoured",
+                  "does not take" in call({"path": "x", "extra": 1}),
+                  call({"path": "x", "extra": 1}))
+            check("none of the bad calls ran the handler", ran == [{"path": "x"}], ran)
+
+            # ---- a type union is honoured (plan's steps declares one)
+            fb.REGISTRY.custom["argunion"] = {
+                "fn": fn,
+                "schema": {"type": "function", "function": {
+                    "name": "argunion", "description": "x",
+                    "parameters": {"type": "object",
+                                   "properties": {"steps": {"type": ["string", "array"]}}}}},
+                "mutates": False, "requires_env": []}
+            out = fb.Agent._exec_tool(fb.AGENT, {"function": {
+                "name": "argunion", "arguments": {"steps": "one\ntwo"}}}, ctx)[2]
+            check("a union accepts its string member", out.splitlines()[0] == "ran", out)
+            out = fb.Agent._exec_tool(fb.AGENT, {"function": {
+                "name": "argunion", "arguments": {"steps": ["one", "two"]}}}, ctx)[2]
+            check("a union accepts its array member", out.splitlines()[0] == "ran", out)
+            out = fb.Agent._exec_tool(fb.AGENT, {"function": {
+                "name": "argunion", "arguments": {"steps": 3}}}, ctx)[2]
+            check("a union rejects a third type", "must be a string or an array" in out, out)
+
+            # ---- a tool with an empty schema keeps its old freedom
+            fb.REGISTRY.custom["argfree"] = {
+                "fn": fn,
+                "schema": {"type": "function", "function": {
+                    "name": "argfree", "description": "x", "parameters": {}}},
+                "mutates": False, "requires_env": []}
+            out = fb.Agent._exec_tool(fb.AGENT, {"function": {
+                "name": "argfree", "arguments": {"anything": [1, 2]}}}, ctx)[2]
+            check("no declared shape, no check", out.splitlines()[0] == "ran", out)
+            # ---- core tools get the same check at the same point
+            out = fb.Agent._exec_tool(fb.AGENT, {"function": {
+                "name": "shell", "arguments": {}}}, ctx)[2]
+            check("a core tool is checked the same way",
+                  "missing the required argument 'command'" in out, out)
+
+            # ---- requires_env: unusable until the key exists, then the handler runs
+            del ran[:]
+            fb.REGISTRY.custom["arggate"]["requires_env"] = ["TINYCMDR_ARGGATE_KEY"]
+            out = call({"path": "x"})
+            check("a missing env key is answered at call time",
+                  "not usable" in out and "TINYCMDR_ARGGATE_KEY" in out, out)
+            check("and the handler still never ran", ran == [], ran)
+            os.environ["TINYCMDR_ARGGATE_KEY"] = "sekrit-value"
+            seen = []
+            fb.REGISTRY.custom["arggate"]["fn"] = (
+                lambda a, c: (seen.append(c["credential"]("TINYCMDR_ARGGATE_KEY"))
+                              or "ran"))
+            out = call({"path": "x"})
+            check("with the key set the credential seam hands the value",
+                  out == "ran" and seen == ["sekrit-value"], (out, seen))
+            if FAILS:
+                print(f"{len(FAILS)} check(s) failed")
+                return 1
+            return 0
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+    return main()
+
+
 def main():
     rc = 0
-    for name, fn in (("test_tool_args_repair", _suite_test_tool_args_repair), ("test_result_hints", _suite_test_result_hints), ("test_tool_carry", _suite_test_tool_carry)):
+    for name, fn in (("test_tool_args_repair", _suite_test_tool_args_repair),
+                     ("test_result_hints", _suite_test_result_hints),
+                     ("test_tool_carry", _suite_test_tool_carry),
+                     ("test_dispatch_args_gate", _suite_test_dispatch_args_gate)):
         rc |= _run(name, fn)
     return 1 if rc else 0
 

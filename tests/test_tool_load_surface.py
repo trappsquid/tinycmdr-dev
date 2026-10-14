@@ -88,7 +88,7 @@ in a temp tree, no network and no Mattermost connection.
     def test_native_shape_loads():
         defs = fb.load_tool_defs(BASE / "tools" / "patch.py")
         check("native: the starter patch.py loads", len(defs) == 1, defs)
-        name, desc, params, fn, mutates = defs[0]
+        name, desc, params, fn, mutates, requires_env = defs[0]
         check("native: NAME/DESCRIPTION/SCHEMA come through",
               name == "patch" and bool(desc) and isinstance(params, dict), defs[0])
         check("native: MUTATES=True is honoured", mutates is True, mutates)
@@ -134,13 +134,19 @@ in a temp tree, no network and no Mattermost connection.
             "from tools.registry import registry\n"
             "registry.register(name='envy', schema={'name': 'envy',\n"
             "    'description': 'needs a key', 'parameters': {}},\n"
-            "    handler=lambda args, **kw: 'x', requires_env=['TINYCMDR_NO_SUCH_KEY'])\n",
+            "    handler=lambda args, **kw: 'x', requires_env=['TINYCMDR_NO_SUCH_KEY'])\n"
+            "registry.register(name='plain', schema={'name': 'plain',\n"
+            "    'description': 'no key needed', 'parameters': {}},\n"
+            "    handler=lambda args, **kw: 'ok')\n",
             encoding="utf-8")
-        try:
-            fb.load_tool_defs(d / "envtool.py")
-            check("register: a missing requires_env is refused", False, "loaded anyway")
-        except ValueError as e:
-            check("register: a missing requires_env is refused", "env var" in str(e), e)
+        defs = fb.load_tool_defs(d / "envtool.py")
+        # A missing key no longer refuses the FILE at load - that took every tool
+        # in the file down with it. The requirement rides the def and the dispatch
+        # answers at call time.
+        check("register: a missing requires_env still loads the file",
+              [t[0] for t in defs] == ["envy", "plain"], defs)
+        check("register: the requirement rides the def",
+              defs[0][5] == ["TINYCMDR_NO_SUCH_KEY"] and defs[1][5] == [], defs)
 
 
     def test_reload_tool_finds_a_ported_file_by_its_registered_name():

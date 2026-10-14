@@ -10011,6 +10011,96 @@ def _missing_argument_answer(name, missing, params):
             + (f" (required: {', '.join(required)})" if required else "")
             + f". Its arguments are: {', '.join(sorted(declared))}. "
               f"Nothing was written - call it again with {missing!r} set.")
+_TYPE_WORDS = {"string": "a string", "number": "a number", "integer": "an integer",
+               "boolean": "a boolean", "array": "an array", "object": "an object",
+               "null": "null"}
+
+
+def _json_type_ok(t, value):
+    if t == "string":
+        return isinstance(value, str)
+    if t == "boolean":
+        return isinstance(value, bool)
+    if t == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if t == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if t == "null":
+        return value is None
+    if t == "object":
+        return isinstance(value, dict)
+    if t == "array":
+        return isinstance(value, list)
+    return True    # unknown types pass
+
+
+def _tool_args_error(name, args, params):
+    """The dispatch-level argument check for a tool call, or None when it is good.
+
+    The JSON-Schema subset this build's tools declare: type, required, properties,
+    items, enum, additionalProperties, and a type union (a list, as plan's
+    steps declares). Hand-rolled, not jsonschema - tools stay
+    dependency-free and this runs on every call. Unknown schema keys are ignored,
+    so a richer schema stays forward compatible. Silent when the call is good -
+    zero prompt cost - and the failure names the path instead of the handler's
+    KeyError reaching the model (adapted from the skillware contract, 2026-10-14).
+    """
+    if not isinstance(params, dict) or not params:
+        return None
+    if not isinstance(args, dict):
+        return ("ERROR: tool '%s' needs its arguments as a JSON object, got %s"
+                % (name, type(args).__name__))
+    return _schema_mismatch(name, args, params, "", 0)
+
+
+def _schema_mismatch(name, value, schema, path, depth):
+    """The first mismatch in one tool argument tree, or None. Depth-capped so a
+    pathological (or hostile) schema cannot walk the model's payload unbounded."""
+    if depth > 6:
+        return None
+    types = schema.get("type")
+    types = [types] if isinstance(types, str) else list(types or [])
+    where = f"'{path}'" if path else "the call"
+    if ("object" in types or "properties" in schema) and isinstance(value, dict):
+        if not isinstance(value, dict):
+            return f"ERROR: bad arguments for '{name}': {where} must be an object"
+        for key in (schema.get("required") or []):
+            if key not in value:
+                return (f"ERROR: bad arguments for '{name}': {where} is missing "
+                        f"the required argument '{key}'")
+        props = schema.get("properties") or {}
+        if schema.get("additionalProperties") is False:
+            for key in value:
+                if key not in props:
+                    return (f"ERROR: bad arguments for '{name}': {where} has an "
+                            f"argument '{key}' the tool does not take")
+        for key, sub in props.items():
+            if key in value and isinstance(sub, dict):
+                bad = _schema_mismatch(name, value[key], sub,
+                                       f"{path}.{key}" if path else key, depth + 1)
+                if bad:
+                    return bad
+        return None
+    if "array" in types and isinstance(value, list):
+        sub = schema.get("items")
+        if isinstance(sub, dict):
+            for i, item in enumerate(value):
+                bad = _schema_mismatch(name, item, sub, f"{path}[{i}]", depth + 1)
+                if bad:
+                    return bad
+        return None
+    if types and not any(_json_type_ok(x, value) for x in types):
+        words = [_TYPE_WORDS.get(x, x) for x in types]
+        return (f"ERROR: bad arguments for '{name}': {where} must be "
+                f"{' or '.join(words)}")
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        shown = ", ".join(json.dumps(v) for v in enum[:5])
+        if len(enum) > 5:
+            shown += ", ..."
+        return (f"ERROR: bad arguments for '{name}': {where} must be one of: "
+                f"{shown}")
+    return None
 
 
 def shell_guard(text, ctx, subject="process: "):
@@ -16549,8 +16639,8 @@ CORE_TOOLS = {
             {"action": {"type": "string",
                         "enum": ["set", "show", "doing", "done", "blocked", "drop",
                                  "note", "clear"]},
-             "steps": {"type": "string",
-                       "description": "set: the steps, one per line"},
+             "steps": {"type": ["string", "array"],
+                       "description": "set: the steps, one per line (or a list)"},
              "id": {"type": "integer", "description": "step id to update"},
              "note": {"type": "string",
                       "description": "one line: what was verified, or what blocks it"}},
@@ -16958,7 +17048,8 @@ def _load_python_tools(path):
                 f"call to {path.stem!r} (the file name) finds nothing - "
                 f"in the native shape NAME is the file name")
         return [(str(module.NAME), str(module.DESCRIPTION), module.SCHEMA,
-                 module.run, bool(getattr(module, "MUTATES", False)))]
+                 module.run, bool(getattr(module, "MUTATES", False)),
+                 [str(k) for k in (getattr(module, "REQUIRES_ENV", None) or [])])]
     defs = []
     for call in shim.calls:
         schema = call["schema"]
@@ -16968,9 +17059,10 @@ def _load_python_tools(path):
             raise ValueError("a registry.register() call is missing name= or "
                              "handler=")
         opts = call["opts"] or {}
-        for env_name in (opts.get("requires_env") or []):
-            if not os.environ.get(env_name):
-                raise ValueError(f"{name}: needs the {env_name} env var set")
+        # A missing key no longer refuses the FILE at load - that took every tool in
+        # the file down for one absent variable. The requirement rides the def and the
+        # dispatch answers at call time (tool_credential is the seam).
+        requires_env = [str(k) for k in (opts.get("requires_env") or [])]
         check_fn = opts.get("check_fn")
         if check_fn is not None:
             try:
@@ -16982,7 +17074,7 @@ def _load_python_tools(path):
         defs.append((name, str(schema.get("description") or ""),
                      schema.get("parameters") or {},
                      (lambda args, ctx, _h=handler: _h(args)),
-                     bool(opts.get("mutates", False))))
+                     bool(opts.get("mutates", False)), requires_env))
     if not defs:
         missing = [a for a in ("NAME", "DESCRIPTION", "SCHEMA", "run")
                    if not hasattr(module, a)]
@@ -17048,7 +17140,17 @@ def _load_manifest_tool(path):
     return [(name, str(spec.get("description") or ""), params,
              (lambda args, ctx, _e=entry, _n=name: _run_manifest_tool(
                  _n, _e, args, (ctx or {}).get("cancel_event"), ctx)),
-             bool(spec.get("mutates")))]
+             bool(spec.get("mutates")),
+             [str(k) for k in (spec.get("requires_env") or [])])]
+
+
+def tool_credential(key):
+    """The one seam a tool reads a credential through: os.environ (the .env file
+    is loaded into it, real environment wins). Secrets stay out of config.json,
+    which the agent can read and quote into a prompt; an accessor instead of a
+    scattered os.environ read keeps one audited boundary for where a tool's
+    credentials come from, and lets requires_env and the tool agree on it."""
+    return os.environ.get(key)
 
 
 def _run_manifest_tool(name, entry, args, cancel=None, ctx=None):
@@ -17191,7 +17293,7 @@ class ToolRegistry:
             # The type is named explicitly - "exited at load: SystemExit:
             # 3" is the line that makes the refused file findable.
             return False, "%s: %s" % (type(e).__name__, str(e)[:200])
-        for tname, desc, params, fn, mutates in defs:
+        for tname, desc, params, fn, mutates, requires_env in defs:
             self.custom[tname] = {
                 "fn": fn,
                 "source": path,
@@ -17199,6 +17301,9 @@ class ToolRegistry:
                 # in a native file, mutates: true in a manifest (see
                 # _is_mutation for what the flag buys).
                 "mutates": bool(mutates),
+                # Env keys the tool cannot run without, checked at call time through
+                # the credential seam (a load-time check took the whole file down).
+                "requires_env": requires_env,
                 # ... and the endpoint marker, so a tool that restarts the model box is
                 # gated exactly like a shell command that does (agent.endpoint_tools).
                 "endpoint_touching": _endpoint_touching_tool(tname, desc),
@@ -22760,6 +22865,26 @@ class Agent:
                 (ctx or {}).get("confirm_cb"))
             if refusal:
                 return name, args, refusal
+        # Declared env keys, checked at CALL time through the credential seam: a tool
+        # whose key is absent answers what to set instead of its file being refused at
+        # load (the old load-time ValueError took every tool in the file down with it).
+        _cred = (ctx or {}).get("credential") or tool_credential
+        _missing_env = [k for k in (tool.get("requires_env") or ())
+                        if not _cred(k)]
+        if _missing_env:
+            return name, args, (
+                "ERROR: tool '%s' is not usable on this box yet: the %s env var is "
+                "not set. Set it in .env (the real environment wins) and restart the "
+                "bot." % (name, " and ".join(_missing_env)))
+        # The dispatch-level argument check against the schema the tool declares: a
+        # wrong-shaped call is answered with the path and the expected type before the
+        # handler runs, instead of the handler's KeyError or worse - a handler that
+        # cannot tell. Silent when the call is good (zero prompt cost).
+        _bad_args = _tool_args_error(
+            name, args,
+            ((tool.get("schema") or {}).get("function") or {}).get("parameters"))
+        if _bad_args:
+            return name, args, _bad_args
         try:
             value = tool["fn"](args, ctx)
             if isinstance(value, dict) and ("text" in value or "images" in value):
@@ -23003,6 +23128,10 @@ class Agent:
                    # One builder with tool_shell's blocking path (_shell_argv): the
                    # Windows UTF-8 lever and shell_strict_mode ride every shell launch,
                    # including auto-background and drop-in tools' spawns.
+                   # The credential seam: how a tool reads a secret without reading
+                   # os.environ all over (tools/README.md). Same resolver the
+                   # requires_env gate uses, so a declaration and an access agree.
+                   "credential": tool_credential,
                    "shell_argv": _shell_argv,
                    "shell_guard": lambda text: shell_guard(text, ctx),
                    "config": CONFIG, "depth": depth,
