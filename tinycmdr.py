@@ -9134,20 +9134,29 @@ def _endpoint_load_request(command):
     return "a generation request to the model endpoint this bot talks to (%s)" % host
 
 
-# The files that ARE this bot: its memory, its atlas, what it was told to keep.
-# A shell command that WRITES one of them is the shape indirect injection took when it was
-# measured (2026-09-25: a note inside a folder being cleaned ended its four steps with
-# `printf 'notes cleared by cleanup' > notes.md`, and the run did it - the bot's whole memory
-# replaced by a line from a file it had been asked to read). Reads are untouched.
+# The files that ARE this bot: its memory, its atlas, what it was told to keep -
+# and the files that DECIDE what it is. soul.md heads every system prompt, config.json
+# carries the guard lists and the mcp_servers, .env holds every secret and jobs.json
+# every scheduled job: one model write to any of them rewires the bot itself, which is
+# exactly the shape indirect injection reaches for. (A write of one of these is the shape
+# indirect injection took when it was measured, 2026-09-25: a note inside a folder being
+# cleaned ended its four steps with `printf 'notes cleared by cleanup' > notes.md`, and
+# the run did it - the bot's whole memory replaced by a line from a file it had been
+# asked to read. Reads are untouched.)
 _SURFACE_FILES = ("notes.md", "atlas.md", "field-notes.md", "field-notes-hits.json",
-                  "memory/")
+                  "memory/",
+                  "soul.md", "config.json", ".env", "jobs.json")
 # The flat names (the single files), casefolded for the file-door compare, and the
 # alternation the shell matcher uses: a bundle name has to match the Windows spelling of
 # its separator too, or `copy x memory\index.md` walks past the shell door
-# (A-2026-10-08-106).
+# (A-2026-10-08-106). The boundaries keep a name from matching inside a longer one -
+# `prod.env`, `notes.mdx` and `mynotes.md` are somebody else's files, and asking about
+# them is a false positive the shell door paid for.
 _SURFACE_FLAT = frozenset(f.casefold() for f in _SURFACE_FILES if not f.endswith("/"))
-_SURFACE_NAME_RX = "|".join((re.escape(f[:-1]) + r"[\\/]") if f.endswith("/")
-                            else re.escape(f) for f in _SURFACE_FILES)
+_SURFACE_NAME_RX = "|".join(
+    r"(?<![\w.\-])" + (re.escape(f[:-1]) + r"[\\/]" if f.endswith("/")
+                       else re.escape(f) + r"(?![\w])")
+    for f in _SURFACE_FILES)
 _SURFACE_WRITE_RX = re.compile(
     r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?(?:%s)"
     r"|\b(?:set-content|out-file|add-content|sed\s+-i|tee|copy-item|move-item|cp|mv|truncate)\b"

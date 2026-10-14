@@ -423,6 +423,74 @@ def test_surface_gate_covers_the_memory_bundle_and_case_variants():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_the_identity_files_take_the_same_question():
+    """soul.md, config.json, .env and jobs.json are this bot at least as much as
+    notes.md is: soul.md heads every system prompt, config.json carries the guard
+    lists and mcp_servers, .env holds every secret, jobs.json every scheduled job.
+    A model write to any of them passed BOTH doors unasked - the fastest route from
+    an injected instruction to a bot that no longer asks anything. They are gated
+    like the other surface files now, and a file that merely SHARES the name
+    elsewhere is not (the whole-name boundaries on the shell alternation).
+
+    A symlink inside the install that resolves to one of them is gated too: the
+    gate resolves both sides before comparing, and this pins it.
+    """
+    d = Path(tempfile.mkdtemp(prefix="tc-surface-ident-"))
+    made = []
+    asks = []
+
+    def door(subject):
+        asks.append(subject)
+        return False
+
+    try:
+        for name in ("soul.md", "config.json", ".env", "jobs.json"):
+            target = Path(fb.BASE_DIR) / name
+            target.write_text("original\n", encoding="utf-8")
+            made.append(target)
+            out = fb.tool_write_file({"path": str(target), "content": "WIPED"},
+                                     {"confirm_cb": door})
+            check("write_file on the bot's own %s is gated" % name,
+                  str(out).startswith("DECLINED"), str(out)[:140])
+            check("...and %s was not replaced" % name,
+                  "original" in target.read_text(encoding="utf-8"))
+            shell = fb._prompt_surface_write("printf x > %s" % name)
+            check("the shell door flags %s" % name, bool(shell), shell)
+
+        theirs = d / "soul.md"
+        theirs.write_text("theirs\n", encoding="utf-8")
+        out = fb.tool_write_file({"path": str(theirs), "content": "theirs2"},
+                                 {"confirm_cb": door})
+        check("a soul.md that is NOT the bot's own is written unasked",
+              str(out).startswith("OK"), str(out)[:120])
+
+        # whole names only: another project's .env or notes.mdx is not this bot's file
+        check("the shell door does NOT flag prod.env",
+              not fb._prompt_surface_write("cp prod.env /tmp/backup.env"),
+              fb._prompt_surface_write("cp prod.env /tmp/backup.env"))
+        check("...nor an unrelated notes.mdx",
+              not fb._prompt_surface_write("cp notes.mdx /tmp/"),
+              fb._prompt_surface_write("cp notes.mdx /tmp/"))
+
+        link = Path(fb.BASE_DIR) / "soul-link.md"
+        try:
+            link.symlink_to(Path(fb.BASE_DIR) / "soul.md")
+            made.append(link)
+            out = fb.tool_write_file({"path": str(link), "content": "WIPED"},
+                                     {"confirm_cb": door})
+            check("a symlink resolving to soul.md is gated too",
+                  str(out).startswith("DECLINED"), str(out)[:140])
+        except (OSError, NotImplementedError) as e:
+            print(f"skip symlinks are not available here: {e}")
+    finally:
+        for p in made:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_manifest_command_walks_the_shell_tier():
     """A .tool.json whose command is `rm -rf /` must not load, and a
     confirm-tier command must be asked at call time - the manifest door is the shell door."""
