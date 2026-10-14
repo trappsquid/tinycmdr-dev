@@ -253,6 +253,25 @@ and the index and log a consumer browses.
         check("forget removes the concept file", not made["path"].exists())
         log = fb.MEMORY_LOG.read_text(encoding="utf-8")
         check("the log records the removal", "forgotten" in log, log[-200:])
+        # BUG-32: the deprecate/forget reason is caller-supplied and lands in
+        # memory/log.md and the reply; it was neither scrubbed nor bounded while every
+        # other field on this path was.
+        made2 = fb.memory_new_concept("Secret port note", "8080")
+        secret = "TEST-SECRET-8090-CANARY"
+        fb._SECRETS.add(secret)
+        try:
+            reply = fb.tool_memory({"action": "deprecate", "id": made2["id"],
+                                    "reason": "rotated " + secret + " " + "x" * 900}, {})
+        finally:
+            fb._SECRETS.discard(secret)
+        log2 = fb.MEMORY_LOG.read_text(encoding="utf-8")
+        check("a deprecate reason is scrubbed before it lands in log.md",
+              secret not in log2, log2[-300:])
+        check("...and before it comes back to the model", secret not in reply,
+              reply[:200])
+        check("...and it is bounded, so it cannot blow the log's size claim",
+              max(len(l) for l in log2.splitlines()) < 600,
+              max(len(l) for l in log2.splitlines()))
 
 
     def test_index_is_progressive_disclosure():

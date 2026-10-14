@@ -12719,7 +12719,13 @@ def tool_memory(args, ctx):
         c = _memory_find(args.get("id"))
         if c is None:
             return _memory_missing(args.get("id"))
-        reason = " ".join(str(args.get("reason") or "").split())
+        # The reason is caller-supplied and lands in memory/log.md and the reply, and it
+        # was the one string on this path that was neither scrubbed nor bounded while
+        # every other field was: a secret pasted into it rode a file, and an unbounded
+        # one blew the log's size claim (BUG-32). One scrub, then a 400-char bound.
+        reason = scrub(" ".join(str(args.get("reason") or "").split()))
+        if len(reason) > 400:
+            reason = reason[:400].rstrip() + "…"
         tail = (" (%s)" % reason) if reason else ""
         if action == "deprecate":
             memory_set_status(c["id"], "deprecated", reason=reason, actor=actor)
