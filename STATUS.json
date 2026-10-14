@@ -3440,10 +3440,10 @@
     {
       "id": "tool-args-and-env-gates",
       "title": "tool calls are checked against the schema they declare",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "37cbcf9",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A call is checked against the JSON-Schema subset its tool declares (type unions included) before the handler runs, and a tool's declared env keys answer at call time through one ctx credential seam instead of refusing the tool's whole file at load.",
       "gate": "tests/test_tool_args_surface.py grades both gates"
