@@ -1647,8 +1647,13 @@ def _body():
         probe_dir.mkdir()
         (probe_dir / "marker").write_text("x", encoding="utf-8")
         if os.name == "nt":
-            _argv = ["powershell", "-NoProfile", "-Command", "Start-Sleep 5",
-                     str(probe_dir / "marker")]
+            # A script run with -File: the child's own command line carries the
+            # metachar path, and this is the real shape the fix un-hides (a
+            # PowerShell child launched from the install folder).
+            (probe_dir / "marker.ps1").write_text("Start-Sleep -Seconds 15",
+                                                  encoding="utf-8")
+            _argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                     "-File", str(probe_dir / "marker.ps1")]
         else:
             _argv = ["tail", "-f", str(probe_dir / "marker")]
         _child = _sp.Popen(_argv, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
@@ -1661,6 +1666,7 @@ def _body():
                 if _rows and not _err:
                     break
                 _time.sleep(0.5)
+            _child_alive = _child.poll() is None
         finally:
             _child.terminate()
             try:
@@ -1669,7 +1675,7 @@ def _body():
                 _child.kill()
             fb.BASE_DIR = _saved_base
         check("the process query matches a folder with metacharacters and quotes",
-              bool(_rows) and not _err, (_rows[:2], _err))
+              bool(_rows) and not _err, (_rows[:2], _err, "child alive: %s" % _child_alive))
         check("...and a launched child is one of the rows",
               any("marker" in r for r in _rows), _rows[:2])
 
