@@ -1976,12 +1976,17 @@ def _host_is_local(host):
         if parts[0] == "127":                       # all of 127/8, and the "127.1" form
             return True
         if len(parts) == 4:
-            a, b = int(parts[0]), int(parts[1])
-            return (a == 10 or (a == 192 and b == 168)
-                    or (a == 172 and 16 <= b <= 31))
+            # One classifier for a literal address, same as for a resolved one: the
+            # hand-kept table here missed IPv4 link-local (169.254/16) the way the
+            # prefix test missed the others (BUG-27).
+            return _addr_is_local(host)
         return False
-    if ":" in host:                                  # IPv6: loopback handled above
-        return host.startswith(("fc", "fd", "fe80"))
+    if ":" in host:
+        # An IPv6 literal: judged by ipaddress like every other address (loopback is
+        # handled above). The old prefix test read the v4-mapped loopback
+        # `[::ffff:127.0.0.1]` - which IS this machine - as remote, and every address
+        # outside exactly `fe80` as remote too (BUG-27).
+        return _addr_is_local(host)
     try:
         infos = socket.getaddrinfo(host, None)
     except Exception:
@@ -1996,16 +2001,23 @@ def _host_is_local(host):
 
 
 def _addr_is_local(addr):
-    """One resolved address: loopback, or an RFC 1918 / ULA / link-local range."""
-    if addr.startswith("127.") or addr == "::1":
-        return True
-    if addr.startswith(("10.", "192.168.", "fc", "fd", "fe80")):
-        return True
-    if addr.startswith("172."):
-        octets = addr.split(".")
-        if len(octets) == 4 and octets[1].isdigit() and 16 <= int(octets[1]) <= 31:
-            return True
-    return False
+    """One resolved address: loopback, or an RFC 1918 / ULA / link-local range.
+
+    Parsed with ipaddress, one address at a time: the string-prefix test read the
+    IPv4-mapped loopback `::ffff:127.0.0.1`, IPv4 link-local (`169.254.x`) and every
+    IPv6 link-local outside exactly `fe80` as REMOTE. That direction is the safe one - a
+    local endpoint is withheld, never an off-LAN one sent - but an address is not its
+    first characters. A zone id (`fe80::1%en0`, what Windows getaddrinfo returns) is
+    stripped first, and a mapped IPv4 is judged as that IPv4, the way the connection is
+    (BUG-27).
+    """
+    try:
+        ip = ipaddress.ip_address(str(addr).split("%", 1)[0])
+    except ValueError:
+        return False
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    return bool(ip.is_loopback or ip.is_private or ip.is_link_local)
 
 
 _cloud_skip_warned = False

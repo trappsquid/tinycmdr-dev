@@ -485,9 +485,24 @@ other suites stub it.
                           ("http://127.0.0.1#@no-such.invalid/v1", True),
                           # A leading-zero octet is octal to inet_aton (010 -> 8) and decimal
                           # to other parsers: ambiguous, so never classified as LAN.
-                          ("http://010.0.0.1:8080/v1", False)):
+                          ("http://010.0.0.1:8080/v1", False),
+                          # BUG-27: an address is not its first characters - the v4-MAPPED
+                          # loopback, IPv4 link-local, and IPv6 link-local outside exactly
+                          # `fe80` were all read as remote; the mapped public form stays
+                          # remote.
+                          ("http://[::ffff:127.0.0.1]:8081/v1", True),
+                          ("http://[::ffff:8.8.8.8]:8081/v1", False),
+                          ("http://[fe90::1]:8081/v1", True),
+                          ("http://[2001:4860:4860::8888]:8081/v1", False),
+                          ("http://169.254.10.10:8081/v1", True)):
             got = fb._is_local_url(url)
             check(f"locality: {url} -> {want}", got is want, got)
+        check("a zoned IPv6 link-local address is local (Windows getaddrinfo's shape)",
+              fb._addr_is_local("fe80::1%en0") is True,
+              fb._addr_is_local("fe80::1%en0"))
+        check("...and an unparseable address is remote, the pessimistic answer",
+              fb._addr_is_local("not-an-address") is False,
+              fb._addr_is_local("not-an-address"))
 
 
     def test_a_name_is_local_only_when_every_address_is():
