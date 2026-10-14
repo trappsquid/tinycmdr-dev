@@ -46109,19 +46109,75 @@ _RESTART_LOCK_POLL = 2.0   # seconds between looks while the handover is in flig
 _RESTART_LOCK_WAIT = 90.0  # long enough for the measured handover, short enough to be an answer
 
 
+def _win_ppid_map():
+    """pid -> parent pid for every live process, from ONE Toolhelp32 snapshot.
+
+    The runtime hands Python only its own parent (os.getppid); an ancestor walk needs
+    every link. Snapshot via stdlib ctypes, no subprocess, best-effort: {} on any
+    failure, and the caller then falls back to the one hop the runtime gives (BUG-29).
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _PE32(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.c_void_p),
+                        ("th32ModuleID", wintypes.DWORD),
+                        ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD),
+                        ("pcPriClassBase", ctypes.c_long),
+                        ("dwFlags", wintypes.DWORD),
+                        ("szExeFile", ctypes.c_char * 260)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k32.Process32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PE32)]
+        k32.Process32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PE32)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)      # TH32CS_SNAPPROCESS
+        if not snap or snap == ctypes.c_void_p(-1).value:
+            return {}
+        try:
+            entry = _PE32()
+            entry.dwSize = ctypes.sizeof(_PE32)
+            out = {}
+            ok = k32.Process32First(snap, ctypes.byref(entry))
+            while ok:
+                out[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                ok = k32.Process32Next(snap, ctypes.byref(entry))
+            return out
+        finally:
+            k32.CloseHandle(snap)
+    except Exception:                                            # noqa: BLE001
+        return {}
+
+
 def _ancestor_pids(depth=5):
     """This process and its ancestors: the sweep must never kill the chain `tinycmdr
     quit` was typed into - the verb process itself comes from the install folder, so it
     IS a match for the filter, and a `bash -c 'cd <install> && tinycmdr quit'` parent
-    matches too."""
+    matches too.
+
+    On Windows the walk reads the process table's parent map (one snapshot); it used to
+    stop after os.getppid(), so a grandparent whose command line named the install
+    folder - an interactive cmd.exe opened there, a ps1 launcher - was swept while the
+    operator was typing in it (BUG-29)."""
     pids, pid = set(), os.getpid()
+    ppids = _win_ppid_map() if os.name == "nt" else None
     while pid and pid not in pids and len(pids) <= depth:
         pids.add(pid)
+        if os.name == "nt":
+            # No snapshot (an old or locked-down Windows): the one hop the runtime
+            # gives cheaply, never worse than the old walk.
+            pid = (ppids.get(pid, 0) if ppids
+                   else (os.getppid() if pid == os.getpid() else 0))
+            continue
         if pid == os.getpid():
             pid = os.getppid()
             continue
-        if os.name == "nt":
-            break          # one level is what the runtime gives cheaply; documented
         try:
             out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
                                  capture_output=True, text=True, timeout=10).stdout

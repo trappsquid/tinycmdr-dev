@@ -374,6 +374,29 @@ produces on a real box.
                 fb.IS_WINDOWS = _saved_win
                 fb.CONFIG["agent"]["shell_strict_mode"] = _saved_strict
 
+            # ---- the quit sweep walks ALL the ancestors on Windows -------------------
+            # _ancestor_pids stopped after os.getppid() there, so a grandparent whose
+            # command line named the install folder - an interactive shell opened in it -
+            # was swept while the operator typed in it (BUG-29). The walk follows the
+            # snapshot parent map now.
+            import types as _types
+            _saved_os, _saved_map = fb.os, getattr(fb, "_win_ppid_map", None)
+            fb.os = _types.SimpleNamespace(name="nt", getpid=os.getpid,
+                                           getppid=os.getppid)
+            fb._win_ppid_map = lambda: {os.getpid(): 4242, 4242: 4243}
+            try:
+                _got = fb._ancestor_pids()
+            finally:
+                fb.os = _saved_os
+                if _saved_map is None:
+                    fb.__dict__.pop("_win_ppid_map", None)
+                else:
+                    fb._win_ppid_map = _saved_map
+            check({4242, 4243} <= _got,
+                  "the Windows walk follows the snapshot chain past one hop", _got)
+            check(os.getppid() in fb._ancestor_pids(),
+                  "and the POSIX walk still spares the parent chain", None)
+
             # ---- a host-owned file whose SHIPPED DEFAULT moved must be reported
             # update never overwrites a host-owned file by design, so a fix inside the default
             # reaches only new installs unless the host is told. Measured 2026-10-03: the
