@@ -8762,14 +8762,41 @@ _PWSH_WRAP_RX = re.compile(
 
 
 def _unwrap_redundant_powershell(command):
-    """The inner command of a redundant powershell/pwsh -Command wrapper, or the input."""
+    """The inner command of a redundant powershell/pwsh -Command wrapper, or the input.
+
+    The wrapper is only removable when the body IS one quoted run: the first character
+    is the quote and its closing twin is the LAST character. The old first==last test
+    stripped `"echo A"; echo "B"` into broken `echo A"; echo "B`, and it treated a
+    backslash-escaped body as removable. Anything after the wrapper's argument - a pipe,
+    a `;` - means PowerShell parses the line itself, and the line is returned untouched.
+    Quote semantics are PowerShell's: backtick escapes inside double quotes, '' doubles
+    inside single quotes.
+    """
     text = str(command or "")
     m = _PWSH_WRAP_RX.match(text.strip())
     if not m:
         return command
     inner = m.group("inner").strip()
-    # one layer of quotes, which is what the model put around the body
-    if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in ("'", '"'):
+    if len(inner) >= 2 and inner[0] in ("'", '"'):
+        q = inner[0]
+        close, j = -1, 1
+        while j < len(inner):
+            if inner[j] == q:
+                if q == '"' and inner[j - 1] == '`':
+                    j += 1
+                    continue
+                if q == "'" and j + 1 < len(inner) and inner[j + 1] == "'":
+                    j += 2
+                    continue
+                close = j
+                break
+            j += 1
+        if close != len(inner) - 1:
+            # The opening quote closes before the end of the capture: what follows is a
+            # pipe, a `;` or another command - the wrapper's argument is not the whole
+            # line, so removing the wrapper would re-scope it. PowerShell parses this
+            # line itself.
+            return command
         inner = inner[1:-1].strip()
     if not inner or "\n" in inner[:2]:
         return command

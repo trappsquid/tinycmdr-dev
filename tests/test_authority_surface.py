@@ -591,6 +591,19 @@ Run:  python tests/test_authority_surface.py
              "Get-Process | Select-Object -First 3"),
             ("a -File invocation is left alone", "powershell -NoProfile -File C:\\x\\y.ps1",
              "powershell -NoProfile -File C:\\x\\y.ps1"),
+            # BUG-20: only a body that IS one quoted run is removable. A `;` or a pipe
+            # after the wrapper's argument, or a backslash-escaped body, used to be
+            # stripped into syntax PowerShell cannot parse - these lines are left for
+            # PowerShell itself now.
+            ("a quoted body with a trailing statement",
+             'powershell -Command "echo A"; echo "B"',
+             'powershell -Command "echo A"; echo "B"'),
+            ("a quoted body that pipes onward",
+             'powershell -NoProfile -Command "Get-Process" | Select-Object -First 5',
+             'powershell -NoProfile -Command "Get-Process" | Select-Object -First 5'),
+            ("a body with backslash-escaped quotes",
+             'powershell -Command "Write-Host \\"Hello\\""',
+             'powershell -Command "Write-Host \\"Hello\\""'),
     ):
         got = fb._unwrap_redundant_powershell(cmd)
         check(f"powershell wrapper: {label}", got == want, f"{got!r} != {want!r}")
