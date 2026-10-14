@@ -36739,13 +36739,18 @@ def status_text(key, paused=None):
         f"{a.get('loop_stop_repeats')}")
     _ask_lim = (f"on, wait {int(float(a.get('ask_user_wait_seconds') or 120))}s"
                 if a.get("ask_user") else "off (agent.ask_user)")
+    # The parked question comes from the ask machinery itself - the same source the
+    # terminal /status reads. A CONFIG["_dispatcher"] lookup used to stand here and
+    # nothing ever installed that key, so the WAITING half never rendered on any lane.
     try:
-        _p = CONFIG.get("_dispatcher")
-        _pending = _p(_ask_user_pending(key)) if _p else None
+        _pending = _ask_user_pending(key)
     except Exception:
         _pending = None
-    lines.append(f"ask_user: {_ask_lim}"
-                 + (f" · WAITING on: {_pending['question'][:90]}" if _pending else ""))
+    if _pending:
+        lines.append(f"ask_user: {_ask_lim} · WAITING on: "
+                     f"{str(_pending.get('question') or '')[:90]}")
+    else:
+        lines.append(f"ask_user: {_ask_lim}")
     lines.append(f"notes.md: {notes_kb:.1f} KB · uptime: {hours}h {mins}m")
     if paused is not None:
         lines.append(f"paused: {paused or 'no'}")

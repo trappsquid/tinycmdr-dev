@@ -658,6 +658,19 @@ and no durable state is touched.
             check("/status names ask_user", "ask_user:" in s,
                   [l for l in s.splitlines() if "ask_user" in l])
             check("/status shows the wait bound", "wait" in s, s[-200:])
+            # A parked question must be visible HERE too: the WAITING half of this line
+            # read CONFIG["_dispatcher"], a key nothing ever installed, so a chat lane
+            # never named the question it was stuck on while the terminal /status did
+            # (BUG-15).
+            fb._ASK_PENDING["sx"] = {"question": "Which port should the job use?",
+                                     "options": [], "ev": None}
+            try:
+                s2 = fb.status_text("sx")
+            finally:
+                fb._ASK_PENDING.pop("sx", None)
+            check("/status names the parked question",
+                  "WAITING on: Which port should the job use?" in s2,
+                  [l for l in s2.splitlines() if "ask_user" in l])
         finally:
             fb.CONFIG["agent"]["ask_user"] = saved
 
