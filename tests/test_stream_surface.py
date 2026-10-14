@@ -1079,6 +1079,23 @@ On the pre-fix build these helpers do not exist, so every check must come back r
             got("a user message becomes an input_text part",
                 lambda: p["input"][0]["content"][0],
                 lambda v: v == {"type": "input_text", "text": "hi"})
+            # Multimodal parts: an attached screenshot must survive as an input_image
+            # whose image_url is the STRING this wire takes - the chat shape's nested
+            # {"image_url": {"url": ...}} is not - and _delta_text alone dropped every
+            # image silently.
+            got("an image part becomes an input_image with a string image_url",
+                lambda: fb.responses_payload("m", [{"role": "user", "content": [
+                    {"type": "text", "text": "look at this"},
+                    {"type": "image_url",
+                     "image_url": {"url": "data:image/png;base64,AAA"}}]}])["input"][0]
+                ["content"],
+                lambda v: v == [{"type": "input_text", "text": "look at this"},
+                                {"type": "input_image",
+                                 "image_url": "data:image/png;base64,AAA"}])
+            got("...and a text-only list stays one input_text part",
+                lambda: fb.responses_payload("m", [{"role": "user", "content": [
+                    {"type": "text", "text": "just words"}]}])["input"][0]["content"],
+                lambda v: v == [{"type": "input_text", "text": "just words"}])
             got("an assistant tool_call becomes a function_call item",
                 lambda: p["input"][1],
                 lambda v: v == {"type": "function_call", "call_id": "call_1",

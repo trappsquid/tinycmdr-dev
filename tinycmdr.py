@@ -19903,10 +19903,38 @@ def responses_payload(model, messages, tools=None, max_output_tokens=None, strea
                 items.append({"role": "assistant",
                               "content": [{"type": "output_text", "text": text}]})
             continue
-        text = _delta_text(m.get("content"))
-        if text:
-            items.append({"role": "user",
-                          "content": [{"type": "input_text", "text": text}]})
+        content = m.get("content")
+        if isinstance(content, list):
+            # Multimodal parts (a tool screenshot, a user upload). An image part
+            # becomes an input_image whose image_url is the STRING this wire takes -
+            # the chat shape's nested {"image_url": {"url": ...}} is not - and
+            # _delta_text alone dropped every image silently, so the model was told
+            # to look at a screenshot that never reached the request.
+            parts = []
+            for part in content:
+                if isinstance(part, str):
+                    if part:
+                        parts.append({"type": "input_text", "text": part})
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") in ("image_url", "input_image"):
+                    src = part.get("image_url")
+                    if isinstance(src, dict):
+                        src = src.get("url")
+                    if isinstance(src, str) and src:
+                        parts.append({"type": "input_image", "image_url": src})
+                    continue
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    parts.append({"type": "input_text", "text": text})
+            if parts:
+                items.append({"role": "user", "content": parts})
+        else:
+            text = _delta_text(content)
+            if text:
+                items.append({"role": "user",
+                              "content": [{"type": "input_text", "text": text}]})
     payload = {"model": model, "input": items, "store": False}
     if instructions:
         payload["instructions"] = instructions
