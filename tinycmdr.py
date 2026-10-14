@@ -10790,8 +10790,11 @@ def tool_edit_file(args, ctx):
     except Exception as e:
         return f"ERROR reading {path}: {e}"
     # Keep this file's own convention: a Linux host editing a CRLF file through a
-    # platform-translating write used to flip the whole file to LF.
-    nl = "\r\n" if "\r\n" in text else "\n"
+    # platform-translating write used to flip the whole file to LF. MAJORITY, not
+    # presence: ONE stray CRLF (a Windows tool once touched one line) used to flip
+    # every line to CRLF and turn a one-line edit into a whole-file diff
+    # (A-2026-10-14-54).
+    nl = "\r\n" if text.count("\r\n") > text.count("\n") / 2 else "\n"
     old, new = args["old_string"], args["new_string"]
     replace_all = bool(args.get("replace_all"))
     lf_text = text.replace("\r\n", "\n")

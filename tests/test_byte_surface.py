@@ -280,6 +280,16 @@ Falsify it before trusting it: point TINYCMDR_TEST_APP at a pre-fix build
             check(lf.read_bytes() == b"alpha\nBETA\n",
                   "an LF file stays LF (a Linux host's file is not flipped to CRLF)")
 
+            # ---- edit_file: ONE stray CRLF must not flip a mostly-LF file --------
+            mixed = workdir / "mixed.txt"
+            mixed.write_bytes(b"one\ntwo\nthree\nstray\r\nfive\nsix\n")
+            fb.tool_edit_file({"path": str(mixed), "old_string": "five",
+                               "new_string": "FIVE"}, {})
+            check(mixed.read_bytes() ==
+                  b"one\ntwo\nthree\nstray\nFIVE\nsix\n",
+                  "one stray CRLF does not flip a mostly-LF file to CRLF "
+                  "(presence decided before, majority decides now)")
+
             # ---- atomic_write_text: bytes as given, both ways ---------------------
             state = workdir / "state.json"
             fb.atomic_write_text(state, "{\n  \"a\": 1\n}\n")
