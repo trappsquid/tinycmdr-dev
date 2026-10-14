@@ -2617,6 +2617,38 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
           callable(_whole) and _whole(leaked)
           and not _whole(quoted) and not _whole("just an answer"), "predicate")
 
+    # The JSON body every non-coder template emits inside <tool_call>. The XML regex
+    # alone read it as prose: the raw call was posted and a turn was spent scolding
+    # the model instead of running the tool.
+    json_leak = ('<tool_call>\n{"name": "shell", "arguments": '
+                 '{"command": "Write-Output json-inline-ok"}}\n</tool_call>')
+    parsed_json = fb.parse_inline_tool_calls(json_leak)
+    check("inline: a JSON <tool_call> body parses too",
+          len(parsed_json) == 1 and parsed_json[0]["name"] == "shell"
+          and parsed_json[0]["arguments"] == {"command": "Write-Output json-inline-ok"},
+          parsed_json)
+    check("inline: ...is stripped from the shown answer",
+          fb.strip_inline_tool_calls(json_leak) == "",
+          fb.strip_inline_tool_calls(json_leak))
+    check("inline: ...and counts as the whole reply",
+          _whole(json_leak) and not _whole("see " + json_leak), json_leak)
+    nested = ('<tool_call>{"name": "task", "arguments": '
+              '{"steps": [{"a": 1}], "n": 2}}</tool_call>')
+    nested_parsed = fb.parse_inline_tool_calls(nested)
+    check("inline: nested argument objects survive the parse",
+          bool(nested_parsed) and nested_parsed[0]["arguments"]
+          == {"steps": [{"a": 1}], "n": 2}, nested_parsed)
+    wrapped = ('<tool_call>{"type": "function", "function": {"name": "shell", '
+               '"arguments": {"command": "ls"}}}</tool_call>')
+    wrapped_parsed = fb.parse_inline_tool_calls(wrapped)
+    check("inline: the wrapped function shape is read",
+          bool(wrapped_parsed) and wrapped_parsed[0]["name"] == "shell",
+          wrapped_parsed)
+    out3, calls3, payloads3 = _scripted_run([{"content": json_leak},
+                                             {"content": "done-json"}])
+    check("inline: a JSON-form call is parsed and executed end to end",
+          "done-json" in out3 and calls3 >= 1, (out3[:120], calls3))
+
 
 def test_startup_validation_catches_an_unconfigured_host():
     """The first thing a fresh install hits. It must fail with a sentence a human

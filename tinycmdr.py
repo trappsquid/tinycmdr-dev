@@ -19552,6 +19552,11 @@ _SHORT = {"temperature": "temp", "top_k": "top_k", "top_p": "top_p",
 _INLINE_CALL_RE = re.compile(
     r"<tool_call>\s*<function=([A-Za-z0-9_.\-]+)>\s*(.*?)\s*</function>\s*"
     r"</tool_call>", re.S)
+# The other half of the same leak: most templates (Qwen3, Hermes-2/3, a Llama-3.1
+# running through llama.cpp/Ollama) put a JSON object inside the tag. The XML regex
+# alone read those as prose - the raw call reached chat and a whole turn was spent
+# telling the model off instead of running the tool.
+_INLINE_JSON_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 _INLINE_PARAM_RE = re.compile(
     r"<parameter=([A-Za-z0-9_.\-]+)>\s*(.*?)\s*</parameter>", re.S)
 
@@ -19559,9 +19564,10 @@ _INLINE_PARAM_RE = re.compile(
 def parse_inline_tool_calls(text):
     """Tool calls the template left as TEXT instead of the API's tool_calls.
 
-    The qwen template normally converts these, but when it does not the raw XML
-    is treated as the answer, posted to chat, and stored in history (seen live
-    <function=shell>` with a PowerShell command inside). Returns
+    Two shapes in the wild: the qwen-coder XML (`<function=NAME>` with
+    `<parameter=...>` children) and the JSON body every other template emits
+    (`{"name": ..., "arguments": {...}}`, also wrapped as
+    `{"type": "function", "function": {...}}`). Returns
     [{"name": ..., "arguments": {...}}] — empty when there is nothing to parse.
     """
     calls = []
@@ -19579,13 +19585,36 @@ def parse_inline_tool_calls(text):
             except Exception:
                 args = {"input": body.strip()}
         calls.append({"name": name, "arguments": args})
+    for body in _INLINE_JSON_CALL_RE.findall(text or ""):
+        try:
+            obj = json.loads(body)
+        except (TypeError, ValueError):
+            continue                # a brace-bearing quote, not a call block
+        if not isinstance(obj, dict):
+            continue
+        fn = obj.get("function") if isinstance(obj.get("function"), dict) else None
+        src = fn or obj
+        name = str(src.get("name") or "").strip()
+        if not name:
+            continue
+        args = src.get("arguments")
+        if args is None:
+            args = src.get("parameters")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (TypeError, ValueError):
+                args = {"input": args}   # keep the raw text, like the XML arm
+        if not isinstance(args, dict):
+            args = {"input": args} if args not in (None, "") else {}
+        calls.append({"name": name, "arguments": args})
     return calls
 
 
 def strip_inline_tool_calls(text):
-    """The same text minus any inline tool-call XML, so a leaked call never
-    reaches the chat and never lands in history as an answer."""
-    return _INLINE_CALL_RE.sub("", text or "").strip()
+    """The same text minus any inline tool-call XML or JSON block, so a leaked
+    call never reaches the chat and never lands in history as an answer."""
+    return _INLINE_JSON_CALL_RE.sub("", _INLINE_CALL_RE.sub("", text or "")).strip()
 
 
 def inline_calls_are_the_whole_reply(text):
@@ -19597,7 +19626,7 @@ def inline_calls_are_the_whole_reply(text):
     blocks is fine, and one leading think fence is skipped (a server with no
     reasoning parser leaks its whole think block into content); a reply that is
     only a think fence parses to no calls anyway."""
-    rest = _INLINE_CALL_RE.sub("", text or "")
+    rest = _INLINE_JSON_CALL_RE.sub("", _INLINE_CALL_RE.sub("", text or ""))
     rest = re.sub(r"(?s)^\s*<think>.*?</think>", "", rest)
     return bool((text or "").strip()) and not rest.strip()
 
