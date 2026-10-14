@@ -928,12 +928,12 @@ def test_a_promise_with_no_tool_call_is_asked_to_act_once():
     out, seen = scripted_run_with_usage([
         {"role": "assistant",
          "content": "I'll gather the logs, then write it up. Let me start by checking."},
-        {"role": "assistant", "content": "Collected 3 files."},
+        {"role": "assistant", "content": "The file contains 3 lines."},
     ])
     # The delivered answer is the RETRY's, and the retry also made no tool call, so
     # the evidence check rides with it - correct, and asserted rather than ignored.
     check("promise: the run does not end on the promise",
-          out.startswith("Collected 3 files."), out)
+          out.startswith("The file contains 3 lines."), out)
     check("promise: the retry's own numbers are marked unchecked",
           "evidence check" in out, out)
     check("promise: the model was asked to act (2 calls)", len(seen) == 2, len(seen))
@@ -1137,6 +1137,9 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
         "b1.txt: 19 bytes",
         "12 files in the folder",
         "the log has 240 lines",
+        # the \ member of the path class: an escaped backslash, measured on the
+        # raw-string fix where the unclosed class [/\] had swallowed the |.
+        "the share \\srv\data holds 12 files",
     ]
     for text in fires:
         check("detector fires: %r" % text[:34], bool(rx.search(text)), text)
@@ -1153,6 +1156,11 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
         "16 GB unified memory.",
         "The box has 8 GB of RAM.",
         "That took 40 seconds.",
+        # A number with a unit word is not a claim by itself: the unclosed class
+        # [/\] matched any 2-4 letter word ("in", "are", "ed"), so ordinary prose
+        # beside "steps"/"files"/"lines" fired the fabrication scold.
+        "There are 5 steps in the process.",
+        "Collected 3 files.",
         "MVT analysis complete on the decrypted backup. Here's the full "
         "report:",
     ]

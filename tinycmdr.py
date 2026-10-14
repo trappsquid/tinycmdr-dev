@@ -19466,13 +19466,13 @@ _RESULT_CLAIM_RX = re.compile(
     #     lookahead is what keeps a true-from-memory answer out of the class - it
     #     caught "16 GB unified memory." on macOS, in a run with no tool call, and a
     #     bare machine spec is not a claim about anything the run fetched.
-    r"|(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)[^\n]{0,40}?\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b"
+    r"|(?:[/\\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)[^\n]{0,40}?\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b"
     # (b2) a report VERB joined to a subject that exists only on the box: "the log
     #     says 12 errors", "the output shows 3 failures". Measured gap (2026-09-24):
     #     (b) needs a unit word beside the number, so this phrasing went through
     #     unclassified even though nothing in the run had read anything.
     r"|\b(?:log|logs|output|config|journal|report|results?|stdout|stderr|error|errors)\b[^\n]{0,30}?\b(?:says|said|shows|showed|reads|lists|listed|reports?|reported|contains|holds)\b[^\n]{0,20}?\b\d"
-    r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b[^\n]{0,40}?(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)"
+    r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b[^\n]{0,40}?(?:[/\\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)"
     # (c) a hash-shaped token: a value that can only come from running something
     r"|\b[0-9a-f]{16,}\b"
     # (d) narration that something WAS run or returned
