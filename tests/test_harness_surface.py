@@ -819,6 +819,30 @@ def _suite_test_harness_refinements():
                 f_path.unlink(missing_ok=True)
                 pathlib.Path(str(f_path) + ".bak").unlink(missing_ok=True)
 
+        def test_tool_edit_file_deletion_mixed_line_and_substring(self):
+            """replace_all deleting a single word must not delete only the whole-line
+    copy: the regex path removed whole lines while a substring occurrence elsewhere
+    survived, and the reply still claimed every occurrence was replaced
+    (A-2026-10-14-51)."""
+            with tempfile.NamedTemporaryFile("w+", delete=False, suffix=".txt") as f:
+                f.write("x = foo\n  foo\n")
+                f_path = pathlib.Path(f.name)
+
+            try:
+                res = tool_edit_file({
+                    "path": str(f_path),
+                    "old_string": "foo",
+                    "new_string": "",
+                    "replace_all": True,
+                }, {})
+                self.assertIn("OK: replaced 2 occurrence", res)
+                content = f_path.read_text(encoding="utf-8")
+                self.assertNotIn("foo", content)
+                self.assertIn("x = \n", content)
+            finally:
+                f_path.unlink(missing_ok=True)
+                pathlib.Path(str(f_path) + ".bak").unlink(missing_ok=True)
+
         def test_tool_execute_code_name_error_hint(self):
             """execute_code should provide a process isolation hint when NameError occurs."""
             res = tool_execute_code({"code": "print(unknown_var_xyz)"}, {})

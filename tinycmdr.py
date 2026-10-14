@@ -10828,7 +10828,13 @@ def tool_edit_file(args, ctx):
         if lf_new == "" and not lf_old.endswith("\n"):
             if "\n" not in lf_old:
                 pat = r"(?m)^[ \t]*" + re.escape(lf_old) + r"[ \t]*\n?"
-                if re.search(pat, lf_text):
+                whole = len(re.findall(pat, lf_text))
+                if whole and whole == count:
+                    # The whole-line shape is right only when EVERY occurrence is a
+                    # whole line. Taken with a substring occurrence elsewhere (a line
+                    # `foobar = 1` beside a line `  foo`), it deleted the line and left
+                    # the substring, while the reply still claimed every occurrence was
+                    # replaced (A-2026-10-14-51).
                     cnt = 0 if replace_all else 1
                     new_lf = re.sub(pat, "", lf_text, count=cnt)
                 else:
