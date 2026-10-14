@@ -10852,7 +10852,11 @@ def tool_search_files(args, ctx):
     8 MiB cap the shell's output wears.
     """
     import fnmatch
-    root = Path(_win_long_path(Path(args.get("path") or ".").expanduser()))
+    # The same base every other file tool resolves against (_tool_path): the shell runs
+    # in BASE_DIR and read_file/write_file/edit_file follow it, while this walk started
+    # from the PROCESS cwd - `search_files {"path": "."}` answered for one directory and
+    # the read that followed looked in another (BUG-23).
+    root = _tool_path(args.get("path") or ".")
     if not root.exists():
         return f"ERROR: {root} does not exist"
     if not root.is_file() and not root.is_dir():

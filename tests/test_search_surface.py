@@ -120,6 +120,25 @@ cap-terminated walk SAY SO - a silent skip reads as an exhaustive answer.
             check("directories are walked in path order",
                   first.index("a-sub") < first.index("z-sub"), first)
 
+            # ---- BUG-23: a relative path resolves like the other file tools ------------
+            # The shell runs in BASE_DIR and read_file/write_file/edit_file resolve
+            # relative paths there; search_files resolved against the PROCESS cwd, so
+            # `search_files {"path": "src"}` listed files the follow-up read_file could
+            # not open ("does not exist").
+            rel = fb.BASE_DIR / "search-rel-probe"
+            rel.mkdir(exist_ok=True)
+            (rel / "rel.txt").write_text("rel-sentinel\n", encoding="utf-8")
+            _cwd = os.getcwd()
+            try:
+                os.chdir(work)          # anywhere but BASE_DIR
+                got = fb.tool_search_files(
+                    {"path": "search-rel-probe", "pattern": "rel-sentinel"}, {})
+            finally:
+                os.chdir(_cwd)
+                shutil.rmtree(rel, ignore_errors=True)
+            check("a relative path resolves against BASE_DIR, not the process cwd",
+                  "rel-sentinel" in got, got)
+
             # ---- A-2026-10-08-98: only REGULAR files are read ---------------------------------
             # A device/FIFO/socket used to be read with read_bytes() like any file: its
             # st_size is 0, so the 2 MB guard never saw it, /dev/zero grows until the kernel
