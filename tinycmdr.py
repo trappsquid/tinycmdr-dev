@@ -5017,10 +5017,15 @@ def _guard_interpreter(word):
 # PowerShell's spawners: the first word after their own switches is the program they start.
 _GUARD_SPAWNERS = ("start-process", "start", "saps")
 # The shell's own words. `;` splits them off the command, so `then rm -rf /etc` reaches a
-# guard as the tokens [then, rm, ...] and would otherwise read `then` as the verb.
+# guard as the tokens [then, rm, ...] and would otherwise read `then` as the verb. `.` and
+# `&` are PowerShell's dot-source and call operators: `. { format D: }` and `"&" format
+# D:` reached the token arms with the OPERATOR as the verb, and every arm was skipped
+# (BUG-25). A bare `&` is split by the tokenizer, but a quoted one arrives as its own
+# token, and the shlex path hands both through.
 _GUARD_KEYWORDS = frozenset((
     "if", "then", "elif", "else", "elseif", "do", "while", "until", "fi", "done",
-    "foreach", "try", "catch", "finally", "trap", "switch", "!", "{", "}", "(", ")"))
+    "foreach", "try", "catch", "finally", "trap", "switch", "!", "{", "}", "(", ")",
+    ".", "&"))
 _GUARD_ASSIGNMENT_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _GUARD_DURATION_RX = re.compile(r"^(?:\.?\d+(?:\.\d+)?)[smhd]?$")
 # `(rm`, `{rm`, `$(rm`, `` `rm ``: the punctuation that glues a subshell or a substitution

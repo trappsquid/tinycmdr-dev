@@ -127,6 +127,10 @@ MUST_GATE = [
     # (A-2026-10-08-94)
     "echo '{\"all\": true}' > confirm-allow.json",
     "Set-Content confirm-allow.json '{\"all\": true}'",
+    # a PowerShell call operator in front of the verb (BUG-25): `&` and the dot-source
+    # form became the "verb" for every token arm, so these had no verdict at all
+    '"&" format /FS:NTFS D:',
+    '"&" rm -rf /',
 ]
 
 MUST_ALLOW = [
@@ -168,6 +172,28 @@ def test_must_gate():
     for cmd in MUST_GATE:
         verdict = gated(cmd)
         check(f"gated: {cmd!r}", verdict in ("block", "confirm"), verdict)
+
+
+def test_call_operators_are_peeled():
+    """PowerShell's `.` and `&` operators must not become the `verb`.
+
+    The token arms read the first token as the verb; `. { format D: }` and `"&" format
+    /FS:NTFS D:` put the OPERATOR there and every arm was skipped - the never tier and
+    the delete risk both returned None (BUG-25). A bare `&` is split by the tokenizer,
+    but a quoted one is its own token, and the shlex path hands both through.
+    """
+    check("a dot-source scriptblock is seen through",
+          fb._guard_never_verdict(". { format D: }") is not None,
+          fb._guard_never_verdict(". { format D: }"))
+    check("...and so is a quoted call operator",
+          fb._guard_never_verdict('"&" format /FS:NTFS D:') is not None,
+          fb._guard_never_verdict('"&" format /FS:NTFS D:'))
+    check("a dot-prefixed recursive delete is still BLOCKED",
+          (fb.destructive_risk(". rm -rf /") or ("", ""))[0] == "block",
+          fb.destructive_risk(". rm -rf /"))
+    check("...and its scriptblock form",
+          (fb.destructive_risk(". { rm -rf / }") or ("", ""))[0] == "block",
+          fb.destructive_risk(". { rm -rf / }"))
 
 
 def test_must_allow():
