@@ -976,7 +976,11 @@ ENV_FILE = BASE_DIR / ".env"
 # The dotenv loader grades by it too: a secret-named key whose inherited value cannot
 # work never shadows the file's (see _load_env_file).
 _SECRET_NAME_RX = re.compile(
-    r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$")
+    # `token|password|passwd|secret|credential|apikey` match at the END of a name
+    # whether or not a separator precedes them (PGPASSWORD was missed: the old shape
+    # required `^` or `_`); `key|pat` keep the separator, so a name that merely
+    # CONTAINS 'key' ("monkey") is not a credential.
+    r"(?i)(?:(?:^|_)(?:key|pat)s?|(?:token|password|passwd|secret|credential|apikey)s?)$")
 
 
 _SECRET_SHAPES = {

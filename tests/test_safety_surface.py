@@ -428,6 +428,17 @@ code's own terms:
         out = fb.scrub("the endpoint key k8ch8ar1 is in use")
         check("an 8-char llm.api_key is redacted", "k8ch8ar1" not in out, out)
         check("and a 5-char value is still below the floor", "abcde" not in fb._SECRETS)
+        # The name test required a leading `_` before the keyword, so PGPASSWORD-style
+        # names missed the sweep entirely (A-2026-10-14-43): the keyword phrase matches
+        # at the END of a name now, separator or not.
+        os.environ["TINYCMDR_TEST_PGPASSWORD"] = "pgpw123456"
+        os.environ["TINYCMDR_TEST_MONKEY"] = "bananas-here"
+        fb._SECRETS = fb._secret_values()
+        out = fb.scrub("psql asked for pgpw123456 today")
+        check("a name ending in PASSWORD with no separator is swept",
+              "pgpw123456" not in out, out)
+        check("...while a name that merely CONTAINS 'key' (monkey) is not a credential",
+              "bananas-here" not in fb._SECRETS, sorted(fb._SECRETS)[-8:])
         # Put the long key back: later checks in this member assert on it.
         fb.CONFIG["llm"]["api_key"] = KEY
         fb._SECRETS = fb._secret_values()
