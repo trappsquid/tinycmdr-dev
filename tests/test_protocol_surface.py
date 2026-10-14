@@ -512,6 +512,45 @@ endpoint must not carry either field - not "the server probably ignores it".
         check("the retry dropped it",
               len(seen) >= 2 and "return_progress" not in seen[1], seen[:2])
 
+        # A 400 naming a REASONING field takes the same drop-and-retry: a provider or
+        # proxy that rejects thinking/reasoning/reasoning_effort must be a retry, not a
+        # fatal endpoint death (4xx is terminal by default).
+        restore = with_llm(stream=True, base_url="http://127.0.0.1:8111/v1", model="main",
+                           reasoning_mode="budget", reasoning="high")
+        fb.AGENT._window_cache = 32768
+        fb.AGENT._window_at = 0.0
+        fb.AGENT._envelope_cache = None
+        fb.requests = FakeRequests(props=LLAMA_PROPS)
+        seen = []
+        real = fb._post_watchdog
+
+        def fake_400_reasoning(url, headers, payload, timeout, grace, cancel_event=None,
+                               stream=False):
+            seen.append(dict(payload))
+            if len(seen) == 1:
+                raise _rq.HTTPError("400", response=types.SimpleNamespace(
+                    status_code=400,
+                    text='{"error": "unknown field: thinking"}'))
+            return FakeResp(sse(delta(content="fine"), delta(finish="stop")) + [SSE_END])
+
+        fb._post_watchdog = fake_400_reasoning
+        try:
+            reply = fb.AGENT._chat([{"role": "system", "content": "s"},
+                                    {"role": "user", "content": "hi"}],
+                                   session_key="f400reason")
+        except Exception as e:                              # noqa: BLE001
+            reply = {"content": "RAISED %s: %s" % (type(e).__name__, e)}
+        finally:
+            fb._post_watchdog = real
+            fb.requests = _rq
+            restore()
+        check("a 400 naming thinking is retried, not fatal",
+              (reply.get("content") or "") == "fine", reply)
+        check("the first attempt SENT the thinking budget",
+              bool(seen) and "thinking" in seen[0], seen[:1])
+        check("the retry dropped it",
+              len(seen) >= 2 and "thinking" not in seen[1], seen[:2])
+
         # The gate is per ENDPOINT, not per request: one call can walk from a llama.cpp
         # primary to a fallback that is not one, and the fields must not ride along.
         restore = with_llm(stream=True, base_url="http://127.0.0.1:1/v1",
@@ -594,6 +633,30 @@ endpoint must not carry either field - not "the server probably ignores it".
             check("...and a per-level override wins over the table",
                   _p.get("thinking", {}).get("budget_tokens") == 1234, _p)
             fb.CONFIG["llm"]["thinking_budgets"] = {}
+            # An Anthropic-style API requires budget_tokens < max_tokens (and a 1024
+            # floor): the table's budget under a small reply cap must be clamped, and
+            # dropped entirely when the cap cannot hold the floor - not sent as a
+            # guaranteed 400.
+            def _budget_for(cap):
+                out = {}
+                try:
+                    fb.apply_reasoning(out, "https://api.anthropic.com/v1", "main",
+                                       max_tokens=cap)
+                except TypeError as e:      # pre-fix signature: graded, not a crash
+                    return None, str(e)
+                return out, ""
+
+            _p, _err = _budget_for(4096)
+            check("a thinking budget is clamped under the call's max_tokens",
+                  not _err and _p.get("thinking", {}).get("budget_tokens") == 3072,
+                  _err or _p)
+            _p, _err = _budget_for(1500)
+            check("...down to the 1024-token floor for a small cap",
+                  not _err and _p.get("thinking", {}).get("budget_tokens") == 1024,
+                  _err or _p)
+            _p, _err = _budget_for(900)
+            check("...and no thinking field when the cap cannot hold the floor",
+                  not _err and "thinking" not in _p, _err or _p)
             fb.CONFIG["llm"]["reasoning_wire"] = {"max": "xhigh"}
             _p = {}
             fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "main")

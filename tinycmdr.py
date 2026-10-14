@@ -19765,7 +19765,7 @@ def reasoning_level(model=None):
     return str(CONFIG["llm"].get("reasoning") or "auto").strip().lower()
 
 
-def apply_reasoning(payload, url=None, model=None):
+def apply_reasoning(payload, url=None, model=None, max_tokens=None):
     """Put the requested reasoning level on the wire in THIS endpoint's shape.
 
     One place, three shapes (omp's catalog is the evidence, 2026-10-03): `effort` for an
@@ -19774,6 +19774,10 @@ def apply_reasoning(payload, url=None, model=None):
     URL); `llm.reasoning_wire` remaps a level for a provider that spells them differently
     (omp's reasoningEffortMap). An unknown level is named in the log and otherwise
     ignored - guessing a level for a model is worse than sending none.
+
+    `max_tokens` is THIS call's output cap: an Anthropic-style budget API requires
+    budget_tokens < max_tokens (and a 1024 floor), so the table's 10,000-token budget
+    under a 4096-token reply cap is a guaranteed 400 when max_tokens is omitted.
     """
     level = reasoning_level(model)
     mode = str(CONFIG["llm"].get("reasoning_mode") or "auto").strip().lower()
@@ -19810,6 +19814,18 @@ def apply_reasoning(payload, url=None, model=None):
                          or REASONING_BUDGETS.get(level) or 0)
         except (TypeError, ValueError):
             budget = 0
+        cap = int(max_tokens or 0)
+        if budget > 0 and cap:
+            # budget_tokens must be STRICTLY less than max_tokens, and the budget
+            # itself has a 1024 floor (Anthropic's own rule): leave at least 1024
+            # output tokens, and send no thinking field at all when the cap cannot
+            # hold the floor - a "high" level must not make every call fatal.
+            budget = min(budget, max(1024, cap - 1024))
+            if cap <= 1024:
+                log.warning("llm.reasoning is %r (a thinking budget), but this "
+                            "call's max_tokens (%d) leaves no room for the 1024-token "
+                            "floor - sending no thinking field", level, cap)
+                return
         if budget > 0:
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
     else:
@@ -21550,7 +21566,7 @@ class Agent:
             if _ck:
                 payload["prompt_cache_key"] = _ck
             apply_sampling(payload)
-            apply_reasoning(payload, url, ep_model)
+            apply_reasoning(payload, url, ep_model, max_tokens=cap or None)
             _apply_reasoning_flags(payload, url)
             if use_tools and wire == "chat":
                 payload["tools"] = _wire_tools
@@ -21747,7 +21763,8 @@ class Agent:
                             if _ck:
                                 payload["prompt_cache_key"] = _ck
                             apply_sampling(payload)
-                            apply_reasoning(payload, url, ep_model)
+                            apply_reasoning(payload, url, ep_model,
+                                            max_tokens=cap or None)
                             _apply_reasoning_flags(payload, url)
                             dump_payload(payload, ep_model)
                             last_err = e
@@ -21789,7 +21806,16 @@ class Agent:
                         named = [k for k in ("stream_options", "chat_template_kwargs",
                                              "prompt_cache_key",
                                              "return_progress", "sse_ping_interval",
-                                             "stream")
+                                             "stream",
+                                             # Reasoning hints are optional by
+                                             # construction - a proxy or provider that
+                                             # does not take the field says so with a
+                                             # 400 naming it, and that is a retry, not
+                                             # an endpoint death (the learned
+                                             # reasoning_content verdict above covers
+                                             # the field itself).
+                                             "thinking", "reasoning",
+                                             "reasoning_effort")
                                  if k in payload
                                  and re.search(r"\b%s\b" % re.escape(k), body)]
                         if named:
