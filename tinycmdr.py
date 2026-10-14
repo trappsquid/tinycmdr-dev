@@ -20349,6 +20349,7 @@ def responses_stream_event(event):
         if isinstance(item, dict) and item.get("type") == "function_call":
             return "tool_name", {"name": item.get("name") or "",
                                  "call_id": item.get("call_id") or item.get("id") or "",
+                                 "item_id": item.get("id") or "",
                                  "output_index": event.get("output_index")}
         return None, None
     if etype == "response.completed":
@@ -20399,6 +20400,13 @@ class _ResponsesStreamAdapter:
         def chat(obj):
             return ("data: " + json.dumps(obj, ensure_ascii=False)).encode("utf-8")
 
+        # A function-call item announces its NAME on `output_item.added`; its argument
+        # fragments carry only `item_id`. Remember what each item was announced under,
+        # so a fragment whose delta omits `output_index` is keyed by the SAME slot as
+        # its name: without this, `_stream_chat` keyed such a fragment on the
+        # last-opened slot, and two parallel calls interleaved into one garbled call
+        # (or split one call across an empty-name and an empty-arguments slot).
+        announced = {}
         for raw in self._resp.iter_lines(decode_unicode=False):
             text = (raw.decode("utf-8", "replace") if isinstance(raw, bytes)
                     else str(raw or ""))
@@ -20420,14 +20428,26 @@ class _ResponsesStreamAdapter:
             elif kind == "reasoning":
                 yield chat({"choices": [{"delta": {"reasoning_content": payload}}]})
             elif kind == "tool_name":
+                item_id = payload.get("item_id") or ""
+                if item_id:
+                    announced[item_id] = (payload.get("output_index"),
+                                          payload.get("call_id") or "")
                 yield chat({"choices": [{"delta": {"tool_calls": [{
                     "index": payload.get("output_index"),
                     "id": payload.get("call_id") or "", "type": "function",
                     "function": {"name": payload.get("name") or "",
                                  "arguments": ""}}]}}]})
             elif kind == "tool_args":
+                index = payload.get("output_index")
+                call_id = ""
+                known = announced.get(payload.get("item_id") or "")
+                if known is not None:
+                    # The announced slot wins: the fragment belongs to THAT call.
+                    if index is None:
+                        index = known[0]
+                    call_id = known[1]
                 yield chat({"choices": [{"delta": {"tool_calls": [{
-                    "index": payload.get("output_index"),
+                    "index": index, "id": call_id,
                     "function": {"arguments": payload.get("delta") or ""}}]}}]})
             elif kind == "done":
                 u = payload.get("usage") or {}

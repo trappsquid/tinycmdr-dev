@@ -1021,6 +1021,7 @@ On the pre-fix build these helpers do not exist, so every check must come back r
     python tests/test_stream_surface.py        [TINYCMDR_SRC=/path/to/old/tinycmdr.py]
 """
     import importlib.util
+    import json
     import os
     import shutil
     import sys
@@ -1210,6 +1211,62 @@ On the pre-fix build these helpers do not exist, so every check must come back r
             got("an unknown event is ignored, never guessed at",
                 lambda: fb.responses_stream_event({"type": "response.weird.thing"}),
                 lambda v: v == (None, None))
+
+            # --- a streamed call is keyed by the item that announced it -----------
+            # A function-call item announces its name on output_item.added; its argument
+            # fragments carry only item_id. When a delta omits output_index, the fragment
+            # used to fall to the last-opened slot, so two parallel calls interleaved
+            # into one garbled call (2026-10-14).
+            _sse = [
+                b"data: " + json.dumps({
+                    "type": "response.output_item.added", "output_index": 0,
+                    "item": {"type": "function_call", "id": "fc_1",
+                             "call_id": "call_1", "name": "echo"}}).encode(),
+                b"data: " + json.dumps({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1", "delta": '{"a"'}).encode(),
+                b"data: " + json.dumps({
+                    "type": "response.output_item.added", "output_index": 1,
+                    "item": {"type": "function_call", "id": "fc_2",
+                             "call_id": "call_2", "name": "echo"}}).encode(),
+                b"data: " + json.dumps({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_2", "delta": '{"b"'}).encode(),
+                b"data: " + json.dumps({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1", "delta": ':1}'}).encode(),
+                b"data: " + json.dumps({
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_2", "delta": ':2}'}).encode(),
+                b"data: " + json.dumps({
+                    "type": "response.completed",
+                    "response": {"status": "completed", "output": [
+                        {"type": "function_call", "call_id": "call_1"},
+                        {"type": "function_call", "call_id": "call_2"}]}}).encode(),
+            ]
+
+            class FakeSSE:
+                raw = None
+
+                def iter_lines(self, decode_unicode=False):
+                    return iter(list(_sse))
+
+                def close(self):
+                    pass
+
+            streamed, _st = fb._stream_chat(
+                fb._ResponsesStreamAdapter(FakeSSE()),
+                cancel_event=None, idle_seconds=30, on_delta=None,
+                first_byte_seconds=30)
+            streamed_calls = ({c.get("id"): c
+                               for c in (streamed["choices"][0]["message"]
+                                         .get("tool_calls") or [])})
+            got("two parallel streamed calls stay two calls",
+                lambda: sorted(streamed_calls), lambda v: v == ["call_1", "call_2"])
+            got("...and each fragment lands in its own call, index or no index",
+                lambda: {i: c["function"]["arguments"]
+                         for i, c in streamed_calls.items()},
+                lambda v: v == {"call_1": '{"a":1}', "call_2": '{"b":2}'})
 
             # --- the usage vocabulary boundary ------------------------------------
             got("_responses_as_chat renames usage to the chat fields",
