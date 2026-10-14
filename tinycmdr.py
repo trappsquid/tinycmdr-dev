@@ -22277,11 +22277,14 @@ class Agent:
                 msg = _normalize_assistant_message(choice.get("message") or {})
                 finish = choice.get("finish_reason") or ""
                 rc = msg.get("reasoning_content")
-                if rc and not _is_local_url(url):
-                    # The endpoint EMITTED reasoning - that alone is the evidence it takes
-                    # the field back (vendors disagree in both directions; see
-                    # _replay_reasoning_ok). One observation teaches every later request,
-                    # because the fact persists per endpoint.
+                if rc and not _is_local_url(url) and not _endpoint_facts(url).get("reasoning"):
+                    # The endpoint EMITTED reasoning - evidence it takes the field back
+                    # (vendors disagree in both directions; see _replay_reasoning_ok).
+                    # Only a FIRST observation teaches, because an endpoint that already
+                    # gave a 400 verdict about the field has said what it wants:
+                    # re-teaching "on" from the reply of the very retry that carried
+                    # none of it flipped the fact back every turn, so the echo 400 was
+                    # paid again and again (off -> rc -> on -> 400 -> off ...).
                     _endpoint_note(url, reasoning="on")
                 if usage is not None:
                     usage["calls"] = usage.get("calls", 0) + 1

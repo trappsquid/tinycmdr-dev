@@ -537,6 +537,66 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
                   [len(t.get("reasoning_content") or "") for t in turns])
             check(fb._replay_reasoning_ok("https://api.example.com/v1") is True,
                   "...and the fact is remembered for the next request")
+
+            # ---- a 400 verdict stands: the retry's own reply must not flip it back ---
+            # A Groq-style endpoint emits reasoning_content but rejects the echo with a
+            # 400. Re-teaching "on" from the reply of the retry (which carried none of
+            # the field) flipped the fact back, so the echo 400 was paid again on every
+            # turn, forever.
+            rejecter = "https://reject.example.com/v1"
+            fb.CONFIG["llm"]["base_url"] = rejecter
+            fb.AGENT.llm_url = rejecter + "/chat/completions"
+            base = [{"role": "system", "content": "s"},
+                    {"role": "user", "content": "hi"}]
+            seen = []
+
+            def install_raising(fb, seen, script):
+                state = {"i": 0}
+
+                def fake_post(url, headers, payload, timeout, grace,
+                              cancel_event=None, stream=False):
+                    seen.append(json.loads(json.dumps(payload)))
+                    out = script(state["i"], payload)
+                    state["i"] += 1
+                    if isinstance(out, Exception):
+                        raise out
+                    return FakeResp(out)
+
+                fb._post_watchdog = fake_post
+
+            def unsupported_400():
+                err = fb.requests.exceptions.HTTPError("400 stub")
+                resp = FakeResp({})
+                resp.status_code = 400
+                resp.text = ('{"error": {"message": "(\'messages.2\': property '
+                             '\'reasoning_content\' is unsupported)"}}')
+                err.response = resp
+                return err
+
+            def flip_script(i, payload):
+                if i == 0:
+                    return {"choices": [{"message": {
+                        "role": "assistant", "content": "ok",
+                        "reasoning_content": "TH"}}], "finish_reason": "stop"}
+                if i == 1:
+                    return unsupported_400()
+                return {"choices": [{"message": {
+                    "role": "assistant", "content": "done",
+                    "reasoning_content": "TH"}}], "finish_reason": "stop"}
+
+            install_raising(fb, seen, flip_script)
+            fb.AGENT._chat(list(base), session_key="reject-1", usage={})
+            check(fb._replay_reasoning_ok(rejecter) is True,
+                  "an endpoint's first emission still teaches the echo")
+            history = list(base) + [{"role": "assistant", "content": "ok",
+                                     "reasoning_content": "TH"}]
+            fb.AGENT._chat(history, session_key="reject-2", usage={})
+            check(len(seen) == 3, "the echo 400 cost exactly one retry", len(seen))
+            check("reasoning_content" not in str(seen[2].get("messages") or []),
+                  "the retry carried no echo")
+            check(fb._replay_reasoning_ok(rejecter) is False,
+                  "'unsupported' stays learned after the retry's reply carries reasoning",
+                  fb._endpoint_facts(rejecter))
             fb.CONFIG["llm"]["base_url"], fb.AGENT.llm_url = _saved_urls
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
