@@ -24009,9 +24009,10 @@ class Agent:
                                 _final = min(int(_final or _win // 4),
                                              max(256, _win // 4))
                             reply = self._chat(
-                                self._payload(messages, state=False), model,
+                                self._payload(messages, state=False,
+                                              session_key=session_key), model,
                                 use_tools=False, usage=usage,
-                                max_tokens=_final)
+                                max_tokens=_final, session_key=session_key)
                             answer = (reply.get("content") or "").strip()
                             # This call carries NO tool list (use_tools=False) and says
                             # so in the prompt, so a promise-shaped reply here is the

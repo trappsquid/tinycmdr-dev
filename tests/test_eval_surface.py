@@ -223,6 +223,36 @@ Five claims, each one a group here (review 2026-09-28, section 2):
                   f"the cut-off retry escalates to the window, not to 65,536 "
                   f"(got {seen_esc[1].get('max_tokens') if len(seen_esc) > 1 else None})")
 
+            # ---- 2.5c: the forced wrap-up names its session ------------------------
+            # The wrap-up called _chat with session_key=None, so _cache_key_for dropped
+            # the session's prompt_cache_key: the LAST and largest call of a run lost
+            # the sticky routing every earlier call had (2026-10-14).
+            fb.AGENT._envelope_cache = None
+            fb.AGENT._window_cache = 16384
+            fb.CONFIG["agent"]["max_steps"] = 2
+            fb.CONFIG["agent"]["auto_continue_max"] = 0
+            saved_url = fb.AGENT.llm_url
+            fb.AGENT.llm_url = "https://api.example.com/v1/chat/completions"
+            seen_key = []
+
+            def key_script(i, payload):
+                if i < 2:
+                    return tool_call_reply("shell", {"command": f"echo k-{i}"}, f"k{i}")
+                return text_reply("ROOT CAUSE: x\nCHANGED: y\nSTATE: z\n"
+                                  "UNFINISHED: nothing\nVERIFIED: nothing")
+
+            install_stub(fb, seen_key, key_script)
+            try:
+                fb.AGENT.run("s3", "a multi-step thing")
+            finally:
+                fb.AGENT.llm_url = saved_url
+            first_key = seen_key[0].get("prompt_cache_key") if seen_key else None
+            final_key = seen_key[-1].get("prompt_cache_key") if seen_key else None
+            check(bool(first_key),
+                  f"a remote call carries the session's prompt_cache_key ({first_key!r})")
+            check(final_key == first_key,
+                  f"the forced wrap-up carries the SAME key (got {final_key!r})")
+
             # ---- 3. a fresh call whose arguments arrived fenced -------------------
             ctx = {"session_key": "s1"}
             name, args, _out = fb.AGENT._exec_tool(
