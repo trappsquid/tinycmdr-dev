@@ -3436,6 +3436,17 @@
       },
       "detail": "A run's checkpoint-throttle slot was cleared only on the finish path's last line: a reporter that raised between done=True and the pop left an entry, and eviction never cleared slots either. Fixed 2026-10-14 (95ea510): the pop sits in a finally, and _web_register_run clears the slot of every run it drops.",
       "gate": "done - maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
+    },
+    {
+      "id": "tool-args-and-env-gates",
+      "title": "tool calls are checked against the schema they declare",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "37cbcf9",
+        "expect": "untagged"
+      },
+      "detail": "A call is checked against the JSON-Schema subset its tool declares (type unions included) before the handler runs, and a tool's declared env keys answer at call time through one ctx credential seam instead of refusing the tool's whole file at load.",
+      "gate": "tests/test_tool_args_surface.py grades both gates"
     }
   ]
 }
