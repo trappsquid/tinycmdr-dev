@@ -551,6 +551,28 @@ Run:  python tests/test_authority_surface.py
         got = fb._narration_tool_name(cmd)
         check(f"narration: {label}", got == want, f"{got!r} != {want!r}")
 
+    # A HIDDEN tool's name in prose is not the narration shape: `process` and `patch` are
+    # ordinary English words, and matching them revealed their schemas - which then ride
+    # every request of the session - for output lines like "checking process list" (BUG-22).
+    _saved_custom = dict(fb.REGISTRY.custom)
+    fb.REGISTRY.custom.update({"process": {"fn": lambda a, c: ""},
+                               "patch": {"fn": lambda a, c: ""},
+                               "toolsmith": {"fn": lambda a, c: ""}})
+    try:
+        for label, cmd, want in (
+                ("a hidden tool's word in prose", 'echo "checking process list"', ""),
+                ("...nor beside a core word",
+                 'Write-Output "memory and patch notes"', "memory"),
+                ("...but a call-shaped body is narration",
+                 'echo \'toolsmith {"action": "scaffold"}\'', "toolsmith"),
+                ("...and a snake_case name is narration bare", "echo send_file", "send_file"),
+        ):
+            got = fb._narration_tool_name(cmd)
+            check(f"narration: {label}", got == want, f"{got!r} != {want!r}")
+    finally:
+        fb.REGISTRY.custom.clear()
+        fb.REGISTRY.custom.update(_saved_custom)
+
     out = fb.tool_shell({"command": 'echo "calling send_file now"'}, dict(CTX))
     check("the echo RUNS - its own output is the answer, not the door",
           "calling send_file now" in out and "is a TOOL on this box" not in out, out[:160])

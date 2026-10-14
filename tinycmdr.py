@@ -8526,8 +8526,20 @@ def _narration_tool_name(command):
     first = re.split(r"[\s|;&]+", bare, 1)[0].lower()
     if first not in ("echo", "printf", "write-host", "write-output"):
         return ""
-    for word in re.findall(r"[a-z][a-z0-9_]{2,}", bare.lower()):
-        if word != first and _registered_tool(word):
+    low = bare.lower()
+    for m in re.finditer(r"[a-z][a-z0-9_]{2,}", low):
+        word = m.group(0)
+        if word == first or not _registered_tool(word):
+            continue
+        # The narration shape proper: a snake_case tool name (`send_file`), or a name the
+        # command hands a call-shaped body to (`toolsmith {"action": ...}`). A BARE
+        # English word is ambiguous, and the pinned battery keeps the harness's OWN
+        # vocabulary (memory, shell, plan) matching there: its cost is one hint line,
+        # because those schemas are in the payload either way. A HIDDEN tool's name in
+        # prose is different - `echo "checking process list"` would buy `process`'s
+        # schema for the rest of the session - so those need the shape (BUG-22).
+        if "_" in word or low[m.end():].lstrip()[:1] in ("{", "(") \
+                or word in CORE_TOOLS:
             return word
     return ""
 
