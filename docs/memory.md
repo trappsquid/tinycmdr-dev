@@ -79,12 +79,14 @@ and tolerated, per spec §4.1/§11; a concept with no frontmatter at all is stil
 
 ## The tool
 
-`memory` (schema declares six fields; the handler accepts the rest):
+`memory` (the schema declares every argument the handler reads, so a
+grammar-constrained engine can emit them):
 
 | action | effect |
 | :--- | :--- |
 | `add` | one new concept; a duplicate title is refused and names the id to `update` |
 | `update` | rewrite the body/fields in place; records a `touched` stamp, and refuses a title another concept holds (naming it) |
+| `verify` | append a verification by the acting machine (newest 16 kept); `human-reviewed` stays the operator's hand edit |
 | `deprecate` | `status: deprecated` - kept for history and links, flagged in the index |
 | `forget` | delete the file; the log records the removal, not the content |
 | `read` | the concept verbatim, with its tier/staleness header |
@@ -121,8 +123,9 @@ The feature was built to a budget, and the budget is pinned:
 
 - default static state (11 core tool schemas + system prompt): **~4.3K est tokens**;
 - the all-tools-revealed worst case must stay inside the ratchet in
-  `tests/test_envelope.py` (**5,400 est**; this landed at 5,331, which is why the
-  `memory` schema declares six fields rather than eleven);
+  `tests/test_envelope.py` (**5,400 est**; re-measured 2026-10-14 at 4,740 on the
+  staged fixture, +75 of it the fields the `memory` schema now declares - a
+  grammar-constrained engine cannot emit an undeclared key);
 - no standing-instruction line anywhere names the format - the atlas carries two lines
   (`notes.md` legacy, `memory/`) and nothing else rides the static prompt.
 

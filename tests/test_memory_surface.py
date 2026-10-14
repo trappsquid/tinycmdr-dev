@@ -631,6 +631,73 @@ and the index and log a consumer browses.
               "human-reviewed" in index, index[-200:])
 
 
+    def test_verify_is_the_tool_door_to_the_tier():
+        """The tier was readable and had no door: a concept written through tool_memory
+    stayed (unverified) until a human hand-edited the YAML (A-2026-10-14-46)."""
+        _fresh()
+        made = fb.memory_new_concept("Routing note", "the portable box routes via the LAN")
+        check("verify needs an id, and says so",
+              "needs `id`" in _call_tool({"action": "verify"}), "")
+        out = _call_tool({"action": "verify", "id": made["id"]})
+        check("verify answers with the concept's new tier",
+              out.startswith("OK") and "machine-confirmed" in out, out[:200])
+        fm, _ = fb.okf_parse(made["path"].read_text(encoding="utf-8"))
+        entries = fm.get("verified")
+        check("...and the file carries the machine's entry",
+              isinstance(entries, list) and entries
+              and str(entries[-1].get("by") or "").startswith("tinycmdr/")
+              and bool(entries[-1].get("at")), repr(entries))
+        index = fb.memory_index_render()
+        check("...so the index states machine-confirmed",
+              "machine-confirmed" in index, index)
+        _log_text = (fb.MEMORY_LOG.read_text(encoding="utf-8")
+                     if fb.MEMORY_LOG.exists() else "")
+        check("...and the verification is logged",
+              "Verification" in _log_text, _log_text[-120:])
+        out2 = _call_tool({"action": "verify", "id": made["id"]})
+        fm2, _ = fb.okf_parse(made["path"].read_text(encoding="utf-8"))
+        check("a second verify appends rather than replaces",
+              len(fm2.get("verified") or []) == 2, repr(fm2.get("verified")))
+        check("...while the door never claims a human review",
+              "tier machine-confirmed" in out2
+              and "tier human-reviewed" not in out2, out2[:200])
+        for _ in range(20):
+            _call_tool({"action": "verify", "id": made["id"]})
+        fm3, _ = fb.okf_parse(made["path"].read_text(encoding="utf-8"))
+        check("the record list is bounded, newest kept",
+              0 < len(fm3.get("verified") or []) <= 16, len(fm3.get("verified") or []))
+        check("an unknown id is refused with the id list",
+              "no concept" in _call_tool({"action": "verify", "id": "nope"}), "")
+
+
+    def test_the_schema_declares_every_argument_the_handler_reads():
+        """A grammar-constrained engine cannot emit a key the schema omits, so the
+    fields add/update have always read were unreachable from local models
+    (A-2026-10-14-47)."""
+        props = (fb.CORE_TOOLS["memory"]["schema"]["function"]["parameters"]
+                 ["properties"])
+        for name in ("type", "description", "tags", "stale_after", "sources",
+                     "supersedes"):
+            check("the memory schema declares %s" % name, name in props, sorted(props))
+        check("...and the description names the verify action",
+              "verify" in fb.CORE_TOOLS["memory"]["schema"]["function"]["description"],
+              fb.CORE_TOOLS["memory"]["schema"]["function"]["description"])
+        _fresh()
+        _call_tool({"action": "add", "title": "Declared fields concept",
+                    "body": "declared fields land on the concept",
+                    "type": "Fact", "description": "the index line",
+                    "tags": ["a", "b"], "stale_after": "2030-01-01T00:00:00Z",
+                    "sources": ["df -h"]})
+        c = next((c for c in fb.memory_scan()
+                  if c["title"] == "Declared fields concept"), None)
+        check("a call carrying the declared fields lands all of them",
+              c is not None
+              and c["fm"].get("tags") == ["a", "b"]
+              and c["fm"].get("description") == "the index line"
+              and c["fm"].get("stale_after") == "2030-01-01T00:00:00Z"
+              and bool(c["fm"].get("sources")), repr(c and c["fm"]))
+
+
     def test_a_caller_description_is_bounded_like_the_generator():
         """The index is the whole prompt: a caller-supplied description is bounded at the
     generator's bound, and the result says when it was cut (a 3,000-char description was

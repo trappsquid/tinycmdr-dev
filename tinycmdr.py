@@ -12559,8 +12559,8 @@ def _memory_report(verb, made, body_len=None):
 
 @serialized_on(MEMORY_LOCK_FILE)
 def tool_memory(args, ctx):
-    """One OKF bundle, one call per change: add, update, deprecate, forget, read,
-    search, list.
+    """One OKF bundle, one call per change: add, update, deprecate, forget, verify,
+    read, search, list.
 
     Every mutation rebuilds index.md and appends log.md, so the bundle stays browseable
     by a human and by any other OKF consumer; the prompt carries index.md, never the
@@ -12577,7 +12577,7 @@ def tool_memory(args, ctx):
         return ("%d concept%s in memory/ | index %d chars\n%s"
                 % (len(concepts), "" if len(concepts) == 1 else "s",
                    len(index), index))
-    if action in ("read", "update", "deprecate", "forget") and not args.get("id"):
+    if action in ("read", "update", "deprecate", "forget", "verify") and not args.get("id"):
         # The empty-id shape used to answer `no concept ''` - a blank name, then the
         # id list (swept 2026-10-05). Say what the call is missing instead.
         return ("ERROR: %s needs `id` - memory action=list shows the index of ids."
@@ -12760,8 +12760,35 @@ def tool_memory(args, ctx):
         memory_index_update()
         return ("OK: %s is forgotten%s - the file is deleted; the log records that "
                 "it was removed, not what it held." % (c["id"], tail))
-    return ("ERROR: action must be add, update, deprecate, forget, read, search or "
-            "list.")
+    if action == "verify":
+        # The trust tier was readable and unwritable: every concept through this tool
+        # stayed (unverified) unless a human hand-edited the YAML, and the claim the
+        # bundle makes - trust is TRACKED - had no door (A-2026-10-14-46). This one
+        # records the MACHINE's verification (by: tinycmdr/...); human-reviewed stays
+        # the operator's own act, which is the whole point of the tier.
+        c = _memory_find(args.get("id"))
+        if c is None:
+            return _memory_missing(args.get("id"))
+        fm = dict(c["fm"])
+        seen = fm.get("verified")
+        if isinstance(seen, (dict, str)):
+            seen = [seen]
+        entries = list(seen) if isinstance(seen, list) else []
+        # Bounded at birth, newest kept: a concept re-verified daily would otherwise
+        # grow its frontmatter without limit (the newest records are the ones that
+        # speak about the current text).
+        entries = (entries + [{"by": actor, "at": _memory_now()}])[-16:]
+        fm["verified"] = entries
+        _memory_touch(fm, actor)
+        atomic_write_text(c["path"], okf_dump(fm, c["body"]))
+        memory_index_update()
+        _memory_log_append("Verification",
+                           "[%s](%s.md) by %s" % (fm.get("title"), c["id"], actor))
+        return ("OK: memory/%s.md verified by %s - tier %s now. A human review is the "
+                "operator's own act: only a `human:` entry reads as human-reviewed."
+                % (c["id"], actor, _okf_tier(fm)))
+    return ("ERROR: action must be add, update, deprecate, forget, verify, read, "
+            "search or list.")
 
 
 # A2UI - agent-driven UI, on the harness's rent terms
@@ -16543,13 +16570,23 @@ CORE_TOOLS = {
         "fn": tool_memory,
         "schema": _schema(
             "Durable memory (OKF bundle, memory/): add, update, deprecate, forget, "
-            "read, search, list. Never store secrets.",
+            "verify, read, search, list. Never store secrets.",
             {"action": {"type": "string"},
              "id": {"type": "string"},
              "title": {"type": "string"},
              "body": {"type": "string"},
              "reason": {"type": "string"},
-             "query": {"type": "string"}},
+             "query": {"type": "string"},
+             # Declared because a grammar-constrained engine cannot emit a key the
+             # schema omits: the handler always read these, but the fields were
+             # unreachable from local models whose tool grammar follows the schema
+             # (A-2026-10-14-47).
+             "type": {"type": "string"},
+             "description": {"type": "string"},
+             "tags": {"type": "array", "items": {"type": "string"}},
+             "stale_after": {"type": "string"},
+             "sources": {"type": "array", "items": {"type": "string"}},
+             "supersedes": {"type": "string"}},
             ["action"]),
     },
     "render_ui": {
