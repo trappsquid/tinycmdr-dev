@@ -942,6 +942,24 @@ def main():
               TOK)[0] == 404,
           "a non-file line is not downloadable")
 
+    # A run the table no longer holds (a restart, or eviction past WEB_RUN_KEEP) still
+    # has its record and its file on disk, and the transcript rendered from the run log
+    # still shows the link (A-2026-10-14-48).
+    aged = fb._web_new_run("web")
+    aged.add("file", str(uploaded))
+    aged_uid = aged.lines[-1]["uid"]
+    fb.web_runlog_append("web", aged.id, aged.started, list(aged.lines))
+    fb.WEB_RUNS.pop(aged.id, None)
+    _code, _body, _hdr = req(
+        "GET", "/api/download?run=%s&uid=%s" % (
+            aged.id, urllib.parse.quote(aged_uid, safe="")), TOK)
+    check(_code == 200 and _body == small,
+          "an aged-out run's file still downloads from the run log",
+          (_code, _body[:40]))
+    check(req("GET", "/api/download?run=%s&uid=%s" % (
+        aged.id, urllib.parse.quote("zz#9", safe="")), TOK)[0] == 404,
+        "...and an unknown uid in that run is still 404")
+
     # ...and a path that stats but cannot be OPENED is answered, not promised: a
     # directory line kept in a run log (they were offerable before attach() refused
     # them) used to get 200 with a Content-Length and no body at all, which hangs the

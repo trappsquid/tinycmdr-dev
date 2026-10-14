@@ -28819,6 +28819,44 @@ def web_runlog_append(key, run_id, started, lines):
         except Exception as e:
             log.warning("could not write the web run log for %s: %s", key, e)
 
+
+def web_runlog_find_file(run_id, uid):
+    """The `file` line for (run, uid) as the run LOG carries it, or None.
+
+    For a run WEB_RUNS no longer holds: a restart, or eviction past WEB_RUN_KEEP. The
+    page's transcript is rendered from the log, so its download links must keep working
+    while the file is still on disk (A-2026-10-14-48). The URL carries no session key,
+    so every conversation's log is searched, newest file first; a damaged line is
+    skipped, the same tolerance `web_runlog` states."""
+    if not run_id or not uid:
+        return None
+    try:
+        files = sorted(SESSIONS_DIR.glob("*.web.jsonl"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    for path in files:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(rec, dict) or rec.get("run_id") != run_id:
+                continue
+            for l in (rec.get("lines") or []):
+                if (isinstance(l, dict) and l.get("uid") == uid
+                        and l.get("kind") == "file"):
+                    return l
+    return None
+
+
 def web_history_lines(key):
     """A transcript for a conversation that predates the run log: history as it
     stands (the operator's turns and the answers, no tool lines)."""
@@ -33852,6 +33890,13 @@ def run_webui():
                 if run is not None:
                     with run.lock:
                         line = next((l for l in run.lines if l.get("uid") == uid), None)
+                if line is None or line.get("kind") != "file":
+                    # The run is gone from the table (restart, or eviction past
+                    # WEB_RUN_KEEP) while the page's transcript - rendered from the run
+                    # log - still shows the link, and the file is still on disk
+                    # (A-2026-10-14-48). The log is the same record the transcript
+                    # came from, so it is the fallback, not a second source.
+                    line = web_runlog_find_file(str(q.get("run") or ""), uid)
                 if line is None or line.get("kind") != "file":
                     self._json({"error": "no such file"}, 404)
                     return
