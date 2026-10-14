@@ -491,6 +491,41 @@ def test_the_identity_files_take_the_same_question():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_quoted_mentions_are_not_commands():
+    """`git commit -m "fix taskkill"` is a commit, not a taskkill.
+
+    _confirm_hit ran its patterns against the RAW text while is_blocked carefully
+    stripped quoted arguments (_live_text), so any grep/echo/commit MESSAGE that
+    mentioned a machine verb raised the operator's confirm question - and on a lane
+    with nobody at the door that is a flat DECLINED. The two tiers read the same
+    subject now; a command that hands its quoted text to something that EXECUTES it
+    (bash -c, python -c, eval, xargs) keeps its quotes.
+    """
+    check("a commit message mentioning taskkill is not a taskkill",
+          fb._confirm_hit('git commit -m "fix taskkill handling"') is None,
+          fb._confirm_hit('git commit -m "fix taskkill handling"'))
+    check("a quoted grep pattern mentioning stop-service is not a command",
+          fb._confirm_hit('grep -rn "stop-service" logs/') is None,
+          fb._confirm_hit('grep -rn "stop-service" logs/'))
+    check("a quoted echo of diskpart is not diskpart",
+          fb._confirm_hit('echo "diskpart"') is None,
+          fb._confirm_hit('echo "diskpart"'))
+    check("a reboot named inside an executed string still fires (conservative: the "
+          "payload could run it)",
+          bool(fb._confirm_hit('python3 -c "import os; os.system(\'reboot\')"')),
+          "python -c keeps its quotes")
+
+    # the conservative side must not weaken: real commands still fire
+    check("a bare taskkill still fires",
+          bool(fb._confirm_hit("taskkill /F /IM x.exe")))
+    check("a bare reboot after && still fires",
+          bool(fb._confirm_hit('git commit -m "x" && reboot')))
+    check("an executed payload still fires (bash -c)",
+          bool(fb._confirm_hit('bash -c "reboot"')))
+    check("rm -r on a quoted directory still fires",
+          bool(fb._confirm_hit('rm -r "build dir"')))
+
+
 def test_manifest_command_walks_the_shell_tier():
     """A .tool.json whose command is `rm -rf /` must not load, and a
     confirm-tier command must be asked at call time - the manifest door is the shell door."""

@@ -5122,6 +5122,16 @@ def _confirm_hit(text, kind="confirm_patterns"):
     length, and only a command whose every segment is allow-listed needs no question.
     """
     text = _guard_join_continuations(text)
+    if kind == "confirm_patterns" and not _executes_text(text):
+        # The confirm tier reads what would RUN, exactly as is_blocked does (which
+        # consulted _live_text while this function did not): a word inside quotes is
+        # an argument - `git commit -m "fix taskkill handling"`, `grep -rn
+        # "stop-service" logs/`, `echo "diskpart"` - not a command, and it used to
+        # raise a question (or a flat DECLINED where nobody can answer). When the
+        # command hands its quoted text to something that executes it (bash -c,
+        # python -c, eval, xargs) the quotes stay, because that text really is the
+        # command.
+        text = _live_text(text)
     allow_kind = ("allow_content_patterns" if kind == "confirm_content_patterns"
                   else "allow_patterns")
     if kind == "confirm_patterns":
