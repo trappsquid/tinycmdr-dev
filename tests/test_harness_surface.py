@@ -358,17 +358,22 @@ produces on a real box.
             try:
                 fb.IS_WINDOWS = True
                 fb.CONFIG["agent"]["shell_strict_mode"] = True
-                _argv = fb._shell_argv('echo "x" && echo "y"')
-                _body = _argv[3]
+                # hasattr guards, not bare calls: on a PRE-FIX build the helper does not
+                # exist, and a suite that crashes before its checks run reports a crash
+                # instead of the red-before the checks are for.
+                _argv = (fb._shell_argv('echo "x" && echo "y"')
+                         if hasattr(fb, "_shell_argv") else [])
+                _body = _argv[3] if len(_argv) > 3 else ""
                 check(_argv[:3] == ["powershell", "-NoProfile", "-Command"]
                       and "[Console]::OutputEncoding" in _body,
                       "the shell argv carries the console UTF-8 lever", _argv)
-                check(_body.startswith("Set-StrictMode -Version 2.0;"),
+                check(bool(_body) and _body.startswith("Set-StrictMode -Version 2.0;"),
                       "...the strict mode, outermost", _body[:60])
                 check("if ($?)" in _body and "&&" not in _body,
                       "...and the && translation", _body)
                 fb.IS_WINDOWS = False
-                check(fb._shell_argv("ls") == ["bash", "-c", "ls"],
+                check(hasattr(fb, "_shell_argv")
+                      and fb._shell_argv("ls") == ["bash", "-c", "ls"],
                       "POSIX stays bash -c", None)
             finally:
                 fb.IS_WINDOWS = _saved_win
