@@ -1816,6 +1816,20 @@ def main():
           "a configured 8788 wins over the record",
           "%s %s" % (_named_port(), fb.a2a_base_url()))
 
+    # An IPv6 literal needs its brackets in a URL authority: the bind side learned
+    # AF_INET6 for a ':' host, the URL formatters had not, so a box bound to ::1
+    # printed links no browser or client accepts (A-2026-10-14-53).
+    fb.CONFIG["web"]["host"] = "::1"
+    check(fb.a2a_base_url() == "http://[::1]:8788",
+          "an IPv6 bind prints a bracketed a2a URL", fb.a2a_base_url())
+    _v6urls = fb._web_base_urls(8788, host="::1")
+    check(bool(_v6urls) and _v6urls[0][0] == "http://[::1]:8788/",
+          "...and so do the printed page URLs", _v6urls)
+    _v6note = "\n".join(fb.web_busy_note("::1", 8788))
+    check("http://[::1]:8788" in _v6note,
+          "...and the busy note about a taken port", _v6note[:200])
+    fb.CONFIG["web"]["host"] = "127.0.0.1"
+
     # A FAILED record's detail names the port it TRIED - which is the 0 itself. Reading it
     # back as a bound port would hand out "port 0" as an address.
     fb.CONFIG["web"]["port"] = 0

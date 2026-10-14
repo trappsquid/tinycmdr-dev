@@ -12987,12 +12987,25 @@ def _a2a_working_placeholder(task_id, message, context_id):
     return task
 
 
+def _url_host(host):
+    """A host as a URL authority: an IPv6 literal needs its brackets (`http://[::1]:8790`).
+
+    The BIND side learned AF_INET6 for a `:` host (A-2026-10-08-116); the URL
+    formatters did not, so a box bound to ::1 printed links no browser or client
+    accepts (A-2026-10-14-53).
+    """
+    host = str(host or "")
+    if ":" in host and not host.startswith("["):
+        return "[%s]" % host
+    return host
+
+
 def a2a_base_url():
     """Where this box answers A2A, as a client would reach it (loopback unless LAN)."""
     host = str((CONFIG.get("web") or {}).get("host") or "127.0.0.1")
     if host in ("0.0.0.0", "::", ""):
         host = "127.0.0.1"
-    return "http://%s:%d" % (host, web_port_effective())
+    return "http://%s:%d" % (_url_host(host), web_port_effective())
 
 
 def a2a_card():
@@ -34870,7 +34883,7 @@ def web_busy_note(host, port):
     kills anything. `port` may be junk (a hand-edited config), which is not an error here.
     """
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    url = "http://%s:%s" % (shown, port)
+    url = "http://%s:%s" % (_url_host(shown), port)
     try:
         holder = _port_holder(int(port))
     except (TypeError, ValueError):
@@ -35323,10 +35336,10 @@ def _web_base_urls(port, host=None):
         out = []
         ip = _web_lan_ip()
         if ip:
-            out.append(("http://%s:%d/" % (ip, port), False))
+            out.append(("http://%s:%d/" % (_url_host(ip), port), False))
         out.append(("http://127.0.0.1:%d/" % (port), True))
         return out
-    return [("http://%s:%d/" % (host or "127.0.0.1", port), True)]
+    return [("http://%s:%d/" % (_url_host(host or "127.0.0.1"), port), True)]
 
 
 def _web_answers(port, timeout=2.0):
