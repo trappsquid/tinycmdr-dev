@@ -3151,6 +3151,102 @@ def test_the_batch_worker_closes_over_its_own_turn_buffers():
               "results[i] = (" in body, body[:200])
 
 
+def test_the_batch_window_is_sized_to_what_the_batch_holds():
+    """The window was shell_timeout+grace+30 whatever the batch held, so a delegate batch
+    (up to agent.subagent_timeout_seconds per child) or a shell call the model gave a
+    longer timeout was declared hung while its workers were inside their own legitimate
+    deadlines (A-2026-10-14-38)."""
+    shell_args = json.dumps({"command": "x", "timeout": 600})
+    check("a shell call's requested timeout is the ceiling",
+          fb._batch_call_ceiling({"function": {"name": "shell",
+                                               "arguments": shell_args}}) >= 600.0,
+          fb._batch_call_ceiling({"function": {"name": "shell",
+                                               "arguments": shell_args}}))
+    sub_args = json.dumps({"task": "t", "timeout_seconds": 1200})
+    check("a delegate's own cap is the ceiling",
+          fb._batch_call_ceiling({"function": {"name": "delegate_task",
+                                               "arguments": sub_args}}) >= 1200.0,
+          fb._batch_call_ceiling({"function": {"name": "delegate_task",
+                                               "arguments": sub_args}}))
+    tasks_args = json.dumps({"context": "c", "tasks": [
+        {"task": "a"}, {"task": "b", "timeout_seconds": 500}]})
+    ceiling = fb._batch_call_ceiling({"function": {"name": "delegate_task",
+                                                   "arguments": tasks_args}})
+    check("...and a tasks batch takes the largest entry's cap",
+          ceiling >= 500.0, ceiling)
+    base = float(fb.CONFIG["agent"].get("shell_timeout") or 380)
+    check("a call with no timeout argument keeps the shell_timeout base",
+          fb._batch_call_ceiling({"function": {"name": "read_file",
+                                               "arguments": "{}"}}) == base,
+          fb._batch_call_ceiling({"function": {"name": "read_file",
+                                               "arguments": "{}"}}))
+
+
+def test_a_batch_that_elapses_stops_its_abandoned_worker():
+    """shutdown(wait=False) cancels only QUEUED futures: on a batch timeout the running
+    worker kept going alone - subprocesses, delegations, file writes - while the model
+    was told its call "did not complete" (A-2026-10-14-38). The batch sets its own
+    cancel when the window elapses, and the worker's ctx reads it next to the run's."""
+    _redirect_state()
+    fb.AGENT.histories.clear()
+    seen = {"cancel": False, "finished": False}
+    started = threading.Event()
+
+    def slow_probe(args, ctx):
+        started.set()
+        stop = (ctx or {}).get("cancel_event")
+        for _ in range(20):
+            if stop is not None and stop.is_set():
+                seen["cancel"] = True
+                return "stopped by the batch"
+            time.sleep(0.1)
+        seen["finished"] = True
+        return "ran to the end"
+
+    fb.REGISTRY.custom["probe_slow"] = {
+        "fn": slow_probe,
+        "mutates": False,
+        "schema": {"type": "function", "function": {
+            "name": "probe_slow", "description": "probe",
+            "parameters": {"type": "object", "properties": {}, "required": []}}}}
+    saved_chat = fb.AGENT._chat
+    saved_ac = getattr(fb, "as_completed", None)
+    calls = {"n": 0}
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None, max_tokens=None,
+                  cancel_event=None, on_delta=None, session_key=None, **kwargs):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            return {"role": "assistant", "content": "done."}
+        return {"role": "assistant", "content": "starting",
+                "tool_calls": [
+                    {"id": "p1", "function": {"name": "probe_slow", "arguments": "{}"}},
+                    {"id": "p2", "function": {"name": "probe_slow",
+                                              "arguments": '{"which": "b"}'}}]}
+
+    def instant_timeout(fs, timeout=None):
+        # The window elapses while both workers are still inside the tool.
+        started.wait(5)
+        time.sleep(0.2)
+        raise TimeoutError("stub: the batch window elapsed")
+        yield                                                  # pragma: no cover
+
+    fb.AGENT._chat = fake_chat
+    fb.as_completed = instant_timeout
+    try:
+        fb.AGENT.run("slow-batch", "run the slow batch",
+                     channel_id="chan-slow-batch")
+    finally:
+        fb.AGENT._chat = saved_chat
+        fb.as_completed = saved_ac
+        fb.REGISTRY.custom.pop("probe_slow", None)
+    end = time.time() + 5
+    while time.time() < end and not seen["cancel"]:
+        time.sleep(0.05)
+    check("the abandoned worker is told to stop, and stops",
+          seen["cancel"] and not seen["finished"], seen)
+
+
 def test_a_correction_that_arrives_with_the_answer_gets_another_turn():
     """An answer composed before the correction is an answer to the old instruction. The run has
     to notice and take another turn, and the correction has to reach the model."""

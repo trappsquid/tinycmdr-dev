@@ -21033,6 +21033,71 @@ class _OverrideMap(dict):
         super().clear()
 
 
+class _BatchCancel:
+    """The run's stop plus a batch's own: `is_set()` answers for both.
+
+    A tool batch that elapses its window must be able to stop its abandoned workers
+    (cancelling futures only removes QUEUED ones; a running worker keeps mutating
+    files or holding the delegate gate) without faking an operator stop for the rest
+    of the run - while a real operator stop still reaches every worker, because the
+    parent event is read through (A-2026-10-14-38). Consumers only ever call
+    `is_set()`; `set()` is the batch's own lever.
+    """
+
+    def __init__(self, parent=None):
+        self._parent = parent
+        self._own = threading.Event()
+
+    def set(self):
+        self._own.set()
+
+    def is_set(self):
+        return self._own.is_set() or (self._parent is not None
+                                      and self._parent.is_set())
+
+
+def _batch_call_ceiling(tc):
+    """The longest one queued call may legitimately run, off its own name and arguments.
+
+    The batch's window used to be shell_timeout+grace+30 whatever the batch held, so a
+    batch of delegate_task calls (up to agent.subagent_timeout_seconds, 900) or a shell
+    call the model gave a longer timeout was declared hung while its worker was still
+    inside its own legitimate deadline (A-2026-10-14-38).
+    """
+    fn = tc.get("function") or {}
+    name = str(fn.get("name") or "")
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+    except Exception:                        # noqa: BLE001 - unparsable args run as {}
+        args = {}
+    if not isinstance(args, dict):
+        args = {}
+    agent = CONFIG["agent"]
+    base = float(agent.get("shell_timeout") or 380)
+    if name == "delegate_task":
+        cap = float(agent.get("subagent_timeout_seconds") or 900)
+        per = [cap]
+        for entry in (args.get("tasks") or []):
+            if isinstance(entry, dict):
+                try:
+                    per.append(float(entry.get("timeout_seconds") or cap))
+                except (TypeError, ValueError):
+                    pass
+        try:
+            per.append(float(args.get("timeout_seconds") or 0))
+        except (TypeError, ValueError):
+            pass
+        return max(per)
+    if name in ("shell", "execute_code"):
+        try:
+            return max(base, float(args.get("timeout") or 0))
+        except (TypeError, ValueError):
+            return base
+    if name == "ask_user":
+        return max(base, _ask_wait_cap())
+    return base
+
+
 class Agent:
     def __init__(self):
         self.histories = {}          # session_key -> list[message]
@@ -23642,7 +23707,8 @@ class Agent:
                     # result carrying a stale id, the current call padded as "no result
                     # was recorded", or an IndexError past the end of the new list.
                     def work(i, tc, results=results, tool_calls=tool_calls,
-                             timings=timings, dedupe_after=dedupe_after):
+                             timings=timings, dedupe_after=dedupe_after,
+                             ctx_override=None):
                         f = tc.get("function", {})
                         name = f.get("name", "?")
                         raw_args = f.get("arguments", "")
@@ -23743,7 +23809,8 @@ class Agent:
                                 return
                         _started = time.time()
                         try:
-                            results[i] = (tc, self._exec_tool(tc, ctx))
+                            results[i] = (tc, self._exec_tool(
+                                tc, ctx if ctx_override is None else ctx_override))
                         finally:
                             timings[i] = time.time() - _started
                     if len(tool_calls) > 1:
@@ -23754,10 +23821,24 @@ class Agent:
                         # A future that never finishes leaves results[i] as None, and the
                         # loop below already answers that tool_call explicitly, so a hung
                         # tool becomes a tool result the model can react to (2026-09-18).
-                        _batch_timeout = (float(CONFIG["agent"].get("shell_timeout") or 380)
+                        #
+                        # ...and the window is SIZED to what the batch holds, queueing
+                        # included: the fixed shell_timeout+grace+30 declared a delegate
+                        # batch (up to subagent_timeout_seconds per child) hung while its
+                        # workers were inside their own legitimate deadlines
+                        # (A-2026-10-14-38).
+                        _workers = max(1, batch_workers(tool_calls, self.llm_url))
+                        _ceiling = max(_batch_call_ceiling(tc) for tc in tool_calls)
+                        _waves = -(-len(tool_calls) // _workers)      # ceil
+                        _batch_timeout = (_ceiling * _waves
                                           + float(CONFIG["llm"].get("request_grace") or 30)
                                           + 30.0)
-                        _workers = max(1, batch_workers(tool_calls, self.llm_url))
+                        # The batch's own stop: set when the window elapses, so an
+                        # abandoned worker ends at once instead of running alone
+                        # (shutdown(wait=False) cancels only the QUEUED futures).
+                        _batch_cancel = _BatchCancel(cancel_event)
+                        _batch_ctx = dict(ctx or {})
+                        _batch_ctx["cancel_event"] = _batch_cancel
                         if _workers < min(BATCH_MAX_WORKERS, len(tool_calls)):
                             log.info("[%s] the endpoint serves %s request(s) at once - "
                                      "running %d of %d delegated subtask(s) now and the "
@@ -23766,7 +23847,8 @@ class Agent:
                                      _workers, len(tool_calls))
                         ex = ThreadPoolExecutor(max_workers=_workers)
                         try:
-                            futures = [ex.submit(work, i, tc)
+                            futures = [ex.submit(work, i, tc,
+                                                 ctx_override=_batch_ctx)
                                        for i, tc in enumerate(tool_calls)]
                             try:
                                 for _fut in as_completed(futures, timeout=_batch_timeout):
@@ -23775,6 +23857,7 @@ class Agent:
                                 _left = [i for i, fut in enumerate(futures)
                                          if not fut.done()]
                                 if _left:
+                                    _batch_cancel.set()
                                     log.warning(
                                         "[%s] tool batch timed out after %.0fs; %d of %d "
                                         "call(s) never returned (%s) - answering them as "
