@@ -338,7 +338,9 @@ DEFAULT_CONFIG = {
         # Replay assistant `reasoning_content` on history turns TO LOCAL endpoints (a
         # template rebuilds the <think> block from it, keeping the replayed prefix
         # byte-aligned for the KV cache); a remote endpoint gets no such field. The cap
-        # bounds what a long think block re-buys each turn.
+        # bounds what a COMPLETED turn re-buys on later requests; the turn still in
+        # flight replays whole, because a sliced <think> renders a different token
+        # sequence than the server just generated and throws its cache away.
         "replay_reasoning": True,
         "replay_reasoning_max_chars": 4000,
         "fallbacks": [],   # [{"base_url": ..., "model": ..., "api_key": ...,
@@ -2713,17 +2715,45 @@ def _join_user_messages(a, b):
     return _content_parts(ca) + _content_parts(cb)
 
 
+def _operator_user(m):
+    """True when a `user` message is one the OPERATOR wrote, not one the harness inserted.
+
+    The harness speaks as `user` too - the volatile state block, the carry banner,
+    tool-image notes, steering and nudge lines all begin with "[" or "SYSTEM:" - and
+    only the operator's own message marks the completed/in-flight boundary for the
+    reasoning policy (the trailing state block would otherwise make every tool round
+    look completed). Content that is not a string (the operator's own upload: rich
+    content parts) is operator-authored by construction.
+    """
+    if not isinstance(m, dict) or m.get("role") != "user":
+        return False
+    content = m.get("content")
+    if not isinstance(content, str):
+        return True
+    text = content.lstrip()
+    return not (text.startswith("[") or text.startswith("SYSTEM:"))
+
+
 def _messages_for_wire(messages, url):
     """The history as THIS endpoint may see it: the echo decision and the join.
 
     Two per-request repairs live here, because the stored history must keep the
     unrepaired shape:
 
-    * THE ECHO: the reasoning strip for an endpoint that may not see the field
-      (see _replay_reasoning_ok). The history keeps the reasoning text
-      unconditionally (that is what lets an endpoint which LATER says the field is
-      required be served without replaying the turn), so the strip belongs here,
-      not at capture.
+    * THE ECHO: the reasoning policy for this endpoint (see _replay_reasoning_ok).
+      When the echo is ON, the turn still IN FLIGHT - the assistant messages after
+      the last OPERATOR user message (see _operator_user; the trailing state block
+      is a user message too, so the naive boundary would call every tool round
+      completed) - carries its reasoning WHOLE: the server's chat
+      template rebuilds the <think> block from it, and a value sliced by
+      replay_reasoning_max_chars renders a different token sequence than the one
+      the server just generated, so the prefix KV-cache misses from the cut onward
+      on every tool round of every thinking model. Older, completed turns replay
+      capped (_reasoning_for_replay) - they are stale context by then, and the cap
+      bounds what a long-lived conversation re-buys. When the echo is OFF the field
+      is stripped everywhere (the history keeps the text unconditionally, which is
+      what lets an endpoint which LATER says the field is required be served
+      without replaying the turn).
     * THE JOIN: consecutive `user` messages are coalesced into one. The harness
       builds them on purpose - the volatile state block is inserted before the
       operator's message, tool images are appended after it, a carried tool-result
@@ -2736,12 +2766,23 @@ def _messages_for_wire(messages, url):
     for the local templates byte-identical to what they were.
     """
     replay = _replay_reasoning_ok(url)
+    last_user = -1
+    for i, m in enumerate(messages):
+        if _operator_user(m):
+            last_user = i
     out = []
     changed = False
-    for m in messages:
-        if isinstance(m, dict) and m.get("reasoning_content") and not replay:
-            m = {k: v for k, v in m.items() if k != "reasoning_content"}
-            changed = True
+    for i, m in enumerate(messages):
+        if isinstance(m, dict) and m.get("reasoning_content"):
+            if not replay:
+                m = {k: v for k, v in m.items() if k != "reasoning_content"}
+                changed = True
+            elif i < last_user:
+                capped = _reasoning_for_replay(m)
+                if capped != m.get("reasoning_content"):
+                    m = ({**m, "reasoning_content": capped} if capped else
+                         {k: v for k, v in m.items() if k != "reasoning_content"})
+                    changed = True
         if (isinstance(m, dict) and m.get("role") == "user" and out
                 and isinstance(out[-1], dict) and out[-1].get("role") == "user"):
             out[-1] = {"role": "user", "content": _join_user_messages(out[-1], m)}
@@ -2799,7 +2840,15 @@ def _cached_tokens_from_usage(u):
 
 
 def _reasoning_for_replay(msg):
-    """The capped reasoning text to replay for one assistant turn, or ""."""
+    """The capped reasoning text for ONE COMPLETED assistant turn, or "".
+
+    This is the send-time cap for turns that are already behind a user message
+    (see _messages_for_wire): it bounds what old turns re-buy on every later
+    request. The turn still IN FLIGHT is replayed whole, never through here - a
+    <think> sliced by replay_reasoning_max_chars renders a different token
+    sequence than the server just generated (the cut shifts every later token),
+    so the prefix KV-cache misses from the cut onward on every tool round.
+    """
     rc = msg.get("reasoning_content") if isinstance(msg, dict) else None
     if not isinstance(rc, str) or not rc:
         return ""
@@ -22801,15 +22850,18 @@ class Agent:
                                     f"run; nothing was changed. Retry, or check "
                                     f"the endpoint.")
                         return f"⚠️ LLM call failed: {e}"
-                    # The history keeps the reasoning text unconditionally; whether THIS
-                    # endpoint may see it is decided at send time (_messages_for_wire),
-                    # from facts learned off the wire. Capture here is what lets an
-                    # endpoint that later says the field is required be served without
-                    # replaying the turn.
-                    _rr = _reasoning_for_replay(reply)
-                    if _rr:
-                        reply["reasoning_content"] = _rr
-                    else:
+                    # The FULL reasoning text is what history keeps - whether THIS
+                    # endpoint may see it, and how much of it, is decided at send time
+                    # (_messages_for_wire) from facts learned off the wire: the turn
+                    # still in flight replays it whole (a value sliced by
+                    # replay_reasoning_max_chars renders a different token sequence
+                    # than the server just generated, so the prefix KV-cache misses
+                    # from the cut onward on every tool round), completed turns replay
+                    # capped, and an endpoint that later says the field is required is
+                    # served without re-running the turn. Capturing the capped copy
+                    # here defeated that before it could begin.
+                    if not isinstance(reply.get("reasoning_content"), str) \
+                            or not reply.get("reasoning_content"):
                         reply.pop("reasoning_content", None)
                     messages.append(reply)
                     tool_calls = reply.get("tool_calls") or []
@@ -23226,13 +23278,13 @@ class Agent:
                     turn = {"role": "assistant",
                             "content": (reply.get("content") or "").strip(),
                             "tool_calls": tool_calls}
-                    # The plain-append above already capped/kept or dropped the field
-                    # according to the endpoint; carry the same decision onto the turn
-                    # that replaces it (a reasoning model's tool call is the turn whose
-                    # prefix matters most).
-                    _rr = _reasoning_for_replay(reply)
-                    if _rr:
-                        turn["reasoning_content"] = _rr
+                    # The same full text the plain append kept rides on the turn that
+                    # REPLACES it (a reasoning model's tool call is the turn whose
+                    # prefix matters most; the send-time policy caps it once it is no
+                    # longer the active turn).
+                    if isinstance(reply.get("reasoning_content"), str) \
+                            and reply.get("reasoning_content"):
+                        turn["reasoning_content"] = reply["reasoning_content"]
                     if messages and messages[-1] is reply:
                         messages[-1] = turn
                     else:

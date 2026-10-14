@@ -424,9 +424,10 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
             fb.AGENT.run("replay-local", "list the tools")
             turns = [m for m in seen[-1]["messages"]
                      if m.get("role") == "assistant" and m.get("tool_calls")]
-            check(bool(turns) and turns[0].get("reasoning_content") == THINK[:100],
-                  "the replayed tool-call turn carries the capped reasoning",
-                  turns[:1])
+            check(bool(turns) and turns[0].get("reasoning_content") == THINK,
+                  "the in-flight tool-call turn carries its reasoning WHOLE "
+                  "(a sliced <think> throws the server's prefix cache away)",
+                  [len(t.get("reasoning_content") or "") for t in turns])
             check(len(seen[-1]["messages"]) >= 3,
                   "the payload kept the full turn sequence", len(seen[-1]["messages"]))
 
@@ -465,6 +466,27 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
             check(not _adj,
                   "no captured payload of a real run carries adjacent user messages",
                   [[m.get("role") for m in _p.get("messages") or []] for _p in seen[:2]])
+
+            # ---- the cap applies to COMPLETED turns only --------------------------
+            # The reason the cap exists is context economy on later requests; the turn
+            # the server just generated must replay whole or its prefix cache dies at
+            # the cut. One message list covering both sides of the boundary:
+            _aged = _wf([{"role": "user", "content": "first"},
+                         {"role": "assistant", "content": "done",
+                          "reasoning_content": "x" * 500},
+                         {"role": "user", "content": "second"},
+                         {"role": "assistant", "content": "",
+                          "reasoning_content": "y" * 500,
+                          "tool_calls": [{"id": "z", "type": "function",
+                                          "function": {"name": "shell",
+                                                       "arguments": "{}"}}]},
+                         {"role": "tool", "tool_call_id": "z", "content": "r"}], "")
+            check(_aged[1].get("reasoning_content") == "x" * 100,
+                  "a completed turn's reasoning replays capped",
+                  len(_aged[1].get("reasoning_content") or ""))
+            check(_aged[3].get("reasoning_content") == "y" * 500,
+                  "...while the turn still in flight keeps it whole",
+                  len(_aged[3].get("reasoning_content") or ""))
 
             # ---- switch off: the field is gone
             fb.CONFIG["llm"]["replay_reasoning"] = False
@@ -509,9 +531,10 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
             fb.AGENT.run("replay-remote-learned", "list the tools")
             turns = [m for m in seen[-1]["messages"]
                      if m.get("role") == "assistant" and m.get("reasoning_content")]
-            check(bool(turns) and turns[0].get("reasoning_content") == THINK[:100],
-                  "...but one that emitted reasoning gets it back, learned per endpoint",
-                  turns[:1])
+            check(bool(turns) and turns[0].get("reasoning_content") == THINK,
+                  "...but one that emitted reasoning gets it back in full, "
+                  "learned per endpoint",
+                  [len(t.get("reasoning_content") or "") for t in turns])
             check(fb._replay_reasoning_ok("https://api.example.com/v1") is True,
                   "...and the fact is remembered for the next request")
             fb.CONFIG["llm"]["base_url"], fb.AGENT.llm_url = _saved_urls
