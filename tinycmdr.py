@@ -13238,7 +13238,21 @@ def _mcp_open(name, ctx=None):
     with _MCP_LOCK:
         ent = _MCP_PROCS.get(name)
         if ent and ent["proc"].poll() is None:
-            return ent, ""
+            if (ent.get("stdin_closed") and ent.get("fail_until", 0.0)
+                    <= time.time()):
+                # The handshake failed, stdin was closed off (EOF is the polite exit -
+                # a server that honours it has already exited and was caught by poll()
+                # above), and the window that answers the next call from memory has
+                # passed: this one is wedged. Reap the direct child and spawn fresh
+                # below instead of re-paying the handshake against a corpse for ever.
+                try:
+                    ent["proc"].terminate()
+                    ent["proc"].wait(timeout=2)
+                except Exception:                                # noqa: BLE001
+                    pass
+                _MCP_PROCS.pop(name, None)
+            else:
+                return ent, ""
         cmd = [str(spec["command"])] + [str(a) for a in (spec.get("args") or [])]
         # The confirm tier runs at the spawn, where a door exists to ask the operator: the
         # absolute tier above is already answered at read time, so what is left is the
@@ -13249,15 +13263,21 @@ def _mcp_open(name, ctx=None):
         env = dict(os.environ)
         env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
         try:
+            # encoding/errors and hidden_proc_kwargs, the same contract run_capture's
+            # children get: text=True without an encoding decodes with the LOCALE codec
+            # (cp1252 on a Windows service), so one UTF-8 line from a server killed the
+            # reader thread and every later call timed out against a live process; and
+            # under pythonw a console child pops a visible window without the flag.
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, bufsize=1,
-                                    env=env)
+                                    env=env, encoding="utf-8", errors="replace",
+                                    **hidden_proc_kwargs())
         except Exception as e:                                   # noqa: BLE001
             return None, "ERROR: could not start %r: %s" % (name, e)
         q = queue.Queue()
         ent = {"proc": proc, "q": q, "seq": 0, "modern": None, "tools": None,
                "err": [], "err_done": False, "parked": {},
-               "fail_until": 0.0, "fail_reason": ""}
+               "fail_until": 0.0, "fail_reason": "", "stdin_closed": False}
 
         def _pump(p=proc, q=q):
             try:
@@ -13446,6 +13466,15 @@ def tool_mcp(args, ctx):
     if not ok:
         ent["fail_until"] = time.time() + _MCP_FAIL_WINDOW
         ent["fail_reason"] = err
+        # EOF is what tells a well-behaved server to exit, and it keeps a wedged one
+        # from holding its pipes open until this process ends: the fail window only
+        # answers the NEXT call faster, it never reaps. Past the window _mcp_open
+        # terminates whatever is still alive and starts fresh.
+        try:
+            ent["proc"].stdin.close()
+        except Exception:                                        # noqa: BLE001
+            pass
+        ent["stdin_closed"] = True
         return "ERROR: %s did not answer the handshake: %s" % (name, err)
     tools = (ent.get("tools") or {}).get("tools") or []
     if action == "tools":

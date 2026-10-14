@@ -887,6 +887,50 @@ for line in sys.stdin:
             ON.CONFIG["agent"]["mcp_servers"].pop("nope", None)
 
 
+    def test_the_stdio_pipe_speaks_utf8_and_a_failed_handshake_is_reaped():
+        """The spawn's pipe contract, and the parked corpse.
+
+    text=True without an encoding decodes with the LOCALE codec - cp1252 on a
+    Windows service - so one UTF-8 line from a server killed the reader thread and
+    the next calls timed out against a live process that had answered fine. And a
+    server that never answered the handshake stayed in _MCP_PROCS with its pipes
+    open: the fail window only answers the NEXT call from memory. stdin is closed
+    on a failed handshake now (EOF is the polite exit), and past the window a
+    process still alive is terminated so the next call starts fresh.
+    """
+        ON.CONFIG["agent"]["mcp_servers"]["pipe"] = stub_spec()
+        try:
+            ent, err = ON._mcp_open("pipe", {})
+            check("an mcp server spawns", bool(ent) and not err, err)
+            proc = (ent or {}).get("proc")
+            check("the pipes decode as UTF-8 with replacement",
+                  proc is not None and proc.encoding == "utf-8"
+                  and proc.errors == "replace",
+                  (proc and proc.encoding, proc and proc.errors))
+        finally:
+            ON.CONFIG["agent"]["mcp_servers"].pop("pipe", None)
+
+        ON.CONFIG["agent"]["mcp_servers"]["quiet2"] = stub_spec("--silent")
+        ON.CONFIG["agent"]["mcp_timeout"] = 0.6
+        try:
+            out = ON.tool_mcp({"action": "tools", "server": "quiet2"}, {})
+            check("a handshake that never answers is an error", "no answer" in out, out)
+            proc = ON._MCP_PROCS["quiet2"]["proc"]
+            check("...and its stdin is closed off (EOF, the polite exit)",
+                  proc.stdin.closed, proc.stdin)
+            # let the fail window lapse: the next open must reap and replace
+            ON._MCP_PROCS["quiet2"]["fail_until"] = 0.0
+            ent2, err2 = ON._mcp_open("quiet2", {})
+            check("past the window the wedged process is reaped and replaced",
+                  isinstance(ent2, dict) and ent2.get("proc") is not proc,
+                  ("err=%s" % err2) if err2 else ent2 and ent2.get("proc") is proc)
+            check("...and the old child was terminated", proc.poll() is not None,
+                  proc.poll())
+        finally:
+            ON.CONFIG["agent"]["mcp_servers"].pop("quiet2", None)
+            ON.CONFIG["agent"]["mcp_timeout"] = 60
+
+
     def test_no_servers_means_no_tool():
         check("off: a box with no servers has no mcp tool", "mcp" not in OFF.CORE_TOOLS)
         out = OFF.tool_mcp({"action": "list"}, {})
