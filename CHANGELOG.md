@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.15] - 2026-10-14
+
+### Fixed
+- **`/status` names the parked question again:** the ask line's WAITING half read a dispatcher key nothing ever installs, so no chat lane ever named the question a run waited on while the terminal did; both doors read the same source now (tests/test_interaction_surface.py).
+- **PowerShell `&&` translation reads PowerShell's own quoting:** a backslash read as a quote escape left the closing quote of a trailing-slash path open, so the `&&` was never translated and PowerShell 5.1 refused the line; strings are scanned with the backtick rules (tests/test_authority_surface.py).
+- **The event log records the whole failure verdict:** TIMEOUT, BLOCKED, DECLINED, STOPPED, REFUSED, NOT EXECUTED and NOT RE-EXECUTED all counted as ok in the session event log; the outcome reads the same verdict prefixes the result cards use (tests/test_events_surface.py).
+- **Field-note gaps parse the recorder's own format:** the recorder writes minute precision while the reader demanded seconds, so `gap:` raised on every read, the last-firing stayed 0 and a note fired as if no gap were set (tests/test_harness_surface.py).
+- **A dropped Telegram line stops renumbering its neighbours:** drop() popped by index, so the reporter's raw tool/card refs and the ask row later wrote into whatever slid forward; the slot is a tombstone and the live text filters it (tests/test_telegram.py).
+- **The PowerShell wrapper unwrap touches one quoted body only:** any body beginning and ending with a quote was stripped, so a command with a trailing statement or a piped tail came out broken and re-scoped; the body is quote-scanned with PowerShell's rules (tests/test_authority_surface.py).
+- **A dead host ends the window probes early:** four metadata routes at the full 10s timeout plus a sleep meant ~51.5s before the first chat request; each probe carries a 2.5s connect budget and a connect timeout settles the host (tests/test_endpoint_surface.py).
+- **Hidden tools stay hidden behind prose:** an echo or printf mentioning a hidden tool's word revealed its schema for the session and attached the narration hint; a bare word counts only for the harness's core vocabulary (tests/test_authority_surface.py).
+- **search_files resolves paths like every other file tool:** it used the process cwd while read/write/edit and the shell use the install root, so a listed file answered "does not exist" to the follow-up read (tests/test_search_surface.py).
+- **PowerShell's dot-source and call operators join the guard vocabulary:** `. { format D: }` and `& format D:` reached the never tier with the operator as the verb, and the quoted form had no gate at all (tests/test_guard_battery.py).
+- **Payload dumps land 0600 in a 0700 directory:** raw request bodies were world-readable at the umask's mode; the payload stays deliberately unscrubbed but is no longer readable by anyone (tests/test_stall.py).
+- **Local/remote classification reads the address, not its spelling:** IPv4-mapped loopback, link-local and zoned IPv6 forms are judged correctly, RFC 5737 documentation ranges stay remote, and the source carries no address literal (tests/test_stream_surface.py, tests/test_verbs.py).
+- **Every Windows launch path carries the same shell body:** the auto-background path and drop-in spawns ran the command translation alone, losing the console UTF-8 lever and Set-StrictMode the blocking path adds (tests/test_harness_surface.py).
+- **`tinycmdr quit` follows the Windows process tree past one hop:** a grandparent that merely named the install folder - an interactive cmd opened there - was killed while the operator typed in it; the walk reads a Toolhelp32 parent map (tests/test_harness_surface.py).
+- **`llm.no_think` says when it does not apply:** the setting rides `chat_template_kwargs` on the chat wire only, and on the /responses wire it was dropped in silence while the default's comment claimed otherwise (tests/test_stream_surface.py).
+- **A memory deprecate/forget reason is scrubbed and bounded:** it was the one caller-supplied string on that path that reached the log and the reply unscrubbed, and a huge reason broke the log's size claim (tests/test_memory_surface.py).
+- **Parallel streamed tool calls keep their own arguments:** on the /responses wire a fragment that omitted `output_index` was keyed on the last-opened call, so two parallel calls interleaved into one garbled call or split one across two slots; the adapter remembers each item's announced slot (tests/test_stream_surface.py).
+- **The forced wrap-up names its session:** without it the run's largest call lost the session's `prompt_cache_key` and the envelope was measured for an anonymous caller (tests/test_eval_surface.py).
+- **A fence-closing cut re-reads the parity it emits:** the backoff could move the cut above the fence that opened the block, and the shape still closed a fence it was no longer inside, manufacturing an empty fence pair and shifting every later marker (tests/test_stall.py).
+- **The measured-value class closes over its backslash:** an unescaped bracket kept the class open, so any two-to-four letter word satisfied the box-attachment gate and ordinary prose beside a unit word fired the fabrication scold (tests/test_checkin.py).
+- **The parallel tool batch sizes its window to what it holds:** a delegate batch or a longer shell timeout was cut at the shell default while its workers were inside their own deadlines, and a timed-out batch left running workers unsupervised (tests/test_stall.py).
+- **A fuzzy edit keeps the file's indentation:** a dedented anchor spliced the new block at the anchor's depth - a syntax error inside any indented block, paid with a repair turn (tests/test_harness_surface.py).
+- **An endpoint's reasoning verdict survives its own retry:** the reply after an "unsupported field" 400 carries `reasoning_content` again, and re-teaching the echo made the 400 permanent - one every turn (tests/test_retry_surface.py).
+- **A live `config set llm.base_url|api_key` moves the running agent:** the endpoint URL and auth header were snapshotted at construction, so the process kept calling the old box with the old key until a restart (tests/test_verbs.py).
+- **`PGPASSWORD`-style names join the secret sweep:** the name test required a separator before the keyword, so `env` could print such a value into the prompt, the log and the chat; `key`/`pat` keep the separator, so a name that merely contains "key" stays out (tests/test_safety_surface.py).
+- **A directly executed script is read back like an interpreted one:** a script run as `/tmp/x.sh`, or named inside `sh -c`, was never read - so a script the run had just written could carry a declined command past every guard (tests/test_guard_battery.py).
+- **The process query stops treating the install folder as a pattern:** a path with a bracket or a quote matched nothing on POSIX, and Windows dropped every row containing "powershell" - including the child it was asked about (tests/test_verbs.py).
+- **Memory's fields are reachable from a grammar-constrained model:** the tool gains a `verify` action (machine entry, newest 16 kept, never `human:`), and the schema declares type/description/tags/stale_after/sources/supersedes, so a grammar-constrained engine can emit them (tests/test_memory_surface.py).
+- **Download links survive a restart:** `/api/download` resolved files only in memory, so a transcript link 404'd once its run aged out (a restart, or eviction past the keep bound); it falls back to the run log the transcript is rendered from (tests/test_webui.py).
+- **A JSON body answers on the /responses wire:** a server that ignores `stream: true` had its whole (valid) answer dropped and the same generation bought again on the non-streaming path (tests/test_stream_surface.py).
+- **A run span clears only its own id:** a wedged run's late unwind popped the shared key unconditionally, so a newer run's events were logged without a run (tests/test_events_surface.py).
+- **A mixed delete replaces every occurrence it reports:** with `replace_all`, the whole-line deletion shape removed only whole-line copies while a substring occurrence elsewhere survived and the reply claimed all were replaced (tests/test_harness_surface.py).
+- **A stop lands safely in the lock:** an OperatorStop or KeyboardInterrupt while waiting for the file lock leaked a descriptor and left the RLock held, freezing every later write to that path for the process's life (tests/test_events_surface.py).
+- **IPv6 hosts print bracketed URLs:** a `::1` bind produced links no browser or client accepts (tests/test_webui.py).
+- **edit_file picks the newline convention by majority:** one stray CRLF line flipped every line of a mostly-LF file to CRLF, turning a one-line edit into a whole-file diff (tests/test_byte_surface.py).
+- **A finished run's checkpoint slot is freed even when its reporter raises:** the pop sat on the happy path, so a done-but-unpopped entry outlived the run (tests/test_webui.py).
 ## [1.1.14] - 2026-10-13
 
 ### Fixed
