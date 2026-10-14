@@ -210,6 +210,35 @@ What this suite guards, in order of what would hurt most:
         check("a blip on every route is retried once, and the retry's answer is used",
               window(_flaky) == 131072 and _flaky.models_calls == 2, _flaky.models_calls)
 
+        # -------------------------------------------------- a dropped host ends the probing
+        # BUG-21 (measured 2026-10-14): with the host dark and packets silently dropped,
+        # each of the four routes waited its full 10s connect, and the 1.5s pause plus its
+        # retry followed - ~51.5s of stall before the first chat request went out. A
+        # CONNECT timeout settles the HOST: one probe, no sleep. A refused connection is
+        # instant and must NOT stop the probing - the blip retry above depends on that.
+        class _Dark:
+            def __init__(self):
+                self.calls = []
+                self.real = _rq
+
+            def get(self, url, **kw):
+                self.calls.append((url, kw.get("timeout")))
+                raise _rq.exceptions.ConnectTimeout("no TCP answer")
+
+            def __getattr__(self, name):
+                return getattr(self.real, name)
+
+        _dark = _Dark()
+        _t0 = time.monotonic()
+        _got = window(_dark)
+        _dt = time.monotonic() - _t0
+        check("a connect timeout stops at the first route, without the sleep",
+              _got == 0 and len(_dark.calls) == 1 and _dt < 2.0,
+              (_got, _dark.calls, _dt))
+        check("...and the probe carries a short connect budget",
+              all(isinstance(t, tuple) and t[0] <= 3 for _u, t in _dark.calls),
+              _dark.calls)
+
         # ------------------------------------------------- llm.context_window pins the window
         _saved_cw = fb.CONFIG["llm"].get("context_window")
         _saved_ceiling = fb.CONFIG["llm"].get("max_context_tokens")

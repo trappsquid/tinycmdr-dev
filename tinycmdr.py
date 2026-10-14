@@ -3528,6 +3528,17 @@ def _pick_model(models, want):
     return None
 
 
+def _probe_timeout(timeout):
+    """(connect, read) for one metadata GET: the connect phase is a liveness check on a
+    LAN box or a provider's front door, and it has no business owning the read budget -
+    a host that silently drops packets held each probe for the full read timeout, and
+    five routes of that stopped startup for ~51.5s before the first chat request went
+    out (measured 2026-10-14). The read half stays the caller's number."""
+    if isinstance(timeout, tuple):
+        return timeout
+    return (2.5, timeout)
+
+
 def _detect_window(base_url, headers, timeout=10):
     """Ask an endpoint how many tokens it serves per request; 0 when it does not say.
 
@@ -3547,9 +3558,14 @@ def _detect_window(base_url, headers, timeout=10):
     root = _endpoint_root(base)
     detected = None
     _blip = [False]
+    # A connect TIMEOUT settles the HOST, not the route: with the box dark and packets
+    # dropped, probing /props, /api/ps and /get_server_info on the same dead host:port
+    # just multiplied the wait (see _probe_timeout). A refused/failed connection is
+    # instant and does NOT set this - a freshly-started server still gets its retry.
+    _down = [False]
     try:
         models = (requests.get(base + "/models", headers=headers,
-                               timeout=timeout).json().get("data") or [])
+                               timeout=_probe_timeout(timeout)).json().get("data") or [])
         entry = _pick_model(models, CONFIG["llm"]["model"])
         if entry is None:
             log.debug("window detect: %d model(s) advertised on %s, none is %r - asking the "
@@ -3586,17 +3602,21 @@ def _detect_window(base_url, headers, timeout=10):
                             or entry.get("max_context_length"))
     except Exception as e:
         _blip[0] = True
+        if isinstance(e, requests.exceptions.ConnectTimeout):
+            _down[0] = True
         log.debug("window detect: /models on %s did not answer: %s", base, e)
-    if not detected:
+    if not detected and not _down[0]:
         try:
             props = requests.get(root + "/props", headers=headers,
-                                 timeout=timeout).json()
+                                 timeout=_probe_timeout(timeout)).json()
             detected = ((props.get("default_generation_settings") or {})
                         .get("n_ctx") or props.get("n_ctx"))
         except Exception as e:
             _blip[0] = True
+            if isinstance(e, requests.exceptions.ConnectTimeout):
+                _down[0] = True
             log.debug("window detect: /props on %s did not answer: %s", base, e)
-    if not detected:
+    if not detected and not _down[0]:
         # Ollama. Its OpenAI-compatible /v1 answers /models like everything else, but
         # the window it SERVES is its own API's business, and /api/ps reports exactly
         # that: the loaded model's context_length, which is the number the budget needs.
@@ -3611,15 +3631,17 @@ def _detect_window(base_url, headers, timeout=10):
         # which is what every endpoint that does not say already gets.
         try:
             ps = requests.get(root + "/api/ps", headers=headers,
-                              timeout=timeout).json()
+                              timeout=_probe_timeout(timeout)).json()
             for entry in (ps.get("models") or []):
                 if isinstance(entry, dict) and entry.get("context_length"):
                     detected = entry["context_length"]
                     break
         except Exception as e:
             _blip[0] = True
+            if isinstance(e, requests.exceptions.ConnectTimeout):
+                _down[0] = True
             log.debug("window detect: /api/ps on %s did not answer: %s", base, e)
-    if not detected:
+    if not detected and not _down[0]:
         # SGLang answers /get_server_info at its root - the third fingerprint, beside
         # llama.cpp's /props and vLLM's /models. context_length is the served window,
         # and max_req_input_len is the same number written as an input cap, so it is the
@@ -3630,13 +3652,15 @@ def _detect_window(base_url, headers, timeout=10):
         # configured budget in charge.
         try:
             info = requests.get(root + "/get_server_info", headers=headers,
-                                timeout=timeout).json()
+                                timeout=_probe_timeout(timeout)).json()
             if isinstance(info, dict):
                 detected = info.get("context_length") or info.get("max_req_input_len")
         except Exception as e:
             _blip[0] = True
+            if isinstance(e, requests.exceptions.ConnectTimeout):
+                _down[0] = True
             log.debug("window detect: /get_server_info on %s did not answer: %s", base, e)
-    if not detected and _blip[0]:
+    if not detected and _blip[0] and not _down[0]:
         # At least one route ERRORED rather than answering - a busy or freshly-started server
         # is the ordinary cause, and the ordinary fix is to ask once more in a moment. A
         # server that ANSWERED and simply does not report a window is not retried: that is an
@@ -3644,7 +3668,7 @@ def _detect_window(base_url, headers, timeout=10):
         time.sleep(1.5)
         try:
             models = (requests.get(base + "/models", headers=headers,
-                                   timeout=timeout).json().get("data") or [])
+                                   timeout=_probe_timeout(timeout)).json().get("data") or [])
             entry = _pick_model(models, CONFIG["llm"]["model"])
             if entry is not None:
                 detected = (entry.get("max_model_len")
@@ -3741,7 +3765,7 @@ def _llama_props(base_url, headers=None, timeout=5):
     root = _endpoint_root(base)
     try:
         got = requests.get(root + "/props", headers=headers,
-                           timeout=timeout).json()
+                           timeout=_probe_timeout(timeout)).json()
         if isinstance(got, dict) and (
                 got.get("default_generation_settings")
                 or (got.get("build_info") and got.get("total_slots"))):
