@@ -21101,10 +21101,38 @@ class Agent:
             messages.insert(1, {"role": "user", "content": note})
         else:
             messages[1]["content"] = note
+        if save and key:
+            self._sync_history_after_cut(key, dropped, note)
         # The NET cost, not just what was deleted: the elision note re-inserted above
         # rides every later request, and the callers keep a running total to avoid
         # re-serializing the whole conversation on every pass (that was O(N^2)).
         return dropped_tokens - (est_tokens(note) - est_tokens(prev))
+
+    def _sync_history_after_cut(self, key, dropped, note):
+        """Remove what the cut just evicted from the SESSION history, marker in place.
+
+        `messages` is a per-run list built FROM `self.histories[key]` (`messages += hist`
+        copies the references), so a block dropped here stayed in the session file: the
+        NEXT run rebuilt the same oversized history, compacted the same blocks again -
+        re-writing them to the transcript a second time, and again per run - while the
+        model kept answering from a history the payload no longer matched. The dropped
+        entries are the same dict objects, so identity is the sync key; the run list's
+        own markers and the carried block were never in the history and drop out of
+        this naturally. The note rides at the front of the history for the same reason
+        it rides in the run list: it explains the gap, and its presence is what lets a
+        later cut in the NEXT run proceed past it instead of re-dropping the same span.
+        """
+        hist = (self.histories or {}).get(key)
+        if hist is None:
+            return
+        drop_ids = {id(m) for m in dropped if isinstance(m, dict)}
+        if drop_ids and any(id(m) in drop_ids for m in hist):
+            hist[:] = [m for m in hist if id(m) not in drop_ids]
+            if hist and isinstance(hist[0], dict) \
+                    and str(hist[0].get("content") or "").startswith(ELISION_MARKERS):
+                hist[0] = {"role": "user", "content": note}
+            else:
+                hist.insert(0, {"role": "user", "content": note})
 
     # The transcript rotates to `.transcript.1.jsonl` at this size, replacing the older
     # Predecessor: the file is written per dropped block and is READ by

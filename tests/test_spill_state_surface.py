@@ -813,6 +813,50 @@ wrote the pre-compaction transcript.
                   and "[files touched this run]" in msgs[1]["content"],
                   "the marker left behind carries the ledger", msgs[1]["content"][-160:])
 
+            # ---- a real cut evicts from the SESSION history too -------------------
+            # `messages` is built FROM self.histories[key]: a cut that left the raw
+            # history in place made every next run rebuild the same oversized list,
+            # compact the same blocks AGAIN (re-archiving them to the transcript) and
+            # answer from a history the payload no longer matched.
+            hkey = "sync-key"
+            fb.AGENT.histories[hkey] = [
+                {"role": "user", "content": "u1 " + "x" * 200},
+                {"role": "assistant", "content": "a1 " + "y" * 200},
+                {"role": "user", "content": "u2 " + "x" * 200},
+                {"role": "assistant", "content": "a2 " + "y" * 200},
+                {"role": "user", "content": "u3 " + "x" * 200},
+            ]
+            hhist = fb.AGENT.histories[hkey]
+            u1_obj, a1_obj = hhist[0], hhist[1]
+            hmsgs = [{"role": "system", "content": "s"}] + list(hhist)
+            A._drop_oldest_block(hmsgs, fb.MARK_COMPACT, hkey)
+            check(u1_obj not in fb.AGENT.histories[hkey]
+                  and a1_obj not in fb.AGENT.histories[hkey],
+                  "a cut with a session key evicts the dropped messages from history",
+                  fb.AGENT.histories[hkey])
+            check(any(str(m.get("content") or "").startswith("u2")
+                      for m in fb.AGENT.histories[hkey]),
+                  "...keeps the survivors",
+                  fb.AGENT.histories[hkey])
+            check(bool(fb.AGENT.histories[hkey])
+                  and str(fb.AGENT.histories[hkey][0].get("content") or "")
+                  .startswith(fb.MARK_COMPACT),
+                  "...and leaves the elision marker at the history front",
+                  fb.AGENT.histories[hkey][:1])
+            htp = fb.SESSIONS_DIR / (hkey + ".transcript.jsonl")
+            first_txt = htp.read_text(encoding="utf-8")
+            check(first_txt.count("u1 ") == 1,
+                  "the transcript carries the first cut's messages",
+                  first_txt.count("u1 "))
+            second = [{"role": "system", "content": "s"}] \
+                + list(fb.AGENT.histories[hkey])
+            A._drop_oldest_block(second, fb.MARK_COMPACT, hkey)
+            again = htp.read_text(encoding="utf-8")
+            check(again.count("u1 ") == 1 and again.count("u2 ") == 1,
+                  "a later cut (rebuilt from the synced history) does not re-archive "
+                  "the same span",
+                  (again.count("u1 "), again.count("u2 ")))
+
             # ---- _force_shrink writes the transcript before it evicts
             fb._TOUCHED.pop(key, None)
             tp.unlink(missing_ok=True)
