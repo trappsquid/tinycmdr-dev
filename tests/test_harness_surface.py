@@ -348,6 +348,32 @@ produces on a real box.
                     fb.REGISTRY.custom["process"] = _real_proc
                 fb._DROPIN_GAPS.update({"checked": False, "gaps": []})
 
+            # ---- ONE Windows shell body for every launch path --------------------------
+            # tool_shell's blocking path prepended the console UTF-8 lever and the opt-in
+            # strict mode; ctx["shell_argv"] (auto-background, drop-in spawns) ran
+            # _pwsh_chain_and alone, so on Windows every command past
+            # auto_background_seconds - the normal path - lost both (BUG-28/30).
+            _saved_win = fb.IS_WINDOWS
+            _saved_strict = fb.CONFIG["agent"].get("shell_strict_mode")
+            try:
+                fb.IS_WINDOWS = True
+                fb.CONFIG["agent"]["shell_strict_mode"] = True
+                _argv = fb._shell_argv('echo "x" && echo "y"')
+                _body = _argv[3]
+                check(_argv[:3] == ["powershell", "-NoProfile", "-Command"]
+                      and "[Console]::OutputEncoding" in _body,
+                      "the shell argv carries the console UTF-8 lever", _argv)
+                check(_body.startswith("Set-StrictMode -Version 2.0;"),
+                      "...the strict mode, outermost", _body[:60])
+                check("if ($?)" in _body and "&&" not in _body,
+                      "...and the && translation", _body)
+                fb.IS_WINDOWS = False
+                check(fb._shell_argv("ls") == ["bash", "-c", "ls"],
+                      "POSIX stays bash -c", None)
+            finally:
+                fb.IS_WINDOWS = _saved_win
+                fb.CONFIG["agent"]["shell_strict_mode"] = _saved_strict
+
             # ---- a host-owned file whose SHIPPED DEFAULT moved must be reported
             # update never overwrites a host-owned file by design, so a fix inside the default
             # reaches only new installs unless the host is told. Measured 2026-10-03: the

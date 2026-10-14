@@ -8992,6 +8992,40 @@ def _shell_autobg(command, ctx, threshold, limit=None):
                jid, jid))
 
 
+def _windows_pwsh_body(command):
+    """The PowerShell body every Windows shell launch runs: && translation, the console
+    UTF-8 lever, and the opt-in strict mode.
+
+    ONE definition, because tool_shell's blocking path and ctx["shell_argv"] (the
+    auto-background path and drop-in tools' spawns) had drifted: the second ran
+    _pwsh_chain_and alone, so `echo ✓ 日本語` came back as `?? ???` and
+    agent.shell_strict_mode never applied on any command that outlived
+    agent.auto_background_seconds - the normal path (BUG-28/30).
+    """
+    body = _pwsh_chain_and(command)
+    # A redirected PowerShell writes bytes in the console's OEM code page (cp437 on the
+    # Windows box) while _read_capped decodes UTF-8. The lever is the CONSOLE's output
+    # encoding - a `chcp 65001` in the child, which was tried, does not change what .NET
+    # writes to a redirected stream. This is the shell half; execute_code gets UTF-8
+    # from its own `-X utf8` launch.
+    body = ("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; "
+            "$OutputEncoding = [Console]::OutputEncoding; " + body)
+    if CONFIG["agent"].get("shell_strict_mode"):
+        # Opt-in (agent.shell_strict_mode): makes a property that does not exist an error
+        # instead of a silent $null. Measured before it was offered, not after.
+        body = "Set-StrictMode -Version 2.0; " + body
+    return body
+
+
+def _shell_argv(command):
+    """The argv one shell launch runs on this platform: PowerShell with the full
+    _windows_pwsh_body on Windows, bash -c elsewhere. The ONE builder - tool_shell's
+    blocking path and ctx["shell_argv"] both come through here."""
+    if IS_WINDOWS:
+        return ["powershell", "-NoProfile", "-Command", _windows_pwsh_body(command)]
+    return ["bash", "-c", command]
+
+
 def tool_shell(args, ctx):
     """Run a shell command. bash on Linux/macOS, PowerShell on Windows."""
     command = args["command"]
@@ -9055,22 +9089,9 @@ def tool_shell(args, ctx):
             if cost_risk:
                 charge_scan(ctx, time.time() - ab_t0)
             return ab
-    shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
-    if IS_WINDOWS:
-        # A redirected PowerShell writes bytes in the console's OEM code page (cp437 on the Windows box)
-        # while _read_capped decodes UTF-8, so `echo ✓ 日本語` came back as
-        # `?? ???`. The lever is the
-        # CONSOLE's output encoding - a `chcp 65001` in the child, which was tried,
-        # does not change what .NET writes to a redirected stream. This is the shell half;
-        # execute_code gets UTF-8 from its own `-X utf8` launch.
-        shell_cmd = ("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; "
-                     "$OutputEncoding = [Console]::OutputEncoding; " + shell_cmd)
-    if IS_WINDOWS and CONFIG["agent"].get("shell_strict_mode"):
-        # Opt-in (agent.shell_strict_mode): makes a property that does not exist an error
-        # instead of a silent $null. Measured before it was offered, not after.
-        shell_cmd = "Set-StrictMode -Version 2.0; " + shell_cmd
-    shell_argv = (["powershell", "-NoProfile", "-Command", shell_cmd] if IS_WINDOWS
-                  else ["bash", "-c", command])
+    # One builder for both launch paths (this blocking one, and _shell_autobg via
+    # ctx["shell_argv"]): the Windows UTF-8 lever and shell_strict_mode live in it.
+    shell_argv = _shell_argv(command)
     try:
         scan_t0 = time.time()
         rc, stdout, stderr, timeout_hit = run_capture(
@@ -22681,9 +22702,10 @@ class Agent:
                    # PowerShell, so PowerShell and bash loops both died in cmd and one of
                    # them "succeeded" doing nothing) and the safety tier. One wiring point,
                    # like send_file.
-                   "shell_argv": (lambda c: ["powershell", "-NoProfile", "-Command",
-                                             _pwsh_chain_and(c)] if IS_WINDOWS
-                                  else ["bash", "-c", c]),
+                   # One builder with tool_shell's blocking path (_shell_argv): the
+                   # Windows UTF-8 lever and shell_strict_mode ride every shell launch,
+                   # including auto-background and drop-in tools' spawns.
+                   "shell_argv": _shell_argv,
                    "shell_guard": lambda text: shell_guard(text, ctx),
                    "config": CONFIG, "depth": depth,
                    # A tool may hand the model an image to LOOK at: it returns
