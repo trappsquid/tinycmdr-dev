@@ -149,6 +149,24 @@ to be asserted here or it is a hope.
             and "ValueError" in str(last.get("error"))
 
 
+    def test_a_stale_unwind_does_not_clear_a_newer_runs_id():
+        """A run the watchdog abandoned can unwind long after a newer run took the
+    key; the stale span's pop deleted the NEW run's id, so the new run's events were
+    logged with no run (A-2026-10-14-50)."""
+        with_log(True)
+        clear("shared-key")
+        first = fb._RunSpan("shared-key")
+        second = fb._RunSpan("shared-key")
+        first.__enter__()
+        rid2 = second.__enter__()
+        first.__exit__(None, None, None)          # the abandoned run's late unwind
+        check("the newer run's id survives a stale span's exit",
+              fb._EVENT_RUN.get("shared-key") == rid2, fb._EVENT_RUN.get("shared-key"))
+        second.__exit__(None, None, None)
+        check("...and its own exit still clears it",
+              "shared-key" not in fb._EVENT_RUN, fb._EVENT_RUN.get("shared-key"))
+
+
     # --------------------------------------------------------------------------
     # the two properties that make it worth having: outcomes, and no secrets
     # --------------------------------------------------------------------------

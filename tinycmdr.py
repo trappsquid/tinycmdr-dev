@@ -17557,9 +17557,11 @@ class _RunSpan:
 
     def __init__(self, session_key):
         self.key = session_key or ""
+        self.rid = ""
 
     def __enter__(self):
         rid = os.urandom(4).hex()
+        self.rid = rid
         _EVENT_RUN[self.key] = rid
         try:
             event("run.start", session_key=self.key)
@@ -17578,7 +17580,11 @@ class _RunSpan:
                 prune_events()
         except Exception:
             pass
-        _EVENT_RUN.pop(self.key, None)
+        # Only THIS span's id: a wedged run the watchdog abandoned can unwind long
+        # after a newer run took the key, and the unconditional pop deleted the NEW
+        # run's id from _EVENT_RUN, leaving its events without a run (A-2026-10-14-50).
+        if _EVENT_RUN.get(self.key) == self.rid:
+            _EVENT_RUN.pop(self.key, None)
         return False
 
 
