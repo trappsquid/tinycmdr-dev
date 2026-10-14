@@ -43884,6 +43884,15 @@ def _config_reload_live():
     # A key added after import was not in the sweep, so it reached the transcript, the
     # log and the chat unmasked (2026-09-29).
     _refresh_secrets()
+    # The Agent snapshotted its endpoint URL and auth header at construction and the
+    # singleton is never rebuilt, so a live `config set llm.base_url|api_key` moved
+    # CONFIG while the process kept calling the OLD box with the OLD key until a
+    # restart (A-2026-10-14-42). Same derivation as Agent.__init__, refreshed here.
+    _agent = globals().get("AGENT")
+    if _agent is not None:
+        _agent.llm_url = CONFIG["llm"]["base_url"].rstrip("/") + "/chat/completions"
+        _agent.headers = {"Content-Type": "application/json",
+                          "Authorization": f"Bearer {CONFIG['llm']['api_key']}"}
 
 
 def _config_take_effect():

@@ -1563,6 +1563,21 @@ def _body():
               and "tinycmdr token set" in out, out[:400])
         call(fb, ["config", "unset", "llm.api_key"])
 
+        # A live `config set llm.base_url|api_key` moved CONFIG while the Agent kept
+        # its startup snapshot: every later request dialled the OLD box with the OLD
+        # key until a restart (A-2026-10-14-42).
+        call(fb, ["config", "set", "llm.api_key", "sk-SENTINEL-B42"])
+        call(fb, ["config", "set", "llm.base_url", "https://moved.example.com/v1"])
+        check("a live config set moves the agent's endpoint and key",
+              fb.AGENT.llm_url == "https://moved.example.com/v1/chat/completions"
+              and fb.AGENT.headers.get("Authorization") == "Bearer sk-SENTINEL-B42",
+              (fb.AGENT.llm_url, fb.AGENT.headers.get("Authorization")))
+        call(fb, ["config", "unset", "llm.api_key"])
+        call(fb, ["config", "unset", "llm.base_url"])
+        check("...and unsetting walks it back (the endpoint follows the reload)",
+              fb.AGENT.llm_url.endswith("/chat/completions")
+              and "moved.example.com" not in fb.AGENT.llm_url, fb.AGENT.llm_url)
+
         # ---- a box with NO config.json: the verb CREATES one, and does not write on a read
         # `setup` prints `config set` as its non-interactive path, and that path used to die
         # with "could not read config.json: [Errno 2] ..." and refuse to write - a dead end on
