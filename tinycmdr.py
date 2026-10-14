@@ -8711,7 +8711,13 @@ def _pwsh_chain_and(command):
         c = command[i]
         if in_quote:
             if c == in_quote:
-                if i > 0 and command[i - 1] in ('`', '\\'):
+                # PowerShell's escape character is the backtick, and only inside double
+                # quotes; a single-quoted string escapes nothing. The old check treated a
+                # backslash as an escape too, so the closing quote of `"C:\dir\"` read as
+                # escaped, the scan stayed inside the string, and the `&&` after it was
+                # never translated - which PowerShell 5.1 answers with a ParserError, the
+                # whole reason this function exists.
+                if in_quote == '"' and i > 0 and command[i - 1] == '`':
                     pass
                 else:
                     in_quote = None

@@ -595,6 +595,23 @@ Run:  python tests/test_authority_surface.py
         got = fb._unwrap_redundant_powershell(cmd)
         check(f"powershell wrapper: {label}", got == want, f"{got!r} != {want!r}")
 
+    # ---- && translation reads PowerShell's OWN quote rules -----------------------------
+    # The escape character inside a PowerShell string is the backtick, and only inside
+    # double quotes; a backslash is literal. The old scan treated a backslash as an escape
+    # too, so the closing quote of a trailing-slash path read as escaped: the scan stayed
+    # "inside" the string and the `&&` after it was never rewritten, which PowerShell 5.1
+    # answers with a ParserError (BUG-16).
+    for label, cmd, want_tail, want_abs in (
+            ("a trailing-backslash path closes its quote",
+             'cd "C:\\Users\\me\\" && dir', "if ($?) { dir }", "&&"),
+            ("single quotes escape nothing",
+             "echo 'a\\' && dir", "if ($?) { dir }", "&&"),
+            ("a backtick inside double quotes does escape",
+             'echo "a `" b" && dir', "if ($?) { dir }", "&&"),
+    ):
+        got = fb._pwsh_chain_and(cmd)
+        check(f"pwsh &&: {label}", want_tail in got and want_abs not in got, got)
+
     # ---- a file whose text reads like INSTRUCTIONS is annotated where it is read --------
     # Measured 2026-09-25 on the macOS box: a note inside the folder being cleared carried four
     # numbered steps, and the run executed ALL of them - a canary, the operator's own file in
