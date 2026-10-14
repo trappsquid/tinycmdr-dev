@@ -38113,11 +38113,16 @@ class TelegramDestination(Destination):
 
     def _live_text(self):
 
-        body = [self._mark(kind, text) for kind, text in self.lines[-TG_LIVE_LINES:]]
+        # Dropped lines are tombstones (None): filtered here, never renumbered away,
+        # because the reporter and the ask row hold raw indices (see drop()).
 
-        if len(self.lines) > TG_LIVE_LINES:
+        live = [ln for ln in self.lines if ln is not None]
 
-            body.insert(0, "... %d earlier step(s)" % (len(self.lines) - TG_LIVE_LINES))
+        body = [self._mark(kind, text) for kind, text in live[-TG_LIVE_LINES:]]
+
+        if len(live) > TG_LIVE_LINES:
+
+            body.insert(0, "... %d earlier step(s)" % (len(live) - TG_LIVE_LINES))
 
         if self.status:
 
@@ -38245,13 +38250,23 @@ class TelegramDestination(Destination):
 
     def drop(self, ref):
 
-        """A draft that turned out to be the answer: drop the line, keep the text."""
+        """A draft that turned out to be the answer: drop the line, keep the text.
+
+        The slot is TOMBSTONED, never popped: RunReporter (tool_ref, card_last,
+        stream_ref) and the ask row (_asking["q"]["ref"]) hold raw line INDICES, and a
+        pop renumbers every line behind the dropped one - a later update or _resolve_ask
+        then writes into whatever slid forward (the web lane's drop_line shifts its own
+        handles for exactly this reason). None is invisible to _live_text and reads as
+        gone to every other reader.
+        """
 
         try:
 
             _, idx = ref
 
-            self.lines.pop(idx)
+            if 0 <= idx < len(self.lines):
+
+                self.lines[idx] = None
 
         except Exception:
 

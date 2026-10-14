@@ -282,6 +282,22 @@ check("A-144: a second question while one is open is refused, not queued",
 if hasattr(_q, "_open_question"):
     _q.close_question()
 
+# BUG-19: a dropped draft must not renumber the lines everyone else holds.
+# narration_drop drops the streamed draft when it WAS the answer; the old pop shifted
+# every line behind it while RunReporter and the ask row keep raw indices, so the
+# question's outcome landed on a line that is no longer the question - or nowhere.
+_drop = fb.TelegramDestination(FakeClient(), chat_id=98, session_key="t-drop")
+_drop.lines.append(("narration", "the draft"))
+_drop_row = _drop._open_question("Proceed?", ["yes", "no"])
+_drop._post_question("Proceed?", ["yes", "no"], 5)
+_drop_idx = _drop_row["ref"][1]
+_drop.drop(("tg", 0))            # narration_drop: the draft goes
+_drop.post_done("answered: yes")
+check("a drop tombstones its line instead of renumbering the ones behind it",
+      _drop.lines[_drop_idx][1].endswith("— answered: yes"), _drop.lines)
+check("...and the dropped draft is gone from the live text",
+      "the draft" not in _drop._live_text(), _drop._live_text())
+
 
 # A-145: a question that never reached the screen must not burn the whole wait.
 class _BlockedClient(FakeClient):
