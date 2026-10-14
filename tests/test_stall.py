@@ -2648,6 +2648,11 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
                                              {"content": "done-json"}])
     check("inline: a JSON-form call is parsed and executed end to end",
           "done-json" in out3 and calls3 >= 1, (out3[:120], calls3))
+    _ids3 = [tc.get("id", "") for m in payloads3[-1] if isinstance(m, dict)
+             for tc in (m.get("tool_calls") or [])]
+    check("inline: the minted tool-call id is 9 alphanumerics",
+          bool(_ids3) and all(len(i) == 9 and i.isascii() and i.isalnum()
+                              for i in _ids3), _ids3)
 
 
 def test_startup_validation_catches_an_unconfigured_host():

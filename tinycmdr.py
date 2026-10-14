@@ -2788,6 +2788,23 @@ def _delta_tool_calls(d):
     return []
 
 
+_TOOL_ID_SEQ = itertools.count(1)
+
+
+def _mint_tool_call_id(seed=""):
+    """A synthetic tool-call id in the ONE shape the strict engines accept.
+
+    Mistral/Devstral/Codestral (cloud and their local jinja templates alike) answer
+    '400 Bad Request: Tool call id must be a-z, A-Z, 0-9, with a length of 9'. Every
+    id the HARNESS invents - a legacy function_call, a parsed inline call, a repaired
+    duplicate, a call the model left without one - must therefore be exactly nine
+    alphanumerics; hex sha1 gives [0-9a-f] and the time+counter+seed makes collision
+    with a real id, or with another mint in the same nanosecond, a non-event.
+    """
+    raw = "%d-%d-%s" % (time.time_ns(), next(_TOOL_ID_SEQ), seed)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:9]
+
+
 def _normalize_assistant_message(msg):
     """One assistant message, in the shapes the rest of the harness expects.
 
@@ -2815,7 +2832,7 @@ def _normalize_assistant_message(msg):
     if not calls:
         legacy = msg.pop("function_call", None)
         if isinstance(legacy, dict) and (legacy.get("name") or legacy.get("arguments")):
-            calls = [{"id": "call_legacy_0", "type": "function",
+            calls = [{"id": _mint_tool_call_id("legacy"), "type": "function",
                       "function": {"name": legacy.get("name") or "",
                                    "arguments": legacy.get("arguments", "")}}]
             msg["tool_calls"] = calls
@@ -20287,9 +20304,12 @@ def _uniquify_tool_call_ids(messages):
                 seen = counts.get(tid, 0)
                 counts[tid] = seen + 1
                 if seen:
-                    suffix = "_dup%d" % seen
-                    new_id = (tid[:40 - len(suffix)] if len(tid) + len(suffix) > 40
-                              else tid) + suffix
+                    # The replacement id must satisfy the same strict-engine shape
+                    # the originals do (nine alphanumerics) - appending "_dup1" made
+                    # a repaired payload FAIL to Mistral after being repaired - and
+                    # it must not collide with anything already minted, which the
+                    # counter-in-seed guarantees.
+                    new_id = _mint_tool_call_id("dup")
                     if new_calls is None:
                         new_calls = list(tcs)
                         m = dict(m)
@@ -22771,7 +22791,7 @@ class Agent:
                                         session_key, len(inline),
                                         [c["name"] for c in inline])
                             tool_calls = [
-                                {"id": f"inline{i}", "type": "function",
+                                {"id": _mint_tool_call_id("inline"), "type": "function",
                                  "function": {"name": c["name"],
                                               "arguments": json.dumps(
                                                   c["arguments"])}}
@@ -23164,7 +23184,7 @@ class Agent:
                     # model to repeat itself.
                     for _i, _tc in enumerate(tool_calls):
                         if not _tc.get("id"):
-                            _tc["id"] = f"call_{int(time.time())}_{_i}"
+                            _tc["id"] = _mint_tool_call_id("call")
                     turn = {"role": "assistant",
                             "content": (reply.get("content") or "").strip(),
                             "tool_calls": tool_calls}

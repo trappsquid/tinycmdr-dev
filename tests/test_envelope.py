@@ -81,6 +81,13 @@ design; ids are split in order and the results re-pointed.
                 "function": {"name": name, "arguments": "{}"}}
 
 
+    def _nine(tid):
+        """A synthetic id in the one shape the strict engines accept (Mistral:
+        'Tool call id must be a-z, A-Z, 0-9, with a length of 9')."""
+        t = str(tid or "")
+        return len(t) == 9 and t.isascii() and t.isalnum()
+
+
     def main():
         dup = [
             {"role": "assistant", "content": "",
@@ -95,9 +102,12 @@ design; ids are split in order and the results re-pointed.
 
         out = fb._uniquify_tool_call_ids(dup)
         ids = [tc["id"] for tc in out[0]["tool_calls"]]
-        check("the duplicate call gets its own id", ids == ["x", "x_dup1"], ids)
+        check("the duplicate call gets its own id",
+              ids[0] == "x" and ids[1] != "x", ids)
+        check("...in the 9-alphanumeric shape a strict engine demands "
+              "(a '_dup1' suffix 400s)", _nine(ids[1]), ids)
         check("the results are re-pointed in order",
-              [m["tool_call_id"] for m in out[1:]] == ["x", "x_dup1"],
+              [m["tool_call_id"] for m in out[1:]] == ["x", ids[1]],
               [m["tool_call_id"] for m in out[1:]])
         check("...and the caller's messages are not mutated in place",
               dup[0]["tool_calls"][1]["id"] == "x"
@@ -111,18 +121,28 @@ design; ids are split in order and the results re-pointed.
             {"role": "tool", "tool_call_id": "x", "content": "c"},
         ]
         out = fb._uniquify_tool_call_ids(more) # used to raise IndexError
+        d1 = out[0]["tool_calls"][1]["id"]
         check("more results than calls: the extras pair with the last id, no IndexError",
-              [m["tool_call_id"] for m in out[1:]] == ["x", "x_dup1", "x_dup1"],
+              [m["tool_call_id"] for m in out[1:]] == ["x", d1, d1],
               [m["tool_call_id"] for m in out[1:]])
 
         repaired = fb._repair_tool_pairing(dup)
+        r1 = repaired[0]["tool_calls"][1]["id"]
         check("the repaired payload has no pairing problems",
               fb._tool_pairing_problems(repaired) == [],
               fb._tool_pairing_problems(repaired))
-        check("the repaired payload keeps every call and result",
+        check("the repaired payload keeps every call and result, ids paired",
               len(repaired) == 3
-              and [tc["id"] for tc in repaired[0]["tool_calls"]] == ["x", "x_dup1"],
+              and [tc["id"] for tc in repaired[0]["tool_calls"]] == ["x", r1]
+              and [m["tool_call_id"] for m in repaired[1:]] == ["x", r1],
               repaired)
+
+        # A legacy function_call is minted a strict-engine id too, and so is the id an
+        # inline-parsed call carries (see test_stall's inline checks).
+        legacy_msg = fb._normalize_assistant_message(
+            {"role": "assistant", "function_call": {"name": "shell", "arguments": "{}"}})
+        check("a legacy function_call gets a 9-alphanumeric id",
+              _nine(legacy_msg["tool_calls"][0]["id"]), legacy_msg["tool_calls"])
 
         # ---- a result that arrived AFTER a later block is still that call's answer -----------
         # The repair used to invent "no result was recorded for this call; it did not complete"
@@ -178,9 +198,9 @@ design; ids are split in order and the results re-pointed.
             {"role": "tool", "tool_call_id": "k", "content": "r2"},
         ]
         out = fb._uniquify_tool_call_ids(later)
-        check("an id reused across turns is split too",
-              out[2]["tool_calls"][0]["id"] == "k_dup1"
-              and out[3]["tool_call_id"] == "k_dup1", out)
+        k1 = out[2]["tool_calls"][0]["id"]
+        check("an id reused across turns is split too (and still 9-alphanumeric)",
+              k1 != "k" and _nine(k1) and out[3]["tool_call_id"] == k1, out)
 
         # ---- a stray non-dict entry must not raise out of a repair pass (A-102) ----------
         # These passes run on harness-assembled payloads, where a None (or a number) can appear.
