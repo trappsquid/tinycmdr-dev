@@ -7242,15 +7242,13 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
 # --- what a GUARD should read -----------------------------------------------------------
 # A guard is only as good as its subject. These two strip what cannot run, so a guard fires on
 # the command/code that would, and not on a mention of it.
-# A comment cannot execute, so a guard that fires on one is a false positive by construction.
+# A comment cannot execute, so a guard that fires on one is a false positive by construction;
+# a comment that HIDES code, though, is a hole - which is why the Python stripper below is
+# quote-aware rather than a regex (see _strip_py_comments).
 # STRING LITERALS ARE KEPT on purpose: `subprocess.run("reboot")` really does reboot, and a
 # guard that stripped strings would be a hole rather than a fix. Measured 2026-09-29:
 # a comment reading "# restart happens in the next step" tripped the confirm tier over
 # execute_code, which on a lane with nobody at the door is a flat DECLINED.
-# The approximation: a `#` inside a string literal is not a comment, so `print("a # b")` loses
-# its tail here. That is a GUARD SUBJECT, not code that runs - and every pattern in the tiers is
-# a whole command or path shape, never a bare word, so a truncated print cannot stage anything.
-_PY_COMMENT = re.compile(r"#[^\n]*")
 
 # Quotes turned into SPACES (not removed), for reading a path out of a command: the walked
 # target is usually quoted, and removing the quotes deleted it.
@@ -7264,8 +7262,63 @@ _REEXECUTOR = re.compile(
 
 
 def _strip_py_comments(code):
-    """Python source with its COMMENTS removed, for the guards that read source text."""
-    return _PY_COMMENT.sub("", code or "")
+    """Python source with its COMMENTS removed, quotes honoured.
+
+    The old `#[^\n]*` regex was quote-blind: a `#` INSIDE a string literal started a
+    "comment", so `x = "#"; subprocess.run("shutdown /r /t 0", shell=True)` reached the
+    confirm tier, the cost guard and the endpoint gate with its dangerous half deleted.
+    This walks the real string states instead - '...', "...", triple quotes, raw
+    prefixes (an r-string's backslash is literal) and backslash escapes. A `#` at
+    string depth 0 runs to the end of the line, which is removed; the line structure
+    survives, which the callers' line-quoting (and the operator's quoted subject line)
+    relies on. An unterminated single-quote string ends at the newline, as Python's own
+    tokenizer says.
+    """
+    s = code or ""
+    out = []
+    quote = ""            # the quote char of the string being read, "" at top level
+    triple = False
+    raw = False
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and not raw:
+                if i + 1 < n:
+                    out.append(s[i + 1])
+                    i += 2
+                    continue
+            elif ch == quote:
+                if triple:
+                    if s.startswith(quote * 3, i):
+                        out.append(quote * 2)
+                        i += 3
+                        quote, triple, raw = "", False, False
+                        continue
+                else:
+                    quote, raw = "", False
+            elif ch == "\n" and not triple:
+                quote, raw = "", False
+            i += 1
+            continue
+        if ch in "\"'":
+            quote = ch
+            triple = s.startswith(ch * 3, i)
+            raw = "".join(out[-2:]).endswith(("r", "R"))
+            take = 3 if triple else 1
+            out.append(ch * take)
+            i += take
+            continue
+        if ch == "#":
+            j = s.find("\n", i)
+            if j < 0:
+                break
+            i = j                        # keep the newline itself
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _cost_subject(command):

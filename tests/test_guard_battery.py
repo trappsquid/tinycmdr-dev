@@ -526,6 +526,42 @@ def test_quoted_mentions_are_not_commands():
           bool(fb._confirm_hit('rm -r "build dir"')))
 
 
+def test_python_comments_are_stripped_quote_aware():
+    """A `#` inside a STRING is text, not a comment.
+
+    The old `#[^\\n]*` regex cut every line at the first hash, so
+    `x = "#"; __import__("subprocess").run("shutdown /r /t 0", shell=True)` reached
+    the confirm tier, the cost guard and the endpoint gate with its dangerous half
+    deleted - while the comment-stripping the regex existed for (a `# reboot` note
+    tripping execute_code's confirm tier, measured 2026-09-29) must stay.
+    """
+    strip = fb._strip_py_comments
+    code = 'x = "#"; __import__("subprocess").run("shutdown /r /t 0", shell=True)'
+    kept = strip(code)
+    check("a # inside a string does not cut the line",
+          "shutdown /r /t 0" in kept and 'x = "#"' in kept, kept)
+    check("...and the confirm tier sees the shutdown",
+          bool(fb._confirm_hit(strip(code))), fb._confirm_hit(strip(code)))
+    check("a real comment is still stripped",
+          strip("danger = 1  # reboot this later") == "danger = 1  ",
+          repr(strip("danger = 1  # reboot this later")))
+    check("...and never reaches the tier",
+          fb._confirm_hit(strip("x = 1\n# reboot the box\nprint(x)")) is None,
+          fb._confirm_hit(strip("x = 1\n# reboot the box\nprint(x)")))
+    check("a hash inside a triple-quoted string survives",
+          "keep # this" in strip('s = """keep # this"""'),
+          repr(strip('s = """keep # this"""')))
+    check("an escaped quote does not fake a string close",
+          "reboot()" in strip('s = "a\\"; reboot()"'),
+          repr(strip('s = "a\\"; reboot()"')))
+    check("an r-string's backslash does not swallow the close",
+          strip('p = r"a\\"; reboot()  # gone') == 'p = r"a\\"; reboot()  ',
+          repr(strip('p = r"a\\"; reboot()  # gone')))
+    check("a multi-line comment block loses every line",
+          strip("# one\nx = 1\n# two\ny = 2\n") == "\nx = 1\n\ny = 2\n",
+          repr(strip("# one\nx = 1\n# two\ny = 2\n")))
+
+
 def test_manifest_command_walks_the_shell_tier():
     """A .tool.json whose command is `rm -rf /` must not load, and a
     confirm-tier command must be asked at call time - the manifest door is the shell door."""
