@@ -1124,6 +1124,31 @@ def test_a_long_answer_is_cut_on_a_line_and_never_inside_a_fence():
           [len(c) for c in got])
 
 
+def test_a_fence_boundary_backoff_does_not_manufacture_a_fence():
+    """A fence's parity was tested at the pre-backoff cut and never re-read at the
+    cut that was emitted: a ``` opening the tail line made the code close a fence
+    the prefix was not inside - an empty fence pair at the boundary, and the real
+    marker displaced into the next post."""
+    L = fb.MAX_POST_LEN
+    # The newline that ends the window's last full line sits inside the 4-unit
+    # reserve (L-2), the fence opens on that line, and the previous newline is
+    # past half the window - the exact band where `cut` moves to `lower`.
+    a_run = L // 2 + 200
+    fence_line = "```" + "B" * (L - 2 - (a_run + 1) - 3)
+    text = "A" * a_run + "\n" + fence_line + "\n" + "C" * 5000
+    check("the fixture is the measured shape",
+          len(text) > L and text.rfind("\n", 0, L) == L - 2,
+          (len(text), text.rfind("\n", 0, L)))
+    chunks = list(fb.MattermostDispatcher._chunks(text))
+    check("the balanced prefix is emitted untouched",
+          chunks[0] == "A" * a_run, chunks[0][-12:])
+    check("the fence line is not duplicated or displaced",
+          chunks[1] == fence_line + "\n" + "C" * 5000, chunks[1][:16])
+    check("and the split drops only the newline at its own boundary",
+          "".join(chunks) == text[:a_run] + text[a_run + 1:],
+          (sum(len(c) for c in chunks), len(text)))
+
+
 def test_a_chunk_is_measured_in_utf16_units_not_code_points():
     """A-264 (2026-10-06): the limit counted code points, and Mattermost counts
     UTF-16 units - measured: 15,500 'x' + 500 emoji is len() == 16,000 but 16,500

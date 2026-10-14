@@ -36021,9 +36021,17 @@ class MattermostDispatcher:
                 lower = text.rfind("\n", 0, window - 4)
                 if lower > window // 2:
                     cut = lower
-                yield text[:cut] + "\n```"
-                text = "```\n" + text[cut:].lstrip("\n")
-                continue
+                # The backoff can move the cut back ABOVE the ``` that opened the
+                # block - it sat in the tail line that made the first cut too
+                # tight - and the old shape still closed a fence it was no longer
+                # inside: an empty fence pair at the boundary, with every later
+                # marker shifted by one. Parity is re-read at the cut that is
+                # actually emitted; when it is even, the prefix is balanced and
+                # the ordinary emission is already correct.
+                if text[:cut].count("```") % 2:
+                    yield text[:cut] + "\n```"
+                    text = "```\n" + text[cut:].lstrip("\n")
+                    continue
             yield text[:cut]
             text = text[cut:].lstrip("\n")
         if text:
