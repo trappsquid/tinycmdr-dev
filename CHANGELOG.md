@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.16] - 2026-10-14
+
 ### Added
 - **Tool calls are checked against the schema they declare:** a wrong-shaped call is answered with the path and the expected type before the handler runs instead of the handler's error, and a tool's declared env keys (`REQUIRES_ENV`, register `requires_env`, manifest `requires_env`) are answered at call time through a single `ctx["credential"]` seam instead of refusing the tool's whole file at load (tests/test_tool_args_surface.py).
 
