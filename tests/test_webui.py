@@ -1830,6 +1830,43 @@ def main():
           "...and the busy note about a taken port", _v6note[:200])
     fb.CONFIG["web"]["host"] = "127.0.0.1"
 
+    # A run's checkpoint-throttle slot must not outlive the run: a finish that raises
+    # used to skip the pop, and an eviction did not clear it either (A-2026-10-14-55).
+    class _Boom:
+        def finish(self, ok=True):
+            raise RuntimeError("reporter died")
+
+    victim = fb._web_new_run("web")
+    fb._WEB_SAVED_AT[victim.id] = 1.0
+    try:
+        fb._finish_web_run(victim, _Boom(), "answer", failed=True)
+    except RuntimeError:
+        pass
+    check(victim.id not in fb._WEB_SAVED_AT,
+          "a finish that raises still frees the run's checkpoint slot",
+          sorted(fb._WEB_SAVED_AT))
+    _keep = fb.WEB_RUN_KEEP
+    fb.WEB_RUN_KEEP = 2
+    made = []
+    keeper = fb._web_new_run("web")           # never marked done: not evictable
+    fb._WEB_SAVED_AT[keeper.id] = 1.0
+    try:
+        for _ in range(3):
+            _r = fb._web_new_run("web")
+            _r.done = True
+            fb._WEB_SAVED_AT[_r.id] = 1.0
+            made.append(_r)
+        fb._web_new_run("web")
+    finally:
+        fb.WEB_RUN_KEEP = _keep
+    _evicted = [r.id for r in made if r.id not in fb.WEB_RUNS]
+    check(bool(_evicted) and all(i not in fb._WEB_SAVED_AT for i in _evicted),
+          "eviction frees the slot of every run it drops",
+          (len(_evicted), sorted(fb._WEB_SAVED_AT)))
+    check(keeper.id in fb.WEB_RUNS and keeper.id in fb._WEB_SAVED_AT,
+          "...and a run still in the table keeps its slot",
+          (keeper.id in fb.WEB_RUNS, sorted(fb._WEB_SAVED_AT)))
+
     # A FAILED record's detail names the port it TRIED - which is the 0 itself. Reading it
     # back as a bound port would hand out "port 0" as an address.
     fb.CONFIG["web"]["port"] = 0

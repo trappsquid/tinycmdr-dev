@@ -28781,12 +28781,17 @@ def _finish_web_run(run, reporter, answer, failed=False):
     # stops polling the moment it sees done:true (which is what the page does)
     # keeps the pre-Done text on its screen while the copy written to disk says
     # "✅ Done — ..." - measured: the two disagreed, and the suite compares them.
-    reporter.finish(ok=not failed)
-    run.finish()
-    with run.lock:
-        written = list(run.lines)
-    _WEB_SAVED_AT.pop(run.id, None)
-    web_runlog_append(run.session_key, run.id, run.started, written)
+    try:
+        reporter.finish(ok=not failed)
+        run.finish()
+        with run.lock:
+            written = list(run.lines)
+        web_runlog_append(run.session_key, run.id, run.started, written)
+    finally:
+        # Even when the reporting path raises: a done-but-unpopped id is evictable
+        # (see _web_register_run) and its checkpoint slot would otherwise outlive
+        # the run (A-2026-10-14-55).
+        _WEB_SAVED_AT.pop(run.id, None)
 
 def _web_runlog_path(key):
     safe = _session_stem(key)
@@ -29288,6 +29293,10 @@ def _web_register_run(run):
                 break
             if WEB_RUNS[old].done:
                 del WEB_RUNS[old]
+                # Its checkpoint slot goes with it: a run that reached done but not
+                # the pop (the finish path raising) would otherwise leave an entry
+                # that nothing will ever clear (A-2026-10-14-55).
+                _WEB_SAVED_AT.pop(old, None)
 
 
 def _web_new_run(session_key="web", client=""):
