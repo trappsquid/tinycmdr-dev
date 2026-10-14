@@ -20457,6 +20457,42 @@ class _ResponsesStreamAdapter:
                 yield (line.encode("utf-8") if isinstance(raw, bytes) else line)
                 continue
             if not line.startswith("data:"):
+                # A server that ignored "stream": true answers with the WHOLE Responses
+                # body as one JSON line and no SSE framing at all. Emitting nothing for
+                # it made _stream_chat call the stream empty (not_a_stream), so the
+                # caller dropped a valid, already-generated answer and re-bought the
+                # generation on the non-streaming path (A-2026-10-14-49). The body
+                # becomes the one terminal chat chunk the accumulator reads.
+                if line.startswith("{"):
+                    try:
+                        body = json.loads(line)
+                    except json.JSONDecodeError:
+                        body = None
+                    if isinstance(body, dict) and "output" in body:
+                        chat_shape = _responses_as_chat(body)
+                        choice = (chat_shape.get("choices") or [{}])[0]
+                        msg = choice.get("message") or {}
+                        delta = {}
+                        if msg.get("content"):
+                            delta["content"] = msg["content"]
+                        if msg.get("reasoning_content"):
+                            delta["reasoning_content"] = msg["reasoning_content"]
+                        calls = []
+                        for i, tc in enumerate(msg.get("tool_calls") or []):
+                            calls.append({"index": i, "id": tc.get("id") or "",
+                                          "type": "function",
+                                          "function": tc.get("function") or {}})
+                        if calls:
+                            delta["tool_calls"] = calls
+                        chunk = {"choices": [{"delta": delta,
+                                              "finish_reason": choice.get("finish_reason")
+                                              or "stop"}]}
+                        u = chat_shape.get("usage") or {}
+                        if u.get("prompt_tokens") or u.get("completion_tokens"):
+                            chunk["usage"] = u
+                        yield chat(chunk)
+                        yield b"data: [DONE]"
+                        return
                 # `event:` lines duplicate the JSON `type`; nothing else is expected.
                 continue
             try:

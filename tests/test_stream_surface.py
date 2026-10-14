@@ -1268,6 +1268,59 @@ On the pre-fix build these helpers do not exist, so every check must come back r
                          for i, c in streamed_calls.items()},
                 lambda v: v == {"call_1": '{"a":1}', "call_2": '{"b":2}'})
 
+            # --- a server that ignores stream:true is answered from its body --------------
+            # The whole Responses body arrives as one JSON line, no SSE framing. That
+            # used to yield nothing, so _stream_chat called the stream empty and the
+            # caller threw a valid, already-generated answer away and re-bought it on
+            # the non-streaming path (2026-10-14).
+            class FakeWhole:
+                raw = None
+
+                def __init__(self, payload):
+                    self._payload = payload
+
+                def iter_lines(self, decode_unicode=False):
+                    return iter([json.dumps(self._payload).encode("utf-8")])
+
+                def close(self):
+                    pass
+
+            def _streamed_of(payload):
+                """_stream_chat over one JSON-line body; a raise is a VALUE here, because
+                a pre-fix build raises StreamFailed (not_a_stream) from this call."""
+                try:
+                    out, _st = fb._stream_chat(
+                        fb._ResponsesStreamAdapter(FakeWhole(payload)),
+                        cancel_event=None, idle_seconds=30, on_delta=None,
+                        first_byte_seconds=30)
+                    return out
+                except Exception as e:                          # noqa: BLE001
+                    return {"error": "%s: %s" % (type(e).__name__, e)}
+
+            whole = _streamed_of({
+                "id": "resp_1", "status": "completed",
+                "output": [{"type": "message", "content": [
+                    {"type": "output_text", "text": "plain json answer"}]}],
+                "usage": {"input_tokens": 11, "output_tokens": 4}})
+            got("a JSON body (no SSE framing) is answered, not discarded",
+                lambda: whole.get("error")
+                or whole["choices"][0]["message"]["content"],
+                lambda v: v == "plain json answer")
+            got("...with its finish reason and usage",
+                lambda: whole.get("error")
+                or (whole["choices"][0].get("finish_reason"),
+                    (whole.get("usage") or {}).get("completion_tokens")),
+                lambda v: v == ("stop", 4))
+            whole_calls = _streamed_of({
+                "id": "resp_2", "status": "completed",
+                "output": [{"type": "function_call", "call_id": "call_json",
+                            "name": "echo", "arguments": '{"a":1}'}]})
+            got("...and a JSON body's tool call reaches the accumulator",
+                lambda: whole_calls.get("error")
+                or (whole_calls["choices"][0]["message"].get("tool_calls") or
+                    [{}])[0].get("id"),
+                lambda v: v == "call_json")
+
             # --- the usage vocabulary boundary ------------------------------------
             got("_responses_as_chat renames usage to the chat fields",
                 lambda: fb._responses_as_chat({"status": "completed", "output": [],
