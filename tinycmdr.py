@@ -44007,20 +44007,27 @@ def _install_processes():
     a service and a shortcut all do - and it shows up here."""
     here = str(BASE_DIR).lower()
     if os.name == "nt":
+        # `$_.ProcessId -ne $PID` drops the QUERY's own shell by identity; the Python
+        # side used to drop every row containing "powershell", which also hid a
+        # legitimate PowerShell child launched from the install.
         rc, out, err, _ = run_capture(
             ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+             "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and "
+             "$_.CommandLine -and "
              "($_.CommandLine.ToLower().Contains('" + here.replace("'", "''") + "')) } | "
              "ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.CreationDate, $_.CommandLine }"],
             60)
     else:
+        # The folder is grep's DATA, never its pattern: `grep -Fi -- "$1"` takes it as
+        # a fixed string (a path with `[`, `.` or `*` used to under- or over-match) and
+        # the positional argument keeps its quotes from breaking the sh -c line.
         rc, out, err, _ = run_capture(
-            ["sh", "-c", "ps -eo pid,lstart,args | grep -i -- '%s' | grep -v grep" % BASE_DIR],
+            ["sh", "-c", 'ps -eo pid,lstart,args | grep -Fi -- "$1" | grep -v grep',
+             "sh", str(BASE_DIR)],
             60)
     if rc != 0 and not out.strip():
         return [], (err or "").strip()
     rows = [ln.strip() for ln in out.splitlines() if ln.strip()]
-    rows = [r for r in rows if "powershell" not in r.lower()]
     return rows, None
 
 

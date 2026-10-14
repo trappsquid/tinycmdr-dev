@@ -1638,6 +1638,41 @@ def _body():
         check("proc names this install's folder and the instance",
               rc == 0 and "install :" in out and "instance:" in out, out[:200])
 
+        # The query matched the folder as a REGEX, and every row carrying 'powershell'
+        # was dropped on Windows: a folder with [ or a quote matched nothing, and a
+        # legitimate PowerShell child was invisible (A-2026-10-14-45).
+        import subprocess as _sp
+        import time as _time
+        probe_dir = workdir / "proc test [1]+'q"
+        probe_dir.mkdir()
+        (probe_dir / "marker").write_text("x", encoding="utf-8")
+        if os.name == "nt":
+            _argv = ["powershell", "-NoProfile", "-Command", "Start-Sleep 5",
+                     str(probe_dir / "marker")]
+        else:
+            _argv = ["tail", "-f", str(probe_dir / "marker")]
+        _child = _sp.Popen(_argv, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        _saved_base = fb.BASE_DIR
+        fb.BASE_DIR = probe_dir
+        try:
+            _rows, _err = [], None
+            for _ in range(6):
+                _rows, _err = fb._install_processes()
+                if _rows and not _err:
+                    break
+                _time.sleep(0.5)
+        finally:
+            _child.terminate()
+            try:
+                _child.wait(timeout=10)
+            except Exception:                                 # noqa: BLE001
+                _child.kill()
+            fb.BASE_DIR = _saved_base
+        check("the process query matches a folder with metacharacters and quotes",
+              bool(_rows) and not _err, (_rows[:2], _err))
+        check("...and a launched child is one of the rows",
+              any("marker" in r for r in _rows), _rows[:2])
+
         (workdir / "tinycmdr.py.bak-900").write_text("old bytes", encoding="utf-8")
         (workdir / ".env").write_text("TINYCMDR_TEST_KEY=keep-me" + chr(10), encoding="utf-8")
         rc, out, err = call(fb, ["clean"])
