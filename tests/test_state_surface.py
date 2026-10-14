@@ -236,6 +236,35 @@ is left behind, and the temp carries the destination's own mode.
               target.read_bytes() == b"new bytes\n", target.read_bytes())
 
 
+    def test_session_export_is_scrubbed_and_narrow():
+        """/save writes STATE - it can hold a key the operator pasted into chat.
+
+    The export used a plain open("w"): the secret reached the file in the clear
+    (scrub() was never run), the umask decided the mode, and a crash mid-write left
+    it truncated. It goes through atomic_write_text(scrub(...)) now.
+    """
+        key = "export-suite"
+        fb.AGENT.histories[key] = [
+            {"role": "user", "content": "here is the key TOPSECRET-suiteside-1"},
+            {"role": "assistant", "content": "noted, I will not echo it"},
+        ]
+        saved = fb._SECRETS
+        fb._SECRETS = ["TOPSECRET-suiteside-1"]
+        try:
+            path, count = fb.session_export(key)
+        finally:
+            fb._SECRETS = saved
+        check("session_export returns a path and the message count",
+              bool(path) and count == 2, (path, count))
+        text = Path(path).read_text(encoding="utf-8")
+        check("a pasted secret is scrubbed from the export",
+              "TOPSECRET-suiteside-1" not in text and "«redacted»" in text,
+              repr(text[:200]))
+        if os.name == "posix":
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            check("the export is created 0600", mode == 0o600, oct(mode))
+
+
     def main():
         tests = [v for k, v in sorted(_ns.items()) if k.startswith("test_")]
         for t in tests:

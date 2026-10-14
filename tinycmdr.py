@@ -27540,7 +27540,11 @@ def session_export(session_key):
     (None, 0) when there is nothing to export.
 
     One writer for /save on every chat surface (the Mattermost handler's inline copy
-    moved here when the Telegram lane grew the verb, 2026-10-11).
+    moved here when the Telegram lane grew the verb, 2026-10-11). An export is a STATE
+    file - it can hold a key the operator pasted into chat - so it is scrubbed like
+    everything else that leaves the process, and written through atomic_write_text,
+    which keeps a crashed save from leaving a half-written file and creates it 0600
+    instead of the umask's default.
     """
     hist = AGENT._history(session_key)
     if not hist:
@@ -27560,8 +27564,7 @@ def session_export(session_key):
     ts = time.strftime("%Y%m%d-%H%M%S")
     _ensure_sessions_dir()
     path = os.path.join(SESSIONS_DIR, "export-%s.md" % ts)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    atomic_write_text(path, scrub("\n".join(lines)))
     return path, len(hist)
 
 
