@@ -1772,7 +1772,16 @@ def est_tokens(text):
     A content-aware divisor, not a per-endpoint calibration: one pass over a
     bounded sample, no network call, and it cannot go stale when a box is restarted
     with a different tokenizer. The opt-in live comparison against a real
-    tokenizer lives in tests/test_tokens.py.
+    tokenizer lives in tests/test_cost_surface.py.
+
+    DIGITS ARE THEIR OWN DENSITY CLASS (measured against o200k_base, 2026-10-13):
+    every BPE tokenizer splits number runs into 1-3 digit pieces, so timestamp/pid
+    logs tokenize at ~2.1 chars/token, ps/netstat tables ~1.8-1.9, a numeric JSON
+    array ~2.5, a hex dump ~1.4 and a numeric CSV ~1.8 - all of which fell through
+    to the 3.0/3.4 divisors and under-counted by 18-58%. The numeric arms below read
+    the digit share of the sample, in the order of the samples' own densities; the
+    hex arm additionally wants a letter-hex share, because `0f`/`4c` bytes split
+    like digits while plain words do not.
     """
     text = str(text or "")
     n = len(text)
@@ -1780,7 +1789,7 @@ def est_tokens(text):
         return 1
     sample = text if n <= 4000 else text[:2000] + text[-2000:]
     m = len(sample)
-    wide = other = dense = emoji = 0
+    wide = other = dense = emoji = digits = hexaf = 0
     for c in sample:
         o = ord(c)
         # Emoji are their own class: a 4-byte codepoint (or a
@@ -1794,6 +1803,10 @@ def est_tokens(text):
             wide += 1
         elif o > 0x7F:                       # accents, cyrillic, arabic
             other += 1
+        elif "0" <= c <= "9":
+            digits += 1
+        elif c in "abcdefABCDEF":
+            hexaf += 1
         elif c in "{}[]()<>=;:,./|-_$#@&*+%!^~":
             dense += 1
     # A sample that is MOSTLY emoji (>= _EMOJI_SHARE of it) takes the emoji divisor: 1 token
@@ -1805,7 +1818,15 @@ def est_tokens(text):
         per = 1.3
     elif other > m * 0.10:
         per = 2.6
-    elif dense > m * 0.14:
+    elif digits > m * 0.60:
+        per = 1.7                           # number tables: 1-3 digit pieces per token
+    elif digits > m * 0.40 and hexaf > m * 0.15:
+        per = 1.5                           # hex dumps: two-char byte pieces
+    elif digits > m * 0.33:
+        per = 2.0                           # timestamp/pid/address columns
+    elif digits > m * 0.22:
+        per = 2.3                           # numeric JSON, light number tables
+    elif dense + digits > m * 0.14:
         per = 3.0
     elif n > m:
         per = 3.4                           # a long body is output or source

@@ -125,6 +125,51 @@ checks are the gate.
             check(est(CJK) > est(PROSE[:len(CJK)]) * 2,
                   "CJK costs at least twice the tokens of the same length of prose")
 
+            # ---- digit-heavy payloads: BPE splits number runs into 1-3 digit pieces ----
+            # Measured against o200k_base (2026-10-13): a timestamp/pid log tokenizes
+            # at 2.13 chars/token, a ps-style table 1.80, a numeric JSON array 2.47, a
+            # hex dump 1.42, a numeric CSV 1.82. Digits were not counted as density, so
+            # all of these fell through to the 3.0/3.4 divisors and were under-counted
+            # by 18-58% - the direction that fires the compaction late, at the moment
+            # the context is fullest.
+            TS_LOG = "\n".join(
+                "2026-10-13 16:%02d:%02d.%03d INFO pid=%d conn=10.10.0.%d:%d "
+                "bytes=%d code=%d" % (m, s, (m * 7 + s) % 1000, 1000 + (m * 31 + s) % 60000,
+                                      2 + (m + s) % 250, 1024 + (m * 97 + s) % 64000,
+                                      50 + (m * 131 + s) % 1500000, 200)
+                for m in range(60) for s in (0, 13, 27, 41, 55))
+            PS_TABLE = ("  PID  PPID  %CPU %MEM   RSS   VSZ STAT START   TIME COMMAND\n"
+                        + "\n".join("%6d %5d %5.1f %4.1f %8d %8d %4s %5s %8s %s"
+                                    % (100 + i, 1 + i % 900, (i % 99) + 0.5, (i % 20) + 0.1,
+                                       1000 + i * 37, 2000 + i * 41, "Ss", "16:01", "0:00",
+                                       "/usr/sbin/service-%d --worker" % i)
+                                    for i in range(140)))
+            NUM_JSON = json.dumps([{"ix": i, "ms": (i * 7) % 10000, "bytes": i * 12345,
+                                    "ok": True} for i in range(400)])
+            HEX_DUMP = "\n".join(
+                "%08x  %s  %s" % (i, " ".join("%02x" % ((i + j) % 256) for j in range(8)),
+                                  "abcdef01")
+                for i in range(0, 2048, 16))
+            NUM_CSV = "ts,open,high,low,close,volume\n" + "\n".join(
+                "2026-10-13 %02d:%02d:00,%d,%d,%d,%d,%d"
+                % (8 + (i // 60) % 15, i % 60, 40000 + i, 40100 + i, 39900 + i,
+                   40050 + i, 100 + i)
+                for i in range(900))
+            for label, text, bound in (("a timestamp/pid log", TS_LOG, 2.4),
+                                       ("a ps-style table", PS_TABLE, 2.4),
+                                       ("a numeric JSON array", NUM_JSON, 2.4),
+                                       ("a hex dump", HEX_DUMP, 1.8),
+                                       ("a numeric CSV", NUM_CSV, 1.9)):
+                cpt = len(text) / est(text)
+                check(cpt <= bound,
+                      f"{label} estimates at {cpt:.2f} chars/token (<= {bound})")
+            # ...and a sentence carrying a few numbers is still prose: the digit arms
+            # must key on the payload's density, not on any digit at all.
+            prose_nums = PROSE + " In 2026, 3 of 41 items cost $12.50 each.\n"
+            cpt = len(prose_nums) / est(prose_nums)
+            check(cpt >= 3.4,
+                  f"prose with a few numbers stays prose ({cpt:.2f} chars/token)")
+
             # The real recurring sample: this build's own source. 54% of the model's
             # read_file calls were re-reads of tinycmdr.py (2026-09-17 measurement), so
             # this is the text whose estimate the budget is most often computed from.
