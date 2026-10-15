@@ -1365,10 +1365,14 @@ capability is told so instead of being guessed at.
           "Only a TOOL RESULT proves a tool ran" in sp2)
     check("prompt: a sub-agent report is a claim, not a measurement",
           "A sub-agent's report is a CLAIM, not a measurement" in sp2)
-    check("prompt: a result that is not in context means the call did not happen",
-          "If a result is NOT in your context, that call did not happen in this run" in sp2)
-    check("prompt: and mining files for it is named as the slow way",
-          "the slowest way to answer" in sp2)
+    check("prompt: a call without a result did not run, and mining is named as the waste",
+          "never mine the session files" in sp2)
+    check("prompt: the reasoning block ships (premise, settle, no-flip)",
+          "How you reason:" in sp2 and "Check the premise first" in sp2
+          and "A vague doubt is not a reason" in sp2)
+    check("prompt: the web check precedes planning and overrides memory",
+          "The web check comes BEFORE planning" in sp2
+          and "overrides what you remember" in sp2)
 
     # ---- search_files: the shape the prompt teaches must actually grep -------------------
     # Measured 2026-09-25 on a live install: the route hint and the routing bullet both teach
