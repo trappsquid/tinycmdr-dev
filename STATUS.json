@@ -19,10 +19,10 @@
     {
       "id": "system-prompt-reasoning-1-1-18",
       "title": "the shipped prompt carries a reasoning discipline and a web-before-planning rule",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1abe18a",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A token audit of the revolving payload (prompt 2313, schemas 1742, trailing 62 est-tok on a fresh install) found the static prompt heavy on tool routing and empty on epistemics. A 'How you reason' block ships to every model and sub-agent: check the premise first, one approach to a conclusion, a checked answer stays settled unless a concrete reason reopens it, pushback without evidence does not flip you, verify by running the check, no performed caution. The web check now precedes planning for anything with an external surface - named product, tool, API, version, service, file format, or anything with a price, a CVE or a fresh error message - and findings override training-data memory; the persona seed's narrower version of that rule retired into the static line and the seed dropped its copy. The two anti-fabrication lines merged into one, 'Keep going until solved' retired into the settle rule, gold-plate folded into the verify line. Net rent +214 est-tok on the cached prefix. The identity line names the product: a general-purpose IT assistant living on the machine.",
       "gate": "done - 1abe18a; tests/test_tool_load_surface.py pins the merged lines and both new blocks; the rent is measured by staging the build (2313 -> 2527 prompt est-tok, fixture install)"
