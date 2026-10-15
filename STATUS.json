@@ -19,10 +19,10 @@
     {
       "id": "soul-seed-refresh-1-1-19",
       "title": "a retired persona seed refreshes to the shipped seed at start",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "992291a",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "update never overwrites soul.md, so a seed change reached fresh installs only and every existing box kept the old persona for ever - even one that was never personalized. Start now refreshes a soul.md that still matches a retired seed verbatim (match on stripped text, atomic replace, one log line); an edited persona never matches, so it is never touched. The retired seeds are a bounded tuple, one entry per seed change.",
       "gate": "done - 992291a; tests/test_agent_surface.py's test_soul_refresh member grades refresh, never-touch and idempotence, and fails on the pre-fix build"
