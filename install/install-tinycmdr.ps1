@@ -776,6 +776,24 @@ if ($Uninstall) {
             } catch { Say "task    : could not remove $AppName ($($_.Exception.Message))" }
         }
     }
+    # The GUI bridge that computer_use registers lazily (tools/computer_use.py);
+    # removed only when its action sits under THIS $InstallDir.
+    $bridge = Get-ScheduledTask -TaskName "TinycmdrGui" -ErrorAction SilentlyContinue
+    if ($bridge) {
+        $bridgeMine = $true
+        try {
+            $bridgeMine = @($bridge.Actions | Where-Object {
+                "$($_.Execute) $($_.Arguments)".IndexOf(
+                    $InstallDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            }).Count -gt 0
+        } catch { $bridgeMine = $true }
+        if ($bridgeMine) {
+            try {
+                Unregister-ScheduledTask -TaskName "TinycmdrGui" -Confirm:$false -ErrorAction Stop
+                Say "task    : TinycmdrGui (GUI bridge) removed"
+            } catch { }
+        }
+    }
     if (Test-Path $StartupLink) {
         # The same rule for the logon shortcut, and the same reason: one file per
         # $AppName, and only the one whose target is THIS folder goes.
@@ -2309,6 +2327,10 @@ if ($RegisterTask -and $AsService) {
             -Settings $set -Principal $principal -Force `
             -Description "tinycmdr: Mattermost ops agent (@$BotName)" | Out-Null
         Say "task    : $AppName registered (logon +30s, boot +4min, S4U)"
+        Say "gui     : computer_use drives the logged-on desktop through a GUI bridge"
+        Say "          task it registers on first use; with nobody logged on there is no"
+        Say "          desktop anywhere - set Windows auto-logon (netplwiz) if the bot must"
+        Say "          drive a GUI while you only talk to it over chat"
     } catch {
         Say "S4U registration failed ($($_.Exception.Message)) - falling back to interactive logon"
         $principal = New-ScheduledTaskPrincipal -UserId $acct -LogonType Interactive

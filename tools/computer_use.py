@@ -1078,10 +1078,14 @@ function run(argv) {
 # no scale arithmetic where the macOS leg needs the 2x correction.
 # ===========================================================================
 _PS_HELPER = r'''# computer_use Windows helper. One JSON result on stdout (or to -OutFile).
-# Runs in the USER's interactive session; from session 0 it can see nothing.
+# Normally the bot runs this in its own session. From a headless bot (an S4U task,
+# session 0) the Python side routes every call through the TinycmdrGui scheduled
+# task, so this code always executes in the logged-on user's interactive session -
+# the only place UIA and CopyFromScreen can see and drive anything.
 param(
   [Parameter(Mandatory=$true)][string]$Cmd,
-  [string]$JsonFile = ""
+  [string]$JsonFile = "",
+  [string]$OutFile = ""      # bridge lane: the task's stdout is invisible, so write here
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -1092,6 +1096,7 @@ if ($JsonFile -and (Test-Path $JsonFile)) {
   $raw = Get-Content -Raw -Path $JsonFile
   if ($raw.Trim()) { $req = $raw | ConvertFrom-Json }
 }
+if ($Cmd -eq "-") { $Cmd = "$($req.cmd)" }   # bridge lane: the verb rides in the payload
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1141,7 +1146,9 @@ public struct INPUT {
 [TC.Native]::SetProcessDPIAware() | Out-Null
 
 function Out-Json($obj) {
-  Write-Output ($obj | ConvertTo-Json -Compress -Depth 8)
+  $json = $obj | ConvertTo-Json -Compress -Depth 8
+  if ($OutFile) { [IO.File]::WriteAllText($OutFile, $json, [Text.UTF8Encoding]::new($false)) }
+  else { Write-Output $json }
 }
 
 function San($s, $cap) {
@@ -1601,6 +1608,138 @@ def _stage_text(path, text):
     except OSError as exc:
         return str(exc)
 
+# --- the session-0 bridge ---------------------------------------------------
+# A headless bot (the -AsService install is an S4U scheduled task) lives in
+# session 0, which has no desktop. Relocating a process across sessions needs
+# privileges an S4U task account does not hold (WTSQueryUserToken wants
+# SeTcbPrivilege; CreateProcessAsUser wants SeAssignPrimaryTokenPrivilege), but
+# Task Scheduler crosses sessions for free: a task registered without /ru runs
+# with the owner's INTERACTIVE token, in whatever session that user is logged on
+# with. So the bridge is one fixed-action task (TinycmdrGui) that runs this
+# tool's PowerShell helper with -OutFile; _ps hands it the verb inside the
+# payload JSON and polls for the answer file. When nobody is logged on there is
+# no desktop anywhere - schtasks says so, and the error names the two honest
+# options: log on once, or enable Windows auto-logon (the standard RPA answer).
+_BRIDGE_TASK = "TinycmdrGui"
+_BRIDGE_POLL = 0.25
+
+
+def _pid_session():
+    """This process's Windows session id, or None where the question makes no
+    sense (off Windows, or the API refused)."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        sid = wintypes.DWORD()
+        if not k32.ProcessIdToSessionId(k32.GetCurrentProcessId(),
+                                       ctypes.byref(sid)):
+            return None
+        return int(sid.value)
+    except Exception:
+        return None
+
+
+def _bridge_action(helper, payload, out):
+    """The task's fixed command line. One .cmd file in SCRATCH carries it, so
+    /TR stays under the 261-character limit on deep install paths."""
+    return ("powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass "
+            '-File "%s" -Cmd - -JsonFile "%s" -OutFile "%s"'
+            % (helper, payload, out))
+
+
+def _bridge_registered():
+    rc, _out, _err = _run(["schtasks", "/Query", "/TN", _BRIDGE_TASK], 30)
+    return rc == 0
+
+
+def _stage_bridge():
+    helper = SCRATCH / "computer-use.ps1"
+    err = _stage_text(helper, _PS_HELPER)
+    if err:
+        return "", "cannot stage the PowerShell helper: %s" % err
+    bcmd = SCRATCH / "computer-use-bridge.cmd"
+    text = "@echo off\r\n%s\r\n" % _bridge_action(
+        helper, SCRATCH / "computer-use.json", SCRATCH / "computer-use-out.json")
+    err = _stage_text(bcmd, text)
+    if err:
+        return "", "cannot stage the bridge command: %s" % err
+    return bcmd, ""
+
+
+def _bridge_ensure(bcmd):
+    """Register the bridge task once. Idempotent, and no administrator right is
+    needed: it runs as the bot's own account with limited rights. A task left by
+    another install path is rebuilt here, the same ownership rule the installer
+    applies to the main task."""
+    rc, out, _err = _run(["schtasks", "/Query", "/TN", _BRIDGE_TASK,
+                          "/V", "/FO", "LIST"], 30)
+    if rc == 0 and str(SCRATCH).lower() in (out or "").lower():
+        return ""
+    if rc == 0:
+        _run(["schtasks", "/Delete", "/TN", _BRIDGE_TASK, "/F"], 30)
+    rc, out, err = _run(["schtasks", "/Create", "/F", "/TN", _BRIDGE_TASK,
+                         "/TR", str(bcmd), "/SC", "ONCE", "/ST", "00:00"], 30)
+    if rc != 0:
+        return ("cannot register the GUI bridge task %s: %s"
+                % (_BRIDGE_TASK, (err or out or "").strip()[:200]))
+    return ""
+
+
+def _bridge_error(text, timeout=False):
+    """schtasks' text plus the one thing Windows actually needs for GUI work."""
+    why = ("no answer within %ss" % timeout if timeout
+           else (str(text or "").strip()[:200] or "no error text"))
+    if timeout or re.search(r"log\s*on|logon|0x4130", str(text or "").lower()):
+        return ("the GUI bridge could not reach an interactive desktop (%s). "
+                "A GUI needs a logged-on session: log on once at the console, "
+                "or set Windows auto-logon (netplwiz) if nobody will ever sit "
+                "at this box." % why)
+    return "the GUI bridge task %s failed: %s" % (_BRIDGE_TASK, why)
+
+
+def _ps_bridge(cmd, payload, timeout):
+    bcmd, err = _stage_bridge()
+    if err:
+        return {"ok": False, "error": err}
+    err = _bridge_ensure(bcmd)
+    if err:
+        return {"ok": False, "error": err}
+    payload_path = SCRATCH / "computer-use.json"
+    out_path = SCRATCH / "computer-use-out.json"
+    try:
+        out_path.unlink()
+    except OSError:
+        pass
+    body = dict(payload or {})
+    body["cmd"] = cmd
+    try:
+        payload_path.write_text(json.dumps(body), encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": "cannot write the call payload: %s" % exc}
+    rc, out, err = _run(["schtasks", "/Run", "/TN", _BRIDGE_TASK], 30)
+    if rc != 0 and "already running" in (err or out or "").lower():
+        # A hung helper leaves the task Running and /Run refuses; end it once.
+        _run(["schtasks", "/End", "/TN", _BRIDGE_TASK], 30)
+        rc, out, err = _run(["schtasks", "/Run", "/TN", _BRIDGE_TASK], 30)
+    if rc != 0:
+        return {"ok": False, "error": _bridge_error(err or out or "")}
+    deadline = time.time() + max(1, timeout)
+    while time.time() < deadline:
+        try:
+            text = out_path.read_text(encoding="utf-8-sig").strip()
+        except OSError:
+            time.sleep(_BRIDGE_POLL)
+            continue
+        try:
+            return json.loads(text)
+        except ValueError:
+            time.sleep(_BRIDGE_POLL)   # Set-Content is not atomic; wait for the end
+    return {"ok": False, "error": _bridge_error("", timeout=int(timeout))}
+
+
 
 def _last_json_object(text):
     """The LAST complete JSON object in the helper's stdout, or None.
@@ -1632,6 +1771,8 @@ def _last_json_object(text):
 
 def _ps(cmd, payload, timeout=INPUT_TIMEOUT):
     """One call into the Windows engine. The helper prints one JSON object."""
+    if _pid_session() == 0:
+        return _ps_bridge(cmd, payload, timeout)
     SCRATCH.mkdir(parents=True, exist_ok=True)
     helper = SCRATCH / "computer-use.ps1"
     err = _stage_text(helper, _PS_HELPER)
@@ -1670,11 +1811,10 @@ def _win_session_gate(info):
     there would send the model hunting for an app that is plainly on screen.
     """
     if info.get("session") == 0:
-        return ("ERROR: this process is in Windows session 0, which has no "
-                "desktop: it cannot see or drive the screen. The bot has to run "
-                "in the user's interactive session (a logon shortcut, or an "
-                "interactive scheduled task). `action=doctor` reports the "
-                "session it finds itself in.")
+        return ("ERROR: the GUI helper is still in Windows session 0 after the "
+                "bridge - task %s ran there instead of the logged-on session. "
+                "`action=doctor` reports the session it finds itself in."
+                % _BRIDGE_TASK)
     return ""
 
 
@@ -2112,8 +2252,11 @@ def _win_doctor(args, ctx):
     lines.append("  os: %s (build %s), PowerShell %s"
                  % (info.get("os"), info.get("build"), info.get("ps")))
     lines.append("  session: %s%s" % (info.get("session"),
-                 "   <- session 0: no desktop here, GUI calls cannot work"
+                 "   <- session 0: no desktop; GUI calls route through the %s task"
+                 % _BRIDGE_TASK
                  if info.get("session") == 0 else ""))
+    lines.append("  bridge: %s (%s)" % (_BRIDGE_TASK,
+                 "registered" if _bridge_registered() else "not registered yet"))
     lines.append("  dpi: %d%% scaling; virtual screen %sx%s at (%s,%s)"
                  % (round((info.get("dpi_x") or 96) / 96.0 * 100),
                     virt.get("w"), virt.get("h"), virt.get("x"), virt.get("y")))
@@ -3224,6 +3367,32 @@ def _selftest():
                  "rm -rf /tmp/build", "del C:\\temp\\thing.txt",
                  "format this nicely"):
         check("allowed text: %s" % text[:24], not blocked_text(text), text)
+
+    # -- the Windows session-0 bridge (hermetic: no schtasks, no screen) ----
+    check("the bridge task is named once",
+          _BRIDGE_TASK == "TinycmdrGui", _BRIDGE_TASK)
+    s = _pid_session()
+    check("_pid_session never raises", s is None or s >= 0, s)
+    act = _bridge_action(Path("h.ps1"), Path("p.json"), Path("o.json"))
+    check("the bridge action pins helper, payload and answer file",
+          act == ('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+                  '-File "h.ps1" -Cmd - -JsonFile "p.json" -OutFile "o.json"'), act)
+    check("the helper accepts the verb from the payload",
+          '$Cmd -eq "-"' in _PS_HELPER and "$($req.cmd)" in _PS_HELPER,
+          "no -Cmd - lane in the helper")
+    check("Out-Json can write the answer file, BOM-free",
+          "$OutFile" in _PS_HELPER and "WriteAllText" in _PS_HELPER
+          and "UTF8Encoding]::new($false)" in _PS_HELPER,
+          "no -OutFile lane in the helper")
+    e = _bridge_error("Logon failure: the user has not been granted the "
+                      "requested logon type")
+    check("a logon failure names the two real options",
+          "auto-logon" in e and "console" in e, e)
+    check("an unanswered bridge says so with the same options",
+          "no answer within 5s" in _bridge_error("", timeout=5)
+          and "auto-logon" in _bridge_error("", timeout=5), _bridge_error("", timeout=5))
+    check("an arbitrary bridge error stays a plain failure",
+          "failed" in _bridge_error("boom"), _bridge_error("boom"))
 
     # -- the grant diagnosis, pure (the stale branch is what a replaced binary
     #    leaves behind: the flag answers for osascript, the read for the tool) --------

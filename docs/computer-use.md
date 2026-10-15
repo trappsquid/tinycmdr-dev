@@ -50,8 +50,12 @@ not stop at the checkbox:
 
 ## Windows
 
-- **Session**: the tool drives the interactive session. Session 0 (a service) has no
-  desktop; `doctor` names it, and names a locked or detached foreground window
+- **Session**: the tool drives the logged-on desktop. From a headless bot (an S4U
+  scheduled task, session 0) every call runs through the `TinycmdrGui` bridge task,
+  which Task Scheduler starts in the interactive session; the helper answers through a
+  file the bot polls. With nobody logged on there is no desktop anywhere - the error
+  names the two real options: log on once at the console, or enable Windows auto-logon
+  (netplwiz). `doctor` names a locked or detached foreground window
   (`LockApp`/`LogonUI`) instead of pretending input would land.
 - **UIPI**: a non-elevated process cannot send input to an elevated window. When the
   target app runs as administrator, start the bot elevated; if clicks refuse on one app
