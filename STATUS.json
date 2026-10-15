@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "release-flow-guards",
+      "title": "the release body is leak-scanned, and a cut refuses a stale record",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "3328b9b",
+        "expect": "untagged"
+      },
+      "detail": "leak-gate.py gains --file and both release scripts scan the notes file before anything is built - the release body is published verbatim but lives outside the tree, so no mode graded it; release.sh refuses a cut unless the changelog's newest release section is this version, and finish-release.sh resolves the tree's venv like the other verbs and re-pushes the surface's tag a died cut leaves behind.",
+      "gate": "tests/test_leak_gate.py grades --file end to end (a clean note passes, a planted string is refused, an unreadable path is a hit, no path is refused); the changelog refusal was run against the current tree and a bodged version"
+    },
+    {
       "id": "release-record-guards",
       "title": "the record's small slips are graded, not re-learned",
       "state": "unreleased",
