@@ -14,6 +14,7 @@ so it must stay shape-only.
     python maintenance/leak-gate.py                 # the working tree (default)
     python maintenance/leak-gate.py --history       # every commit + every reachable blob
     python maintenance/leak-gate.py --range A..B    # what one push/release adds (CI, release.sh)
+    python maintenance/leak-gate.py --file <path>   # one published file outside the tree (the release notes)
     python maintenance/leak-gate.py --pre-push      # hook mode: the same check, fed by git
 
 Exit 0 = clean. Exit 1 = something private is reachable; the report names the file or
@@ -119,6 +120,22 @@ def _looks_binary(body: bytes) -> bool:
     return b"\0" in body[:4096]
 
 
+def scan_file(path: Path) -> list[str]:
+    """One named file - for published text that lives OUTSIDE the tree.
+
+    The release notes are the case: written beside the tree (they are not repo content),
+    uploaded as the release body verbatim, and therefore read by the world - while every
+    other mode scans through git and never sees them. Measured 2026-10-15: the release
+    body was the one published surface no mode graded. An unreadable path is a hit, never
+    a pass.
+    """
+    try:
+        body = path.read_bytes().decode("utf-8", "replace")
+    except OSError as exc:
+        return ["%s: cannot read (%s)" % (path, exc)]
+    return ["%s: %s" % (path, h) for h in hits(body)]
+
+
 def scan_blobs(shas: list[str], seen: dict[str, list[str]] | None = None) -> list[str]:
     """Scan blob contents; `seen` maps a blob sha to the paths that carry it."""
     seen = seen or {}
@@ -216,14 +233,23 @@ def main() -> int:
                   "refusing to report clean")
             return 2
         where = lambda: scan_range(ranges)                            # noqa: E731
+    elif mode == "--file":
+        files = [a for a in sys.argv[2:] if a.strip()]
+        if not files:
+            # Same rule as --range: a check handed nothing must not answer clean.
+            print("leak-gate --file needs at least one path; refusing to report clean")
+            return 2
+        where = lambda: [p for f in files for p in scan_file(Path(f))]        # noqa: E731
     else:
         where = {"--tree": scan_tree, "--history": scan_history,
                  "--pre-push": scan_pre_push}.get(mode)
     if where is None:
         print(__doc__.strip())
         return 2
-    if not_a_work_tree():
-        # NOT a clean report: every mode scans through git, so this would grade nothing.
+    if mode != "--file" and not_a_work_tree():
+        # NOT a clean report: the other modes read this tree through git, so here they
+        # would grade nothing. --file is exempt on purpose - its argument is a path, and
+        # the file it names may live outside any tree.
         print(f"leak-gate {mode}: {ROOT} is not a git work tree, so NOTHING would be "
               "scanned - refusing to report clean (a gate that grades nothing must not "
               "pass)")

@@ -134,6 +134,40 @@ def main():
           done.returncode == 2 and "refusing to report clean" in done.stdout,
           (done.returncode, done.stdout.strip()[:160]))
 
+    # ---- (d2) --file: a published file that lives OUTSIDE the tree ----------------------
+    # The release notes are written beside the tree and uploaded as the release body
+    # verbatim, so --tree and --range never see the one text the world reads. --file grades
+    # exactly it, with the same patterns and the same rule: nothing to scan is a refusal.
+    with tempfile.TemporaryDirectory(prefix="tinycmdr-leak-file-") as tmp:
+        planted = Path(tmp) / "planted_rules.py"
+        planted.write_text(
+            "PUBLIC_RULES = ((r'MAILBOX-SECRET-4', 'a planted marker'),)\n"
+            "PUBLIC_FORBIDDEN = ()\n", encoding="utf-8")
+        notes = Path(tmp) / "notes.md"
+        notes.write_text("One clean release note: one sentence per item.\n", encoding="utf-8")
+        env = {**os.environ, "TINYCMDR_LEAK_RULES": str(planted)}
+        clean = subprocess.run([sys.executable, str(GATE), "--file", str(notes)], cwd=str(BASE),
+                               env=env, capture_output=True, text=True)
+        check("--file passes a clean notes file",
+              clean.returncode == 0 and "clean" in clean.stdout,
+              (clean.returncode, clean.stdout.strip()[:160]))
+        notes.write_text("the token is MAILBOX-SECRET-4\n", encoding="utf-8")
+        dirty = subprocess.run([sys.executable, str(GATE), "--file", str(notes)], cwd=str(BASE),
+                               env=env, capture_output=True, text=True)
+        check("--file REFUSES a notes file that carries a private string",
+              dirty.returncode == 1 and "MAILBOX-SECRET-4" in dirty.stdout,
+              (dirty.returncode, dirty.stdout.strip()[:160]))
+        missing = subprocess.run([sys.executable, str(GATE), "--file", str(Path(tmp) / "nope.md")],
+                                 cwd=str(BASE), env=env, capture_output=True, text=True)
+        check("...and an unreadable path is a hit, never a pass",
+              missing.returncode == 1 and "cannot read" in missing.stdout,
+              (missing.returncode, missing.stdout.strip()[:160]))
+        none = subprocess.run([sys.executable, str(GATE), "--file"], cwd=str(BASE),
+                              env=env, capture_output=True, text=True)
+        check("--file with no path is refused, not reported clean",
+              none.returncode == 2 and "refusing to report clean" in none.stdout,
+              (none.returncode, none.stdout.strip()[:160]))
+
     # ---- (e) the push path itself: an armed clone REFUSES a private string --------------
     # This is the permanent half: the gate is only as good as its arming, and the hook is not
     # tracked by git. So the suite grades a real push against a real bare remote.

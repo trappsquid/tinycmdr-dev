@@ -4,13 +4,15 @@
 #
 #   bash maintenance/release.sh <notes-file>
 #
-# Version bumps, the CHANGELOG entry and the README are NOT done here: they are the
-# batch, and this only ships one. What it does do: build every shape the public
-# needs, refuse a shape that is missing, push, tag, attach the versioned assets AND
-# the stable alias names the README points at, then prove both with the asset check.
+# The batch is NOT done here - the VERSION line, the CHANGELOG section, the STATUS item
+# and the measured numbers are committed before this runs; this only ships the tree.
+# What it does: refuse what must be refused, build every shape the public needs, push,
+# tag, attach the versioned assets AND the stable alias names the README points at,
+# then prove both with the asset check.
 #
-# The notes file becomes the release body verbatim. It must be written fresh and
-# factual (title is exactly v<version>): the changelog stays the long-form record.
+# The notes file becomes the release BODY verbatim - the title `v<version>` is set here.
+# Write it fresh and factual (one sentence per item, no session names): the changelog
+# stays the long-form record. Keep it outside the tree; it is leak-scanned below.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -88,6 +90,13 @@ say "release -> $RELEASE_REPO (what users fetch); this tree -> $TREE_REPO; produ
 "$PY" maintenance/leak-gate.py --range origin/main..HEAD || {
     echo "*** refusing to cut: this push adds something private (listed above)" >&2; exit 2; }
 
+# ---- and the release BODY, which is published though it lives outside the tree --------
+# The notes file is uploaded verbatim as the release body; the two scans above read only
+# git's view and never see it. Measured 2026-10-15: the body was the one published surface
+# no mode graded. Same patterns, one file.
+"$PY" maintenance/leak-gate.py --file "$NOTES" || {
+    echo "*** refusing to cut: the notes file carries something private (listed above)" >&2; exit 2; }
+
 # ---- the tree doing the cutting must be the tree that gets tagged ---------------------
 # build-package.py reads the WORKING TREE while the push and the tag describe HEAD, so an
 # uncommitted edit to a tracked file ships inside the release and exists in no commit:
@@ -117,6 +126,23 @@ if gh release view "$TAG" >/dev/null 2>&1; then
     echo "*** $TAG already exists - a published number is never rebuilt" >&2
     exit 1
 fi
+
+# ---- the record must carry this version before it is tagged -----------------------------
+# A forgotten CHANGELOG fold ships a tag whose version the changelog never mentions - and
+# finish-release.sh, which can derive the body from that section, would have nothing to
+# derive. The newest release section must be this version (an older section above it is the
+# same failure: the fold landed in the wrong place).
+"$PY" - "$VER" <<'PYEOF' || exit 2
+import pathlib, re, sys
+ver = sys.argv[1]
+heads = re.findall(r"(?m)^##[ \t]+\[([^\]]+)\]",
+                   pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8"))
+vers = [h for h in heads if h.strip().lower() != "unreleased"]
+if not vers or vers[0] != ver:
+    sys.exit("*** refusing to cut: CHANGELOG.md's newest release section is %r, not %r - "
+             "write or fold the section for this version first" % (vers[0] if vers else None, ver))
+print("changelog: the newest release section is [%s]" % ver)
+PYEOF
 
 say "build the published shapes (win, linux, macos)"
 # A FLEET KIT is a separate build: a plain run writes install/fleet-defaults.json
@@ -342,3 +368,9 @@ git fetch --tags
     exit 1; }
 
 say "$TAG is published"
+cat <<'EOF'
+
+Verify from OUTSIDE before reporting it done (the ship skill carries the block): download
+SHA256SUMS + one archive from releases/latest/download/... and check the sum - curl needs
+-L, the URLs answer 302 - and install.sh must answer 200.
+EOF

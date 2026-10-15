@@ -35,10 +35,17 @@ gh auth status >/dev/null 2>&1 || { echo "gh is installed but not authenticated.
 [ -f maintenance/private_rules.py ] || { echo "maintenance/private_rules.py is missing: the
 public build refuses to run without this fleet's inventory." >&2; exit 2; }
 
+# This tree's own venv first, like release.sh, batch.sh and the host's hook: it is the
+# interpreter carrying `requests`, which the build's payload-floor probe imports.
 PY=""
-for cand in python3.12 python3.11 python3.10 python3 python; do
-    if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+for cand in ./venv/bin/python ./venv/Scripts/python.exe; do
+    if [ -x "$cand" ]; then PY="$cand"; break; fi
 done
+if [ -z "$PY" ]; then
+    for cand in python3.12 python3.11 python3.10 python3 python; do
+        if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+    done
+fi
 [ -n "$PY" ] || { echo "no Python 3.10-3.12 on PATH: install one, or pass it in PATH" >&2; exit 2; }
 
 VER="$("$PY" -c 'import re, pathlib
@@ -91,6 +98,11 @@ fi
 if command -v cygpath >/dev/null 2>&1; then
     NOTES="$(cygpath -m "$NOTES" 2>/dev/null || printf '%s' "$NOTES")"
 fi
+# The body is published though it lives outside the tree: the same one-file check
+# release.sh runs before it builds anything.
+"$PY" maintenance/leak-gate.py --file "$NOTES" || {
+    echo "*** refusing to finish: the notes file carries something private (listed above)" >&2
+    exit 2; }
 
 say "build the published shapes (win, linux, macos)"
 # A FLEET KIT is a separate build: a plain run writes install/fleet-defaults.json from THIS
@@ -119,6 +131,11 @@ if [ "$DRY" = "1" ]; then
     say "dry run: built and checked; NOT creating $TAG"
     exit 0
 fi
+
+# A cut that died between the two tag pushes leaves the surface without its tag, and
+# `--verify-tag` verifies exactly that: push it here, idempotently, before creating the
+# release. (release.sh does this too; doing it twice costs nothing.)
+git -C "$PRODUCT_DIR" push --force origin "$TAG"
 
 say "create the release on the install surface, at the tag that tree carries"
 # `--verify-tag`: the release attaches to the tag the install surface already has, instead of
