@@ -53,7 +53,8 @@ sh -n "$HOOK" || { echo "install-hooks: the hook I just wrote does not parse" >&
 if [ "$MODE" = "leak-only" ]; then
     echo "installed: the leak gate only (leak-gate.py --pre-push; python3 and stdlib)"
 else
-    echo "installed: the full cheap set (leak gate, hygiene, measured numbers, where.py, status)"
+    echo "installed: the full cheap set (leak gate, hygiene, measured numbers, where.py, status,"
+    echo "  Windows paths, subjects)"
     echo "  it needs a python that can import requests - ./venv/bin/python is preferred,"
     echo "  and the hook says so plainly if it cannot find one."
 fi

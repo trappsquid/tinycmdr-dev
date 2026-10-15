@@ -9,7 +9,8 @@
 # machine, which is a slow way to learn something a 0.3s check knew.
 # The heavy gate (tests/run_all.py, about two minutes) is deliberately NOT here: it belongs in CI
 # and in the release checklist. This is the cheap set - the things that go stale because a file
-# changed and nothing regenerated what depends on it.
+# changed and nothing regenerated what depends on it, plus the one thing a direct `git commit`
+# can publish that `batch.sh` would have refused: a subject over 50 chars.
 # Install it once per clone:
 #     printf '#!/bin/sh\nexec bash "$(git rev-parse --show-toplevel)/maintenance/pre-push.sh"\n' \
 #         > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
@@ -37,11 +38,18 @@ if ! "$PY" -c 'import requests' >/dev/null 2>&1; then
     exit 2
 fi
 
+# git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin when this runs
+# as a hook, and two checks below want them - stdin reads once, so it is captured here and
+# re-fed. Run by hand from a terminal there is no such input, and each check falls back to
+# the branch's own range.
+REFS=""
+if [ ! -t 0 ]; then REFS="$(cat)"; fi
+
 fail=0
 say() { printf '\n=== %s\n' "$*"; }
 
 say "leak gate: files, commit messages, reachable blobs"
-"$PY" maintenance/leak-gate.py --pre-push || fail=1
+printf '%s\n' "$REFS" | "$PY" maintenance/leak-gate.py --pre-push || fail=1
 
 say "no host-state file is tracked"
 "$PY" maintenance/check-hygiene.py || fail=1
@@ -92,6 +100,49 @@ for p, why in reserved:
 print("tracked paths: %d, breaking a Windows checkout: %d"
       % (len(paths), len(bad) + len(reserved)))
 sys.exit(1 if (bad or reserved) else 0)
+PYEOF
+then
+    fail=1
+fi
+
+say "commit subjects in this push: <= 50 chars"
+# batch.sh refuses an over-long subject at commit time; a direct `git commit` never asks it
+# (measured 2026-10-15: two subjects shipped at 55 and 58 chars that way). The rule is graded
+# here, over exactly the commits the push adds, and only for BRANCH refs - a tag push re-sends
+# history that was graded when its branch was pushed.
+if ! "$PY" - "$REFS" <<'PYEOF'
+import subprocess
+import sys
+
+text = sys.argv[1] if len(sys.argv) > 1 else ""
+ranges = []
+for line in text.split("\n"):
+    parts = line.split()
+    if len(parts) != 4 or not parts[0].startswith("refs/heads/"):
+        continue
+    local, remote = parts[1], parts[3]
+    if set(local) == {"0"}:                       # a deletion: nothing new to grade
+        continue
+    ranges.append(local if set(remote) == {"0"} else remote + ".." + local)
+if not ranges:
+    # run by hand (no hook input): grade what this branch holds past its remote
+    probe = subprocess.run(["git", "rev-parse", "--verify", "--quiet", "origin/main"],
+                           capture_output=True, text=True)
+    if probe.returncode == 0 and probe.stdout.strip():
+        ranges = ["origin/main..HEAD"]
+bad, graded = [], 0
+for rng in ranges:
+    out = subprocess.run(["git", "log", "--no-merges", "--format=%h\x1f%s", rng],
+                         capture_output=True, text=True).stdout
+    for row in out.splitlines():
+        sha, _, subject = row.partition("\x1f")
+        graded += 1
+        if len(subject) > 50:
+            bad.append("%s  %d chars  %s" % (sha, len(subject), subject))
+for b in bad:
+    print("  " + b)
+print("graded %d commit subject(s), over the 50-char rule: %d" % (graded, len(bad)))
+sys.exit(1 if bad else 0)
 PYEOF
 then
     fail=1
