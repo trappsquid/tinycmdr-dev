@@ -35,11 +35,18 @@ fill it in." >&2; exit 2; }
 # `python` is not on a stock macOS PATH (it is on the fleet's Windows boxes), and every call
 # below used to say exactly that: the version parse returned nothing, and the build and both
 # asset checks died on "python: command not found" - after the push, which is how a cut goes
-# out half-done. Resolve once, preferring this project's band, and use it everywhere.
+# out half-done. Resolve once - this tree's own venv first (the interpreter the gate and the
+# host's hook already run, and the one carrying `requests`, which the build's payload probe
+# imports), then this project's band on PATH - and use it everywhere.
 PY=""
-for cand in python3.12 python3.11 python3.10 python3 python; do
-    if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+for cand in ./venv/bin/python ./venv/Scripts/python.exe; do
+    if [ -x "$cand" ]; then PY="$cand"; break; fi
 done
+if [ -z "$PY" ]; then
+    for cand in python3.12 python3.11 python3.10 python3 python; do
+        if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+    done
+fi
 [ -n "$PY" ] || { echo "no Python 3.10-3.12 on PATH: install one, or pass it in PATH" >&2; exit 2; }
 echo "interpreter: $PY ($($PY -V 2>&1))"
 
