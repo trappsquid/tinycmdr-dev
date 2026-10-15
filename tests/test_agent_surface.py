@@ -460,9 +460,96 @@ def _suite_soul_bound():
     return 1 if FAILS else 0
 
 
+def _suite_soul_refresh():
+    """A persona seed change must reach the hosts it was written for: an install
+    whose soul.md still holds a retired seed verbatim was never personalized, so
+    start refreshes it to the current seed; an edited persona is never touched
+    (update never overwrites soul.md, so this is the one path a seed change rides).
+
+    python tests/test_agent_surface.py
+    """
+    import importlib.util
+    import os
+    import shutil
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    PASSES = []
+    FAILS = []
+
+    def check(name, cond, detail=""):
+        (PASSES if cond else FAILS).append(name)
+        print(("ok   " if cond else "FAIL ") + name + ("" if cond else "   " + str(detail)))
+
+    BASE = Path(__file__).resolve().parent.parent
+    SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
+
+    def stage_with(soul_text):
+        """A staged build in its own dir, imported with the runner's guard on so
+        import writes nothing; the refresh is then driven directly."""
+        work = Path(tempfile.mkdtemp(prefix="tc-soul-refresh-"))
+        shutil.copy2(SRC, work / "tinycmdr.py")
+        shutil.copy2(BASE / "tests" / "fixture-config.json", work / "config.json")
+        (work / "soul.md").write_text(soul_text, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(
+            "tinycmdr_soul_refresh_under_test", work / "tinycmdr.py")
+        fb = importlib.util.module_from_spec(spec)
+        sys.modules["tinycmdr_soul_refresh_under_test"] = fb
+        spec.loader.exec_module(fb)
+        return fb, work
+
+    # The seed the previous release materialized, pinned here so a PRE-FIX build (no
+    # refresh code) fails the first check instead of crashing on a missing attribute.
+    RETIRED_SEED = """You run this machine as its senior systems administrator: direct, technical, no fluff. Say
+plainly when something is unverified.
+
+Two things a local model forgets:
+- Anything with a version number, a price, a CVE or a fresh error message is newer than your
+  training data. Look it up before acting on it: being sure from memory is not evidence.
+- Work you have done a hundred times is not research. Services, logs, files, updates,
+  backups, restarts: just do them."""
+
+
+    guard = os.environ.pop("TINYCMDR_NO_MATERIALIZE", None)
+    works = []
+    try:
+        fb, work1 = stage_with("staged")
+        works.append(work1)
+        retired = RETIRED_SEED
+        fb2, work2 = stage_with(retired)
+        works.append(work2)
+        os.environ["TINYCMDR_NO_MATERIALIZE"] = "1"
+        fb2._materialize_host_files()
+        got = (work2 / "soul.md").read_text(encoding="utf-8")
+        check("a soul.md still holding the retired seed is refreshed to the current seed",
+              got.strip() == fb.DEFAULT_SOUL.strip(), got[:120])
+        check("the refresh leaves no temp file behind",
+              not (work2 / "soul.md.refresh-tmp").exists())
+        fb3, work3 = stage_with("My own persona, written by hand.")
+        works.append(work3)
+        fb3._materialize_host_files()
+        check("an edited persona is never touched",
+              (work3 / "soul.md").read_text(encoding="utf-8") == "My own persona, written by hand.")
+        fb4, work4 = stage_with("staged")
+        works.append(work4)
+        fb4._materialize_host_files()
+        check("a soul.md holding a persona this build does not retire is left alone",
+              (work4 / "soul.md").read_text(encoding="utf-8") == "staged")
+    finally:
+        os.environ.pop("TINYCMDR_NO_MATERIALIZE", None)
+        if guard is not None:
+            os.environ["TINYCMDR_NO_MATERIALIZE"] = guard
+        for p in works:
+            shutil.rmtree(p, ignore_errors=True)
+    print()
+    print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
+    return 1 if FAILS else 0
+
+
 def main():
     rc = 0
-    for name, fn in (("test_toolsmith", _suite_test_toolsmith), ("test_subagent_result", _suite_test_subagent_result), ("test_soul_bound", _suite_soul_bound)):
+    for name, fn in (("test_toolsmith", _suite_test_toolsmith), ("test_subagent_result", _suite_test_subagent_result), ("test_soul_bound", _suite_soul_bound), ("test_soul_refresh", _suite_soul_refresh)):
         rc |= _run(name, fn)
     return 1 if rc else 0
 

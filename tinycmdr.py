@@ -19082,6 +19082,22 @@ DEFAULT_SOUL = """You run this machine as its senior systems administrator: dire
 
 Work you have done a hundred times is not research. Services, logs, files, updates, backups, restarts: just do them."""
 
+# Persona seeds this code retired, oldest first: a host whose soul.md still holds one
+# verbatim never personalized, so start refreshes it to DEFAULT_SOUL instead of pinning
+# every existing install to an old persona for ever. update itself never overwrites
+# soul.md - this refresh is the one path a seed change rides to existing hosts, and it
+# fires only on the exact retired text.
+_RETIRED_SOUL_SEEDS = (
+    """You run this machine as its senior systems administrator: direct, technical, no fluff. Say
+plainly when something is unverified.
+
+Two things a local model forgets:
+- Anything with a version number, a price, a CVE or a fresh error message is newer than your
+  training data. Look it up before acting on it: being sure from memory is not evidence.
+- Work you have done a hundred times is not research. Services, logs, files, updates,
+  backups, restarts: just do them.""",
+)
+
 
 def _load_soul():
     """soul.md beside the build wins, so an operator can re-persona the agent by
@@ -19103,8 +19119,11 @@ def _materialize_host_files():
     that belongs to whoever runs the box, and the shipped defaults are
     `theme.default.toml` and `soul.example.md`. On start, a missing live file is copied
     from its default and one line is logged; an existing file is never touched, so an
-    edited theme or soul survives every start and every update. `theme.toml`'s pair also
-    rides `_HOST_DEFAULT_PAIRS`, which is how `update`/`doctor` report a moved default.
+    edited theme or soul survives every start and every update - with one exception:
+    a soul.md that still holds a retired persona seed verbatim was never personalized,
+    and is refreshed to the current seed instead of pinning the box to the old persona.
+    `theme.toml`'s pair also rides `_HOST_DEFAULT_PAIRS`, which is how `update`/`doctor`
+    report a moved default.
     """
     if os.environ.get("TINYCMDR_NO_MATERIALIZE") == "1":
         # The runner's guard: a suite that imports this file must not write host state
@@ -19120,6 +19139,28 @@ def _materialize_host_files():
             log.info("%s was missing; materialized it from %s", live, default)
         except OSError as e:                       # noqa: BLE001 - never block startup
             log.warning("could not materialize %s from %s: %s", live, default, e)
+    # The retired-seed refresh: the one way a persona change reaches hosts that already
+    # have a soul.md. Match on stripped text so a trailing newline cannot pin a box to
+    # the old seed for ever; a host that personalized never matches, so it is never
+    # touched.
+    soul = BASE_DIR / "soul.md"
+    try:
+        current = soul.read_text(encoding="utf-8").strip()
+    except OSError:
+        current = ""
+    if current and current in (s.strip() for s in _RETIRED_SOUL_SEEDS):
+        tmp = soul.with_name(soul.name + ".refresh-tmp")
+        try:
+            tmp.write_text(DEFAULT_SOUL, encoding="utf-8")
+            os.replace(tmp, soul)
+            log.info("soul.md still held a retired persona seed; refreshed it to the "
+                     "shipped seed (an edited persona is never touched)")
+        except OSError as e:                       # noqa: BLE001 - never block startup
+            log.warning("could not refresh the retired soul.md seed: %s", e)
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 
 _materialize_host_files()
