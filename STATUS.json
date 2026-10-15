@@ -19,10 +19,10 @@
     {
       "id": "computer-use-session0-bridge-1-1-17",
       "title": "computer_use works for a headless bot: GUI calls bridge from session 0 into the logged-on session",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "d8d9e00",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The -AsService install runs the bot as an S4U scheduled task so it can start at boot and answer over chat with nobody at the machine - but S4U lands it in session 0, which has no desktop, and computer_use refused outright there, so a chat-only install could never see or drive a GUI. Every Windows call now runs the PowerShell helper through a fixed-action scheduled task (TinycmdrGui, registered without /ru on first use, no administrator right), which Task Scheduler starts with the owner's interactive token in whatever session that user is logged on with; the helper answers through an -OutFile the bot polls. Task Scheduler is the one session-crossing mechanism an S4U task account can use without SeTcbPrivilege (WTSQueryUserToken) or SeAssignPrimaryTokenPrivilege (CreateProcessAsUser). With nobody logged on there is no desktop anywhere in Windows; the error says so and names the two real options - log on once at the console, or enable Windows auto-logon (the standard RPA answer) - and doctor reports the bridge task's registration state. The uninstaller removes a bridge task that belongs to this install.",
       "gate": "done - d8d9e00; tests/test_delivery_surface.py grades the tool's own 112 hermetic checks (the bridge lane among them); the session-0 crossing itself needs a logged-on Windows host, which CI does not have"
