@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "release-record-guards",
+      "title": "the record's small slips are graded, not re-learned",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "ddf1df8",
+        "expect": "untagged"
+      },
+      "detail": "tests/test_contracts.py grades that CHANGELOG.md reads newest-first (the 1.1.19 section had folded in below 1.1.18, and stayed that way through a release), the pre-push hook refuses a pushed range carrying a commit subject over 50 chars (two shipped at 55 and 58 through direct commits batch.sh never saw), and release.sh resolves its interpreter with the tree's venv first - the packaged build's payload-floor probe ran under a PATH python without requests and printed PROBE FAILED in two cuts.",
+      "gate": "tests/test_contracts.py; the hook itself over a crafted range: the 58-char subject refused, a clean range and a manual run pass"
+    },
+    {
       "id": "soul-seed-refresh-1-1-19",
       "title": "a retired persona seed refreshes to the shipped seed at start",
       "state": "shipped",
