@@ -5,15 +5,15 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.18] - 2026-10-14
-
-### Changed
-- **The shipped prompt teaches how to reason, not only what to do:** a `How you reason` block (premise check, one approach, settle-and-stop, no flip without evidence, verify by running, no performed caution) ships to every model and sub-agent, and the web check now precedes planning for anything with an external surface, its findings overriding training-data memory; paid for by merging the two anti-fabrication lines, retiring "keep going until solved" into the settle rule, and moving the persona seed's narrow recency rule into the static prompt (tests/test_tool_load_surface.py).
-
 ## [1.1.19] - 2026-10-14
 
 ### Changed
 - **A persona seed change now reaches the boxes it was written for:** at start, a soul.md that still holds a retired seed verbatim is refreshed to the shipped seed, while an edited persona is never touched (update does not overwrite soul.md) (tests/test_agent_surface.py).
+
+## [1.1.18] - 2026-10-14
+
+### Changed
+- **The shipped prompt teaches how to reason, not only what to do:** a `How you reason` block (premise check, one approach, settle-and-stop, no flip without evidence, verify by running, no performed caution) ships to every model and sub-agent, and the web check now precedes planning for anything with an external surface, its findings overriding training-data memory; paid for by merging the two anti-fabrication lines, retiring "keep going until solved" into the settle rule, and moving the persona seed's narrow recency rule into the static prompt (tests/test_tool_load_surface.py).
 
 ## [1.1.17] - 2026-10-14
 

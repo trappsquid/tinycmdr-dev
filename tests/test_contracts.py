@@ -384,6 +384,28 @@ def main():
         check("an exclusion stays live work (the item is open while one is listed)",
               _item.get("state") == "open" if _named else True, _item.get("state"))
 
+    # ---- the changelog reads newest-first ------------------------------------------------
+    # CHANGELOG.md declares Keep a Changelog at its head, and every reader scans from the top:
+    # a user checking what changed, the notes for the next cut. A section folded in at the
+    # wrong line is invisible to every other check - measured 2026-10-15: the 1.1.19 section
+    # landed below 1.1.18 (the file read 1.1.18, 1.1.19, 1.1.17...) and shipped that way.
+    _cl_rows = []
+    for _h in re.findall(r"(?m)^##[ \t]+\[([^\]]+)\]",
+                         (BASE / "CHANGELOG.md").read_text(encoding="utf-8")):
+        _name = _h.strip()
+        if _name.lower() == "unreleased":
+            _cl_rows.append((_name, (10 ** 9, 0, 0)))   # the pending section outranks releases
+            continue
+        _v = re.match(r"^v?(\d+)\.(\d+)\.(\d+)", _name)
+        check("the changelog heading [%s] is a version or Unreleased" % _name, bool(_v), _name)
+        _cl_rows.append((_name, tuple(int(_p) for _p in _v.groups()) if _v else None))
+    _swaps = ["[%s] above [%s]" % (_cl_rows[_i][0], _cl_rows[_i + 1][0])
+              for _i in range(len(_cl_rows) - 1)
+              if _cl_rows[_i][1] and _cl_rows[_i + 1][1]
+              and not _cl_rows[_i][1] > _cl_rows[_i + 1][1]]
+    check("the changelog reads newest-first (each section above the older one)",
+          not _swaps, _swaps[:4])
+
     print("\n%s" % ("all contract checks passed" if not FAILS
                     else "FAILED: %d" % len(FAILS)))
     return 1 if FAILS else 0
