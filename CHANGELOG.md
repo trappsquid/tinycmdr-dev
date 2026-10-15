@@ -5,7 +5,7 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.17] - 2026-10-14
 
 ### Fixed
 - **computer_use works for a headless bot:** an S4U scheduled task lives in session 0, which has no desktop, so a chat-only install could never see or drive a GUI; every Windows call now runs the helper through a `TinycmdrGui` scheduled task that Task Scheduler starts in the logged-on user's session (auto-registered on first use, no administrator right), and when nobody is logged on the error names log-on-once or Windows auto-logon (tests/test_delivery_surface.py).
