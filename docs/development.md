@@ -91,8 +91,8 @@ bash maintenance/batch.sh -m "scope: what it does"   # 3. numbers + gate (-j4) +
   not obvious.
 - **A release** is cut from a clean, gated `main`: `bash maintenance/release.sh <notes-file>`.
   It needs `gh` authenticated and `maintenance/private_rules.py` present, bumps nothing itself
-  (version, CHANGELOG and README are part of the change), pushes, tags, attaches the assets and
-  proves them. A published number is never rebuilt. Those assets - not this working tree - are what
+  (the VERSION line, the CHANGELOG section and the STATUS item are the batch's), pushes, tags,
+  attaches the assets and proves them. A published number is never rebuilt. Those assets - not this working tree - are what
   every other host installs from, so a change that is not released is a change no box but this one
   has; the tags are the claim about what shipped, which is why `tests/test_status.py` grades them.
 - **The bot takes a change only on restart**: `bash maintenance/restart-tinycmdr-macos.sh`
@@ -174,12 +174,15 @@ a release published into the source repo is a release nobody can fetch.
 
 ### The batch (one commit)
 
-1. **`tinycmdr.py`** - `VERSION = "1.0.4N"`. Byte-exact replacement: the working tree is CRLF, so a
-   `sed` anchored with `$` silently misses.
-2. **`CHANGELOG.md`** - fold `## [Unreleased]` into `## [1.0.4N] - <date>`: one physical line per
-   entry under `Added`/`Changed`/`Fixed`, each carrying the mechanism and the test - no summary
-   paragraph, no operator quotes, no dates or measurement stories. Leave an empty `## [Unreleased]`
-   heading at the top.
+1. **`tinycmdr.py`** - `VERSION = "x.y.z"`, one greater than the newest tag (`v1.1.19` -> `1.1.20`;
+   a minor bump is the operator's call, not the batch's). Replace the exact line - `release.sh`
+   reads it with a strict `^VERSION = "..."` match and does not guess.
+2. **`CHANGELOG.md`** - the release's own section, `## [x.y.z] - <date>`, above the previous
+   release: one physical line per entry under `Added`/`Changed`/`Fixed`, each carrying the
+   mechanism and the test - no summary paragraph, no operator quotes, no measurement stories.
+   The file carries no standing `[Unreleased]` section between releases; if an entry was written
+   earlier under one, this batch renames that heading. `tests/test_contracts.py` grades the
+   newest-first order, and `release.sh` refuses unless the newest release section is this version.
 3. **`STATUS.json`** - one item per change, **`"state": "unreleased"` with
    `"anchor": {"commit": "<sha>", "expect": "untagged"}`**. That is the only shape the gate accepts
    before the tag exists: `tests/test_status.py` refuses a `shipped` item whose anchor is not in a
@@ -213,12 +216,16 @@ fix repeats a verdict the final run already gives.
 bash maintenance/release.sh ~/tinycmdr-notes-<version>.md
 ```
 
-The notes file becomes the release body **verbatim** (title exactly `v<version>`), so write it
-fresh, factual, one sentence per item, no process narration, no audit or session name, no finding
-id. `release.sh` then runs, in this order (each step exists because skipping it broke a release):
+The notes file becomes the release body **verbatim** - the script sets the title (`v<version>`);
+the file is the body. Write it fresh and factual: one sentence per item, no process narration, no
+audit or session name, no finding id; the shape is a one-sentence summary, then
+`### Added|Changed|Fixed` bullets. Keep it outside the tree - and note it is leak-scanned
+(`leak-gate.py --file`) before anything is built, because the body is published even though it is
+not repo content. `release.sh` then runs, in this order (each step exists because skipping it broke a release):
 
-1. the leak gate over the tree **and** over the range it is about to push; the dirty-tree check;
-   a refusal if the tag already exists;
+1. the leak gate over the tree, over the range it is about to push, **and over the notes file**;
+   the dirty-tree check; a refusal if the tag already exists or if the changelog's newest release
+   section is not this version;
 2. build every published shape, check the README's download names against `dist/`, check the
    archives against the page's assets, write `SHA256SUMS`;
 3. push `main` (this tree) and **regenerate and push the product tree's `main` in the same breath**
@@ -238,8 +245,9 @@ id. `release.sh` then runs, in this order (each step exists because skipping it 
    assets back, check the README names against the published release, fetch tags;
 8. `tests/test_status.py` - the record and the tag must agree before the script says `published`.
 
-Two deliberate overrides exist, and each says so in the notes: `TINYCMDR_SKIP_CI_GATE=1` (this
-repo's gate) and `TINYCMDR_SKIP_PRODUCT_CI=1` (the surface's tests).
+Three deliberate overrides exist, and each says so in the notes: `TINYCMDR_SKIP_TREE_CHECK=1`
+(cut from a tree that differs from HEAD), `TINYCMDR_SKIP_CI_GATE=1` (this repo's gate) and
+`TINYCMDR_SKIP_PRODUCT_CI=1` (the surface's tests).
 
 **A cut that dies after the tag is finished by name, not by memory**:
 `bash maintenance/finish-release.sh [<notes-file>] [--dry-run]` - the release body comes from the
@@ -310,8 +318,10 @@ Traps this project has actually paid for:
   ledger detail is refused before it can reach the remote.
 - **`git add -A` in a live tree takes host state** unless `.gitignore` covers it (that is how
   `*.log.*` got there).
-- **The tag is created on the remote; `release.sh` fetches it back, and §1's
-  `N commit(s) past <tag> (UNRELEASED)` line is what tells you afterwards whether the cut landed.**
+- **The tag is created locally and pushed together with `main`; the surface's tag follows it, and
+  `release.sh` fetches tags at the end so this clone's list is complete. `tc-status`'s
+  `newest tag: vX | commits since: N` tells you afterwards whether the cut landed - after a clean
+  cut N is 1 (the ledger promotion).**
 - **Everything I write is the fewest words that carry the fact.** A commit subject is <= 50
   characters, `scope: what it does`; a body carries the *why*, the measurement or the test that pins
   it - not an inventory of steps and not a restatement of the diff. A `CHANGELOG.md` entry is one
