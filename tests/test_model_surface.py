@@ -758,25 +758,33 @@ is offered now, the configured one first and marked current.
             check("Nothing switched" in reply and "1–" in reply,
                   "a number outside the menu is refused with the range", reply[:200])
 
-            # the endpoint-management words reach the verb from a chat lane: `/model add
-            # <url>` is `tinycmdr model add` (the door used to answer "Nothing switched:
-            # no reachable endpoint advertises `add <url>`" - measured 2026-10-16), and
-            # the surface shows the options: a numbered menu whose last row opens the
-            # endpoint door, and a guide for a bare `add` instead of the shell's flags
-            _menu = mod7.model_command("mattermost:suite", "")
-            check("add or change the endpoint" in _menu and "in use now" in _menu
-                  and "\n  1. " in _menu,
-                  "bare `/model` is the menu: the models, then the endpoint door",
-                  _menu[:300])
+            # the doors a knowing user hits stay terse; the directions wait behind
+            # `/model help` (his rule, 2026-10-16: no wall on the way to a switch or an
+            # add). Bare `/model` used to be the menu, `/model add` (no link) the shell's
+            # flag wall and, before the routing, "Nothing switched".
+            _terse = mod7.model_command("mattermost:suite", "")
+            check("Model for this conversation" in _terse and "/model help" in _terse
+                  and "add or change the endpoint" not in _terse
+                  and "\n  1. " not in _terse,
+                  "bare `/model` is the status line and one pointer, nothing else",
+                  _terse[:300])
+            _help = mod7.model_command("mattermost:suite", "help")
+            check("add or change the endpoint" in _help and "in use now" in _help
+                  and "/model add <link>" in _help and "--key-env MY_KEY" in _help
+                  and "token set" in _help,
+                  "`/model help` lays out the options and the words", _help[:400])
             _add_row = str(len(mod7.model_catalog()) + 1)
             reply = mod7.model_command("mattermost:suite", _add_row)
-            check("Adding an endpoint" in reply and "/model add http://" in reply,
-                  "the menu's last number leads to the add guide", reply[:300])
+            check("add or change the endpoint" in reply and "/model add <link>" in reply,
+                  "the add row's number serves the same help", reply[:300])
             reply = mod7.model_command("mattermost:suite", "add")
-            check("/model add http://" in reply and "token set" in reply
+            check("usage:" in reply and "/model help" in reply
                   and "Nothing switched" not in reply,
-                  "a bare `model add` in chat is the guide, not the shell's flag wall",
+                  "a bare `model add` in chat is one usage block, not a flag wall",
                   reply[:300])
+            reply = mod7.model_command("mattermost:suite", "add cloud")
+            check("usage:" in reply and "Nothing switched" not in reply,
+                  "...and a kind word with no link is the same usage", reply[:200])
 
             _real_in = sys.stdin
             sys.stdin = FakeTTY("")        # isatty yes, then EOF: the NUL-device shape
@@ -836,6 +844,30 @@ is offered now, the configured one first and marked current.
                   and "reach it with `/model cloud-b`" in reply,
                   "...and `--model 2` resolves to the second advertised id from chat",
                   (reply[:400], _stub_entry))
+
+            # a keyless hosted probe says what to do, and `cloud <link>` is accepted -
+            # the words the operator typed at the box (`add cloud https://api.deepseek.com`)
+            port2, srv2 = serve()
+            base2 = "http://127.0.0.1:%d/v1" % port2
+            _real_in = sys.stdin
+            sys.stdin = io.StringIO("")
+            try:
+                reply = mod7.model_command("mattermost:suite", "add %s" % base2)
+                check("HTTP 401" in reply and "--key-env" in reply and "token set" in reply,
+                      "a keyless hosted endpoint names the key step", reply[:400])
+                reply = mod7.model_command(
+                    "mattermost:suite",
+                    "add cloud %s --key-env TINYCMDR_ENDPOINT_TEST_KEY --model 1" % base2)
+            finally:
+                sys.stdin = _real_in
+            _cfg7 = json.loads((work / "chatdoor" / "config.json").read_text(encoding="utf-8"))
+            check("-> cloud-a" in reply
+                  and any(f.get("base_url") == base2 and f.get("model") == "cloud-a"
+                          for f in _cfg7["llm"].get("fallbacks") or []),
+                  "`add cloud <link>` drops the kind word and adds the endpoint",
+                  (reply[:300], _cfg7["llm"].get("fallbacks")))
+            srv2.shutdown()
+            srv2.server_close()
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

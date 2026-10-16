@@ -28388,28 +28388,44 @@ CMDR_MOVED = ("the command prefix is `%s` now, not `%s` - the same commands: `%s
 
 _CHAT_ADD_ROW = "add or change the endpoint"
 
-_CHAT_ADD_GUIDE = (
-    "Adding an endpoint: reply with the link — one `GET /models` checks it, and the "
-    "models it serves come back here.\n"
-    "```\n"
-    "/model add http://<box>:8081/v1                          a box on your network\n"
-    "/model add https://api.provider.com/v1 --key-env MY_KEY  a hosted provider\n"
-    "/model add <link> --primary          make it the endpoint that answers\n"
-    "/model add <link> --model <number>   when it serves more than one\n"
-    "```\n"
-    "Without `--primary` it is added as a fallback. A hosted key's value is never typed "
-    "here — put it on the host with `tinycmdr token set MY_KEY`.")
+# `local`/`cloud` in front of the link: the wizard's own first question, answered
+# inline. The link's address decides which it is, so the word is never load-bearing.
+_ENDPOINT_KIND_WORDS = ("local", "cloud", "lan", "hosted", "remote", "online", "provider")
+
+# Directions live behind `/model help`: a user who knows the words must get a switch or
+# an add, not a wall of text (his rule, 2026-10-16). These are the only two texts a
+# terse door answers with when its argument is missing.
+_CHAT_ADD_USAGE = (
+    "usage: `/model add <link>` (e.g. `/model add http://<box>:8081/v1`)\n"
+    "   or: `/model add cloud <link> --key-env MY_KEY` for a hosted provider\n"
+    "`/model help` explains the rest.")
 
 
-def _model_menu_rows(cat, current):
-    """The numbered rows every chat surface shows: the catalog, then the add row."""
+def _model_menu_rows(cat, current, add_row=True):
+    """The numbered rows: the catalog with the model in use marked, and - for help -
+    the endpoint door as the last row."""
     rows = []
     for i, e in enumerate(cat, 1):
         mark = ("   ← in use now"
                 if e["name"].lower() == str(current).lower() else "")
         rows.append("  %d. `%s` — %s%s" % (i, e["name"], _model_place(e), mark))
-    rows.append("  %d. %s" % (len(cat) + 1, _CHAT_ADD_ROW))
+    if add_row:
+        rows.append("  %d. %s" % (len(cat) + 1, _CHAT_ADD_ROW))
     return rows
+
+
+def _model_help_text(cat, current):
+    """`/model help`: the options and the words, on request only."""
+    lines = ["Models this bot can run:"] + _model_menu_rows(cat, current)
+    lines.append("")
+    lines.append("Switch: `/model <number|name>` · `--global` applies it to every "
+                 "conversation · `/model default` reverts.")
+    lines.append("Add: `/model add <link>` (a box on your network, e.g. "
+                 "`http://<box>:8081/v1`) · `/model add cloud <link> --key-env MY_KEY` "
+                 "(a hosted provider; its value is set on the host with "
+                 "`tinycmdr token set MY_KEY`) · `--primary` makes it the endpoint "
+                 "that answers.")
+    return "\n".join(lines)
 
 
 def model_command(session_key, arg):
@@ -28429,10 +28445,12 @@ def model_command(session_key, arg):
     # console ran the same words. The wizard is still a shell conversation - it asks
     # for the key with the echo off - and refuses by name from here.
     _sub = tokens[0].lower() if tokens else ""
-    if _sub == "add" and not [t for t in tokens[1:] if not t.startswith("-")]:
-        # No link yet: the guide, not the shell's flag wall. A link routes to the verb
-        # below - this is the one message that answers "what do I type?".
-        return _CHAT_ADD_GUIDE
+    if _sub == "add":
+        _words = [t for t in tokens[1:] if not t.startswith("-")]
+        if not [t for t in _words if t.lower() not in _ENDPOINT_KIND_WORDS]:
+            # No link yet (a kind word alone is still no link): the usage block, not
+            # the shell's flag wall and not the directions - those are `/model help`.
+            return _CHAT_ADD_USAGE
     if _sub in ("add", "remove", "rm", "endpoint", "url", "host", "setup", "wizard",
                 "new", "change", "failover", "cloud-failover", "use", "set"):
         return verb_from_chat("model " + arg)
@@ -28445,17 +28463,15 @@ def model_command(session_key, arg):
     cat = model_catalog(force=name.lower() in ("list", "ls", "models"))
     known = ", ".join(f"`{e['name']}`" for e in cat)
     if not name:
-        lines = [f"Model for {scope}: `{current}` → `{model_route_for(current)}`", ""]
-        lines += _model_menu_rows(cat, current)
-        lines.append("")
-        lines.append("Reply with a number · `/model <name>` to switch · `--global` applies "
-                     "it everywhere · `/model default` reverts.")
-        return "\n".join(lines)
+        # The status line and ONE pointer: a user who knows the words gets their
+        # answer, the directions wait behind `/model help` (his rule, 2026-10-16).
+        return (f"Model for {scope}: `{current}` → `{model_route_for(current)}`\n"
+                f"`/model help` for the options.")
+    if name.lower() in ("help", "?", "-h", "--help"):
+        return _model_help_text(cat, current)
     if name.lower() in ("list", "ls", "models"):
-        lines = ["Models this bot can run:"] + _model_menu_rows(cat, current)
-        lines.append("`/tinycmdr model <number>` switches · `/tinycmdr model default` "
-                     "reverts · only off-box endpoints change where a call goes — "
-                     "the local server serves whatever is loaded.")
+        lines = ["Models this bot can run:"] + _model_menu_rows(cat, current, add_row=False)
+        lines.append("`/model <number>` switches · `/model help` for the options.")
         return "\n".join(lines)
     if name.lower() in ("default", "reset", "off"):
         if is_global:
@@ -28475,10 +28491,10 @@ def model_command(session_key, arg):
         if 1 <= n <= len(cat):
             name = cat[n - 1]["name"]
         elif n == len(cat) + 1:
-            return _CHAT_ADD_GUIDE
+            return _model_help_text(cat, current)
         else:
             return (f"⚠️ Nothing switched: there is no model number `{name}` — "
-                    f"`/tinycmdr model list` numbers them 1–{len(cat) + 1}.")
+                    f"`/model help` numbers them 1–{len(cat) + 1}.")
     e = model_entry(name)
     if not e:
         return (f"⚠️ Nothing switched: no reachable endpoint advertises "
@@ -30791,8 +30807,8 @@ _HELP_ROWS = (
      "hold new tasks until resumed", 1, 0),
     ("While I'm working", "plan", "plan [on|off|apply]",
      "read-only planning: look, don't touch, then approve", 1, 1),
-    ("Change how I work", "model", "model [name|list|add] [--global]",
-     "show, list or switch the model; `add` adds an endpoint", 1, 1),
+    ("Change how I work", "model", "model [name|list|help] [--global]",
+     "show, list or switch the model; `help` lays out adding an endpoint", 1, 1),
     ("Change how I work", "reasoning", "reasoning [level]",
      "how hard it thinks, for this conversation", 1, 1),
     ("Change how I work", "config", "config",
@@ -44252,9 +44268,10 @@ MODEL_ADD_HELP = """tinycmdr model add [<url>] [--model NAME] [--alias A] [--key
   link, proves the key with a bearer GET /v1/models, and offers the models that come
   back to choose from.
 
-  With a <url> it takes the endpoint from the command line and checks the model id
-  against what the endpoint advertises (one /v1/models GET, metadata only). --force
-  writes it when the endpoint is not reachable yet.
+  With a <url> it takes the endpoint from the command line (`local` or `cloud` in
+  front of it is fine - the link decides) and checks the model id against what the
+  endpoint advertises (one /v1/models GET, metadata only). --force writes it when the
+  endpoint is not reachable yet.
 
   A cloud endpoint added here goes into llm.fallbacks and its key into .env under a
   generated TINYCMDR_ENDPOINT<n>_API_KEY the entry points at with api_key_env; a
@@ -46035,6 +46052,13 @@ def _verb_model_add_interactive(opts):
 
 
 def _verb_model_add(opts, positional):
+    # `add cloud <link>`: the wizard's own first question, answered inline. The word is
+    # dropped - the link's own address decides local/cloud - and a kind word with no
+    # link is the usage path, not a bad URL.
+    if positional[1:] and positional[0].strip().lower() in _ENDPOINT_KIND_WORDS:
+        positional = positional[1:]
+    if len(positional) == 1 and positional[0].strip().lower() in _ENDPOINT_KIND_WORDS:
+        positional = []
     if not positional:
         # No URL: ask, the same way `setup` does. A pipe or a script still gets the usage
         # text, because a prompt there would read EOF and look like a hang. The guard
@@ -46088,12 +46112,22 @@ def _verb_model_add(opts, positional):
                   file=sys.stderr)
             return 2
     want = str(opts.get("model") or "").strip()
-    ids = _probe_model_ids(url, _endpoint_key(key_env))
+    res = probe_endpoint(url, _endpoint_key(key_env))
+    ids = list(res["ids"]) if res["ok"] else None
     if ids is None:
+        if res["status"] in (401, 403):
+            print("%s answered HTTP %d - it needs its key: name the .env variable with "
+                  "--key-env <NAME> and set its value on the host (`tinycmdr token set "
+                  "<NAME>`), or write it unverified: --force"
+                  % (url, res["status"]), file=sys.stderr)
+        elif res["status"] == 404:
+            print("%s has no model list at that path (HTTP 404) - most servers answer "
+                  "under /v1 (e.g. https://api.deepseek.com/v1); fix the url, or write "
+                  "it unverified: --force" % url, file=sys.stderr)
+        else:
+            print("the endpoint at %s did not answer its model list (%s).\nFix the url, "
+                  "or add it unverified: --force" % (url, res["error"]), file=sys.stderr)
         if not opts.get("force"):
-            print("the endpoint at %s did not answer its model list, so the model id "
-                  "cannot be checked.\nFix the url, or add it unverified: --force"
-                  % url, file=sys.stderr)
             return 1
         print("note: %s did not answer - writing it unverified" % url)
     else:
