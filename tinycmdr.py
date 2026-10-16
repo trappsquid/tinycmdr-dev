@@ -214,6 +214,9 @@ for _noisy in ("httpx", "httpcore", "urllib3", "mattermostautodriver"):
 # that IS a regular file over the cap is truncated in place - launchd opens the file
 # O_APPEND, so later writes land at the new end and the file keeps the CURRENT run's
 # history instead of every run's. A tty, a pipe or a socket is left exactly as it is.
+# Windows never reaches the guard: st_mode grades nothing there, and its service bounds
+# this sink elsewhere (the supervisor merges stdout+stderr into logs/bot-stdout.log and
+# rotates it at each launch) - this is the launchd-side mechanism.
 _STDERR_CAP_BYTES = 8 * 1024 * 1024
 
 

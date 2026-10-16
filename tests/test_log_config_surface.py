@@ -194,9 +194,18 @@ so an except around super().emit() would be dead code (A-2026-10-08-141).
                 ran = subprocess.run([sys.executable, str(STAGE / "tinycmdr.py"), "version"],
                                      cwd=str(STAGE), env=env, stdin=subprocess.DEVNULL,
                                      stdout=subprocess.DEVNULL, stderr=fh, timeout=120)
-            check("a stderr FILE over the cap is truncated at start, not left to grow",
-                  ran.returncode == 0 and fat.stat().st_size < cap,
-                  (ran.returncode, fat.stat().st_size))
+            if os.name == "nt":
+                # Windows never reaches the ftruncate: st_mode grades nothing there (the
+                # guard reads S_ISREG), and its service bounds this sink elsewhere - the
+                # supervisor merges stdout+stderr into logs/bot-stdout.log and rotates it
+                # at every launch. What must hold here is that a fat stderr FILE does not
+                # hurt the child; the size assertion is the launchd-side mechanism's.
+                check("with a fat stderr FILE the child still exits 0 (the cap is POSIX-only)",
+                      ran.returncode == 0, (ran.returncode, fat.stat().st_size))
+            else:
+                check("a stderr FILE over the cap is truncated at start, not left to grow",
+                      ran.returncode == 0 and fat.stat().st_size < cap,
+                      (ran.returncode, fat.stat().st_size))
 
             if FAILS:
                 print("\n%d FAILED: %s" % (len(FAILS), "; ".join(FAILS)))
