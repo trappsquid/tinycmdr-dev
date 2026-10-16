@@ -19,10 +19,10 @@
     {
       "id": "service-stderr-bound",
       "title": "the service's stderr file can no longer grow without a bound",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "f6e6ccf",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "launchd owns the service's stderr file and nothing rotated it: measured 2026-10-15, the live install's logs/launchd.err.log held 32 MB appended since 2026-09-26, mostly one HTTP-request INFO line a minute from the Mattermost lane's polling - the same lines also cycling through the rotating log. The HTTP libraries are muted at WARNING, and at start a stderr that IS a regular file over 8 MB is truncated in place (ftruncate on fd 2; launchd appends, so the file keeps the current run's history). Windows is bounded elsewhere - the supervisor rotates bot-stdout.log at each launch - and its st_mode grade means nothing, so the cap is the launchd-side mechanism.",
       "gate": "tests/test_log_config_surface.py grades the four mutes and the truncation (POSIX) or the child's exit over a fat stderr file (Windows); the five new checks fail on the pre-fix build"
@@ -30,10 +30,10 @@
     {
       "id": "release-flow-guards",
       "title": "the release body is leak-scanned, and a cut refuses a stale record",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "3328b9b",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "leak-gate.py gains --file and both release scripts scan the notes file before anything is built - the release body is published verbatim but lives outside the tree, so no mode graded it; release.sh refuses a cut unless the changelog's newest release section is this version, and finish-release.sh resolves the tree's venv like the other verbs and re-pushes the surface's tag a died cut leaves behind.",
       "gate": "tests/test_leak_gate.py grades --file end to end (a clean note passes, a planted string is refused, an unreadable path is a hit, no path is refused); the changelog refusal was run against the current tree and a bodged version"
@@ -41,10 +41,10 @@
     {
       "id": "release-record-guards",
       "title": "the record's small slips are graded, not re-learned",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "ddf1df8",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "tests/test_contracts.py grades that CHANGELOG.md reads newest-first (the 1.1.19 section had folded in below 1.1.18, and stayed that way through a release), the pre-push hook refuses a pushed range carrying a commit subject over 50 chars (two shipped at 55 and 58 through direct commits batch.sh never saw), and release.sh resolves its interpreter with the tree's venv first - the packaged build's payload-floor probe ran under a PATH python without requests and printed PROBE FAILED in two cuts.",
       "gate": "tests/test_contracts.py; the hook itself over a crafted range: the 58-char subject refused, a clean range and a manual run pass"
