@@ -239,7 +239,7 @@ not repo content. `release.sh` then runs, in this order (each step exists becaus
    only then push the tag and `main` together - the pre-push hook grades the WORKING TREE, so an
    item still saying `unreleased` while a local tag carries its commit blocks the tag's own push;
 6. push the surface's tag, then **wait for the install surface's `tests` on the commit pushed in
-   step 3** - the workflow a stranger sees, which nothing used to consult. That run has been going
+   step 3** - the publicly visible one, which nothing used to consult. That run has been going
    since step 3, so this wait is normally already over;
 7. `gh release create --verify-tag` on the install surface, upload the stable aliases, read the
    assets back, check the README names against the published release, fetch tags;

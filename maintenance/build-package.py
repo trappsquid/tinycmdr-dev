@@ -280,7 +280,7 @@ FORBIDDEN_DIRS = {"sessions", "snapshots", "tools", "tmp", "__pycache__",
                   # Run output, not source: the graded-eval runner writes a jsonl per run
                   # plus a per-task artifact folder, and shipping those put ~400 KB of this
                   # box's own scoring runs inside the public archive (173 of its 191 entries
-                  # were test output). The leak gate passed them; a stranger-facing package
+                  # were test output). The leak gate passed them; a public package
                   # still has no business carrying them.
                   "eval-runs",
                   "dist", ".archive"}
@@ -333,8 +333,8 @@ APP_FILES = ("INSTALL-WINDOWS.cmd", "UNINSTALL-WINDOWS.cmd",
 HOST_SKILLS_SKIP = ("devops/mail-vps-admin", "web/example-blog", "devops/the file share",
                     "web/post-humanizer")
 
-# `--public` produces the package that can be handed to strangers (a blog
-# download): no fleet defaults, no keys, no private runbooks, and a scan that
+# `--public` produces the package for a public download (a blog
+# post): no fleet defaults, no keys, no private runbooks, and a scan that
 # FAILS if a single personal string survives.
 
 # The public package ships NO skills. The bot is the product; the skills are

@@ -296,8 +296,8 @@ git -C "$PRODUCT_DIR" push --force origin "$TAG"
 
 say "create the release on the install surface, at the tag that tree carries"
 # ---- the surface's own CI has to be green before a release is attached to it ----------
-# This is the half that was missing: the wait above grades THIS tree, and the one a stranger
-# sees is the install surface's `tests` workflow, which nobody consulted - so v1.0.88 was
+# This is the half that was missing: the wait above grades THIS tree, and the publicly
+# visible one is the install surface's `tests` workflow, which nobody consulted - so v1.0.88 was
 # published while that surface's Windows job was red (measured 2026-10-08, the operator's
 # question). Refuse a red run on the commit just pushed, with one deliberate override.
 if [ "${TINYCMDR_SKIP_PRODUCT_CI:-0}" = "1" ]; then

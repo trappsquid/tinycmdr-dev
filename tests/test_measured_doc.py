@@ -246,7 +246,7 @@ def main():
               n >= 1 and fixed == prose_now, (label, n))
     check("the prose restates at least one measured number to doctor", present > 0, present)
 
-    # A per-host number in a document a stranger reads is a claim about the author's box:
+    # A per-host number in a published document is a claim about the author's box:
     # skills/ is gitignored, this box holds two, and the doc claimed 43 in three places.
     per_host = re.findall(r"\d+ (?:prose )?skills", prose)
     check("the prose quotes no per-host skill count", not per_host, per_host)

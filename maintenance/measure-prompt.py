@@ -6,7 +6,7 @@ Two trees are worth measuring, and this prints both:
     live    this install: ./tinycmdr.py with ./config.json (skills, drop-in tools,
             notes and all - what a request from this box actually pays)
     clean   a staged unpack: tinycmdr.py with tests/fixture-config.json, no skills and
-            no drop-in tools (what a stranger's first request pays)
+            no drop-in tools (what a fresh unpack's first request pays)
 
     python maintenance/measure-prompt.py                 # both, with the live endpoint
     python maintenance/measure-prompt.py --tokenize -    # no endpoint: est_tokens only

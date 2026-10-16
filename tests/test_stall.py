@@ -40,7 +40,7 @@ SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 # --- hermetic staging -------------------------------------------------------
 # config.json is written by the installer, so it is NOT in the shipped package,
 # and the module refuses to start without one. These suites must run against a
-# fresh unpack (CI, a friend's box, a stranger's download), so import a
+# fresh unpack (CI, a friend's box, a download from the release page), so import a
 # byte-identical copy from a temp dir that HAS a config.json beside it.
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-stall"
 STAGE.mkdir(parents=True, exist_ok=True)

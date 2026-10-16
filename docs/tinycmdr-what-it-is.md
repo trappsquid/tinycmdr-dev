@@ -278,7 +278,7 @@ python maintenance/measure-prompt.py --tokenize ""    # no endpoint: est_tokens 
             files found there, i.e. what a request from this box pays
     clean   a staged unpack: tinycmdr.py with tests/fixture-config.json, measured from its
             own staging directory - no skills, no drop-in tools, no context files, i.e.
-            what a stranger's first request pays
+            what a fresh unpack's first request pays
 
 Measured 2026-10-05 with est_tokens (content-aware, the tree's own), from the same
 expression the bot prints at startup
