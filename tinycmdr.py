@@ -28392,15 +28392,6 @@ _CHAT_ADD_ROW = "add or change the endpoint"
 # inline. The link's address decides which it is, so the word is never load-bearing.
 _ENDPOINT_KIND_WORDS = ("local", "cloud", "lan", "hosted", "remote", "online", "provider")
 
-# Directions live behind `/model help`: a user who knows the words must get a switch or
-# an add, not a wall of text (his rule, 2026-10-16). These are the only two texts a
-# terse door answers with when its argument is missing.
-_CHAT_ADD_USAGE = (
-    "usage: `/model add <link>` (e.g. `/model add http://<box>:8081/v1`)\n"
-    "   or: `/model add cloud <link> --key-env MY_KEY` for a hosted provider\n"
-    "`/model help` explains the rest.")
-
-
 def _model_menu_rows(cat, current, add_row=True):
     """The numbered rows: the catalog with the model in use marked, and - for help -
     the endpoint door as the last row."""
@@ -28428,6 +28419,123 @@ def _model_help_text(cat, current):
     return "\n".join(lines)
 
 
+# The in-chat model wizard: `/model add` with no link asks its questions IN the chat
+# instead of answering one usage block (his call, 2026-10-16). One row per conversation,
+# dropped when it finishes, is cancelled, or ages out - a question left open must never
+# swallow a message sent later. The KEY question stays a shell conversation: its value
+# is never typed into a chat.
+_MODEL_WIZARD = {}
+_MODEL_WIZARD_LOCK = threading.Lock()
+_MODEL_WIZARD_TTL = 600.0        # seconds a row may wait between answers
+_MODEL_WIZARD_TRIES = 2          # wrong answers per step: one more ask, then the end
+_MODEL_WIZARD_CANCEL = ("cancel", "stop", "never mind", "nevermind", "quit")
+
+
+def _model_wizard_link_ask(kind):
+    if kind in ("cloud", "hosted", "online", "provider", "remote"):
+        return ("Send the provider's link, e.g. `https://api.deepseek.com/v1` — its key "
+                "is set on the host (`tinycmdr token set NAME`), never here "
+                "(`cancel` stops).")
+    return "Send the link, e.g. `http://<box>:8081/v1` (`cancel` stops)."
+
+
+def _model_wizard_row(session_key):
+    """The live wizard row for this conversation, or None (an aged row is dropped)."""
+    key = str(session_key or "")
+    now = time.time()
+    with _MODEL_WIZARD_LOCK:
+        row = _MODEL_WIZARD.get(key)
+        if row is None:
+            return None
+        if now - float(row.get("touched") or 0.0) > _MODEL_WIZARD_TTL:
+            _MODEL_WIZARD.pop(key, None)
+            return None
+        row["touched"] = now
+        return row
+
+
+def _model_wizard_end(session_key):
+    with _MODEL_WIZARD_LOCK:
+        _MODEL_WIZARD.pop(str(session_key or ""), None)
+
+
+def _model_wizard_start(session_key, kind=""):
+    """Bare `/model add` in chat: ask the shell wizard's questions here, one per message.
+
+    A kind word already typed (`/model add cloud`, the first question answered inline)
+    starts the interview at the link."""
+    with _MODEL_WIZARD_LOCK:
+        _MODEL_WIZARD[str(session_key or "")] = {
+            "step": "link" if kind else "kind", "kind": kind, "tries": 0,
+            "url": "", "ids": [], "touched": time.time()}
+    if kind:
+        return _model_wizard_link_ask(kind)
+    return ("Add a model endpoint — on your network, or hosted? Reply `local` or "
+            "`cloud` (`cancel` stops).")
+
+
+def _model_wizard_wrong(row, session_key, said, expect):
+    """A step's wrong answer is asked again once; the next one ends the add, loudly."""
+    row["tries"] = int(row.get("tries") or 0) + 1
+    if row["tries"] >= _MODEL_WIZARD_TRIES:
+        _model_wizard_end(session_key)
+        return ("Ending the endpoint add — `%s` is not %s. `/model add` starts it again."
+                % (said[:60], expect))
+    return "`%s` is not %s — try again, or `cancel`." % (said[:60], expect)
+
+
+def _model_wizard_reply(session_key, text):
+    """Feed one plain chat message to the pending model wizard.
+
+    Returns what to post when a wizard is waiting in this conversation (the message IS
+    its answer; nothing else runs), or None when there is none - the lane then handles
+    the message as usual. Each lane's own reader calls this, the way the ask_user
+    answer is claimed, so an answer lands even while a run owns the chat.
+    """
+    row = _model_wizard_row(session_key)
+    if row is None:
+        return None
+    said = " ".join(str(text or "").split())
+    low = said.lower()
+    if low in _MODEL_WIZARD_CANCEL:
+        _model_wizard_end(session_key)
+        return "Cancelled the endpoint add. `/model add` starts it again."
+    step = row.get("step")
+    if step == "kind":
+        if low in _ENDPOINT_KIND_WORDS:
+            row["kind"], row["step"], row["tries"] = low, "link", 0
+            return _model_wizard_link_ask(low)
+        return _model_wizard_wrong(row, session_key, said, "`local` or `cloud`")
+    if step == "link":
+        if not low.startswith(("http://", "https://")):
+            return _model_wizard_wrong(row, session_key, said,
+                                       "a link starting `http://` or `https://`")
+        url = said.rstrip("/")
+        res = probe_endpoint(url, _endpoint_key(""))
+        ids = [str(i) for i in res["ids"]] if res["ok"] else []
+        if len(ids) > 1:
+            row["url"], row["ids"], row["step"], row["tries"] = url, ids[:12], "pick", 0
+            return ("`%s` serves several models:\n%s\nReply the number (`cancel` stops)."
+                    % (url, "\n".join("  %d) %s" % (i, x)
+                                    for i, x in enumerate(ids[:12], 1))))
+        out = verb_from_chat("model add %s" % url)
+        _model_wizard_end(session_key)
+        return out
+    if step == "pick":
+        url, ids = str(row.get("url") or ""), list(row.get("ids") or [])
+        want = (ids[int(said) - 1]
+                if said.isdigit() and 1 <= int(said) <= len(ids) else "")
+        if not want and any(said.lower() == str(i).lower() for i in ids):
+            want = said
+        if not want:
+            return _model_wizard_wrong(row, session_key, said, "a number from the list")
+        out = verb_from_chat("model add %s --model %s" % (url, want))
+        _model_wizard_end(session_key)
+        return out
+    _model_wizard_end(session_key)
+    return None
+
+
 def model_command(session_key, arg):
     """`/tinycmdr model` for every surface.
 
@@ -28442,15 +28550,19 @@ def model_command(session_key, arg):
     # model add` (one word per thing, every surface). This door owns the word `model`
     # in every lane, so it used to answer them with "Nothing switched: no reachable
     # endpoint advertises `add <url>`" (measured 2026-10-16) while the shell and the
-    # console ran the same words. The wizard is still a shell conversation - it asks
-    # for the key with the echo off - and refuses by name from here.
+    # console ran the same words. The KEY question is still a shell conversation -
+    # `model setup` asks it with the echo off - and refuses by name from here.
     _sub = tokens[0].lower() if tokens else ""
     if _sub == "add":
         _words = [t for t in tokens[1:] if not t.startswith("-")]
         if not [t for t in _words if t.lower() not in _ENDPOINT_KIND_WORDS]:
-            # No link yet (a kind word alone is still no link): the usage block, not
-            # the shell's flag wall and not the directions - those are `/model help`.
-            return _CHAT_ADD_USAGE
+            # No link yet: the in-chat wizard asks its questions here, one message each
+            # (his call, 2026-10-16) - a kind word already typed starts at the link.
+            _kind = [t for t in _words if t.lower() in _ENDPOINT_KIND_WORDS]
+            return _model_wizard_start(session_key, _kind[0].lower() if _kind else "")
+    # Any other word means the wizard was abandoned - a question it never answers must
+    # not linger to swallow a message meant for the model.
+    _model_wizard_end(session_key)
     if _sub in ("add", "remove", "rm", "endpoint", "url", "host", "setup", "wizard",
                 "new", "change", "failover", "cloud-failover", "use", "set"):
         return verb_from_chat("model " + arg)
@@ -33365,6 +33477,12 @@ def _web_command(text, key="web"):
     handled locally, or ('task', text) to hand to the agent."""
     text = cmdr_strip(text)          # `/tinycmdr <cmd>`: the commands, namespaced
     low = text.strip().lower()
+    if not low.startswith("/"):
+        # A pending in-chat model wizard takes a plain message as its answer, ahead of
+        # the model - the question was just asked in this same conversation.
+        _wiz = _model_wizard_reply(key, text)
+        if _wiz is not None:
+            return ("reply", _wiz)
     if low in ("/new", "/reset"):
         AGENT.reset(key)
         return ("reply", "🔄 Session cleared. Fresh context.")
@@ -36728,6 +36846,15 @@ class MattermostDispatcher:
                             >= float(pend.get("opened") or 0))
             if take_ask and self.reply_ask(ask_key, text, sender):
                 return
+            # ...and a pending in-chat model wizard takes the next plain message as its
+            # answer, on the listener thread for the same reason the ask is: a run
+            # owning the channel steers plain messages into itself, which would eat it.
+            # A run parked on its own question here wins (pend_live).
+            if not pend_live:
+                _wiz = _model_wizard_reply("mm-%s" % channel_id, text)
+                if _wiz is not None:
+                    self._post(channel_id, None, _wiz)
+                    return
         if low == "/stop":
             # The listener thread, so a stop is read even while a wedged run owns
             # this channel's worker. See _stop_channel for why this is a helper.
@@ -40212,6 +40339,18 @@ class TelegramPoller:
         if text and not text.startswith("/") and self.claim_scheduler_ask(chat_id, text):
 
             return True
+
+        # ...and a pending in-chat model wizard takes the next plain message as its
+        # answer - the same claim the two questions above make.
+        if text and not text.startswith("/"):
+
+            _wiz = _model_wizard_reply(tg_session_key(chat_id), text)
+
+            if _wiz is not None:
+
+                self._say(chat_id, _wiz)
+
+                return True
 
         if self.paused is not None and not text.startswith("/pause"):
 

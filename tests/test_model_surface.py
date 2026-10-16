@@ -499,14 +499,14 @@ is offered now, the configured one first and marked current.
 
 
     def serve(key="sk-good", ids=("cloud-a", "cloud-b"), status=200):
-        """A provider-shaped /v1/models: bearer required, 401 otherwise."""
+        """A provider-shaped /v1/models: bearer required when a key is given."""
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 if not self.path.rstrip("/").endswith("/models"):
                     self.send_response(404)
                     self.end_headers()
                     return
-                if self.headers.get("Authorization") != "Bearer " + key:
+                if key and self.headers.get("Authorization") != "Bearer " + key:
                     self.send_response(401)
                     self.send_header("Content-Length", "0")
                     self.end_headers()
@@ -778,13 +778,14 @@ is offered now, the configured one first and marked current.
             check("add or change the endpoint" in reply and "/model add <link>" in reply,
                   "the add row's number serves the same help", reply[:300])
             reply = mod7.model_command("mattermost:suite", "add")
-            check("usage:" in reply and "/model help" in reply
+            check("`local` or `cloud`" in reply and "cancel" in reply
                   and "Nothing switched" not in reply,
-                  "a bare `model add` in chat is one usage block, not a flag wall",
+                  "a bare `model add` in chat asks the first question in the chat",
                   reply[:300])
             reply = mod7.model_command("mattermost:suite", "add cloud")
-            check("usage:" in reply and "Nothing switched" not in reply,
-                  "...and a kind word with no link is the same usage", reply[:200])
+            check("Send the provider's link" in reply and "token set" in reply,
+                  "...and a kind word already typed starts at the link question",
+                  reply[:300])
 
             _real_in = sys.stdin
             sys.stdin = FakeTTY("")        # isatty yes, then EOF: the NUL-device shape
@@ -868,6 +869,80 @@ is offered now, the configured one first and marked current.
                   (reply[:300], _cfg7["llm"].get("fallbacks")))
             srv2.shutdown()
             srv2.server_close()
+
+            # ---- the in-chat model wizard: the questions asked in the conversation ------
+            _wkey = "web:wizard"
+            port3, srv3 = serve(key="")        # keyless: the wizard carries no key
+            base3 = "http://127.0.0.1:%d/v1" % port3
+            try:
+                reply = mod7.model_command(_wkey, "add")
+                check("local" in reply and "cloud" in reply and "cancel" in reply,
+                      "the chat add opens with the shell wizard's first question",
+                      reply[:300])
+                reply = mod7._web_command("local", _wkey)
+                check(reply[0] == "reply" and "Send the link" in reply[1]
+                      and "<box>" in reply[1],
+                      "the next plain message IS the answer: it asks the link",
+                      str(reply)[:300])
+                reply = mod7._web_command(base3, _wkey)
+                check(reply[0] == "reply" and "1) cloud-a" in reply[1]
+                      and "Reply the number" in reply[1],
+                      "the link probes the endpoint and asks which advertised model",
+                      str(reply)[:400])
+                reply = mod7._web_command("2", _wkey)
+                _cfg7 = json.loads((work / "chatdoor" / "config.json")
+                                   .read_text(encoding="utf-8"))
+                check(reply[0] == "reply" and "-> cloud-b" in reply[1]
+                      and any(f.get("base_url") == base3 and f.get("model") == "cloud-b"
+                              for f in _cfg7["llm"].get("fallbacks") or []),
+                      "the number adds the endpoint from the chat, model and all",
+                      (str(reply)[:300], _cfg7["llm"].get("fallbacks")))
+                reply = mod7._web_command("2", _wkey)
+                check(reply[0] == "task",
+                      "...and the wizard is spent: the next message is not its answer",
+                      str(reply)[:160])
+            finally:
+                srv3.shutdown()
+                srv3.server_close()
+            reply = mod7.model_command(_wkey, "add")
+            reply = mod7._web_command("cloud", _wkey)
+            check(reply[0] == "reply" and "https://api.deepseek.com/v1" in reply[1]
+                  and "token set" in reply[1],
+                  "`cloud` starts at the provider-shaped link question", str(reply)[:300])
+            reply = mod7._web_command("cancel", _wkey)
+            check(reply[0] == "reply" and "Cancelled" in reply[1]
+                  and mod7._web_command("local", _wkey)[0] == "task",
+                  "`cancel` ends the wizard and the next message is a task again",
+                  str(reply)[:200])
+            mod7.model_command(_wkey, "add")
+            _live = mod7._web_command("local", _wkey)
+            _rows = getattr(mod7, "_MODEL_WIZARD", None)
+            if _rows and _wkey in _rows:
+                _rows[_wkey]["touched"] -= float(
+                    getattr(mod7, "_MODEL_WIZARD_TTL", 600.0)) + 1.0
+            _aged = mod7._web_command("local", _wkey)
+            check(_live[0] == "reply" and _aged[0] == "task",
+                  "an answered row is bounded: aged past its TTL it stops claiming",
+                  (_live[0], _aged[0]))
+            mod7.model_command(_wkey, "add")
+            _one = mod7._web_command("maybe", _wkey)
+            _two = mod7._web_command("maybe", _wkey)
+            check(_one[0] == "reply" and "try again" in _one[1]
+                  and _two[0] == "reply" and "Ending the endpoint add" in _two[1]
+                  and mod7._web_command("cloud", _wkey)[0] == "task",
+                  "a step's wrong answer is asked again once, then the add ends loudly",
+                  (str(_one)[:140], str(_two)[:200]))
+            mod7.model_command(_wkey, "add local")
+            reply = mod7._web_command("http://127.0.0.1:9/v9", _wkey)
+            check(reply[0] == "reply" and "did not answer" in reply[1]
+                  and mod7._web_command("http://127.0.0.1:9/v9", _wkey)[0] == "task",
+                  "a link nothing answers keeps the verb's own words and ends the add",
+                  str(reply)[:300])
+            mod7.model_command(_wkey, "add")
+            mod7.model_command(_wkey, "list")
+            check(mod7._web_command("cloud", _wkey)[0] == "task",
+                  "any other `/model` word abandons the wizard instead of leaving it",
+                  str(mod7._web_command("cloud", _wkey))[:160])
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

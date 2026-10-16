@@ -302,6 +302,24 @@ and no durable state is touched.
             fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
 
 
+    def test_the_model_wizard_claims_its_answer_on_the_listener():
+        """The in-chat model wizard rides the same listener thread: a run owning the
+        channel steers plain messages into itself, which would eat an answer to a
+        question the bot just asked in that channel."""
+        d = dispatcher()
+        key = "mm-chan-wiz"
+        fb.model_command(key, "add")          # the door files the interview
+        d.enqueue(_FakeMsg("chan-wiz", "local", mid="m-wiz-1"), "local")
+        check("the wizard's answer is claimed, not queued or steered",
+              any("Send the link" in t for _, t in d.posted)
+              and not (d.queues.get("chan-wiz") and not d.queues["chan-wiz"].empty()),
+              ([t for _, t in d.posted][-2:], list(d.queues)))
+        d.enqueue(_FakeMsg("chan-wiz", "cancel", mid="m-wiz-2"), "cancel")
+        check("...and `cancel` ends it from the channel",
+              any("Cancelled the endpoint add" in t for _, t in d.posted),
+              [t for _, t in d.posted][-2:])
+
+
     def test_a_scheduled_jobs_question_comes_back_from_its_channel():
         """A job's ask_user posts into its channel and promises "Answer here" - but the row
     was filed only in SCHEDULER.pending_asks, while the listener that turns a channel

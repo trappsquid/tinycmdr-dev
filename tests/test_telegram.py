@@ -1171,6 +1171,24 @@ check("A-160: /help@MyBot is the help command it looks like",
       [m["text"][:20] for m in _pc.messages])
 
 
+# The in-chat model wizard: `/model add` asks in the chat, and the next plain message
+# is its ANSWER - claimed by the lane, never queued as a task.
+_wc = FakeClient()
+_wp = fb.TelegramPoller(_wc, {"7"})
+_wp_fed = []
+_wp.submit = lambda cid, text, mid, media=None: _wp_fed.append(text)
+_wp._verb(64, "/model add")
+_wp.handle({"update_id": 31, "message": {
+    "message_id": 31, "text": "local", "chat": {"id": 64, "type": "private"},
+    "from": {"id": 7, "username": "u"}}})
+check("the model wizard's answer is consumed in the lane, not queued as a task",
+      _wp_fed == [] and any("Send the link" in m["text"] for m in _wc.messages),
+      ([m["text"][:60] for m in _wc.messages], _wp_fed))
+_END_WIZ = getattr(fb, "_model_wizard_end", None)   # absent on a pre-fix build
+if _END_WIZ is not None:
+    _END_WIZ(fb.tg_session_key(64))
+
+
 # A-161: the "no text here" notice is once per chat, not once per photo.
 _pn = FakeClient()
 _pn2 = fb.TelegramPoller(_pn, {"7"})
