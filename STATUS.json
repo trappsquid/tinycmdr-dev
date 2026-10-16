@@ -17,6 +17,28 @@
   ],
   "items": [
     {
+      "id": "chat-model-terse-door",
+      "title": "the chat model door speaks terse, the directions behind /model help",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "84b5afc",
+        "expect": "untagged"
+      },
+      "detail": "In chat a bare `/model` showed no options and a bare `add` answered the shell's flag wall, so a user could not tell what to type (measured 2026-10-16). The door now answers terse: bare `/model` is the status line and ONE pointer to `/model help`, which holds the numbered menu (the endpoint door as its last row) and the switch and add words; `/model add` with no link answers one usage block; `add cloud <link>` is accepted with the kind word dropped, the link deciding; a 401 names the key step (`--key-env NAME`, its value set on the host) and a 404 points at `/v1`. The same words answer in Mattermost, Telegram and the page.",
+      "gate": "tests/test_model_surface.py: the options step ran five checks RED on the pre-fix build and the terse doors seven (TINYCMDR_SRC), green on the batch"
+    },
+    {
+      "id": "job-table-read-lock",
+      "title": "the job table's reads take its lock, and the save retries the replace",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "c326654",
+        "expect": "untagged"
+      },
+      "detail": "Windows refuses os.replace onto a file another handle holds open, and the table's readers were lock-free by design, which POSIX makes harmless and Windows makes a save that dies (measured 2026-10-16: the Windows tier lost one concurrent start of twelve, once in-process and once across six processes). Reads now take the same lock the read-modify-writes do, and the replace is retried for the readers this tool does not own (the harness's settled-jobs block reads the table without a lock).",
+      "gate": "tests/test_process_surface.py grades both: red on the pre-fix tool (PermissionError on the replace; a read that returned in 0.00s), green on the batch"
+    },
+    {
       "id": "chat-model-door",
       "title": "the chat lanes run the model endpoint verbs",
       "state": "shipped",

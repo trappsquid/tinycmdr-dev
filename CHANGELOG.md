@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.22] - 2026-10-16
+
+### Changed
+- **Chat:** the model door answers terse — a bare `/model` is the status line and one pointer to `/model help`, which holds the numbered menu and the switch and add words, `/model add` with no link answers one usage block, `add cloud <link>` is accepted with the kind word dropped, and a 401 names the key step while a 404 points at `/v1` (tests/test_model_surface.py).
+
+### Fixed
+- **Processes:** the job table's reads take the same lock its saves do and its save retries the replace, because Windows refuses a replace onto a file another handle holds open (tests/test_process_surface.py).
+
 ## [1.1.21] - 2026-10-16
 
 ### Added
