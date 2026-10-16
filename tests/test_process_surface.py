@@ -673,11 +673,20 @@ def _suite_test_jobs_race():
     status+output batch gave the operator `ERROR in tool 'process'` for a job that had
     finished cleanly). The same defect `_census_save` fixed for itself; this member
     hammers the save from four threads and grades that none of them lose.
+
+    Its last two checks grade the WINDOWS half of the same file (measured 2026-10-16 on
+    the Windows tier: one start of twelve lost, once in-process and once across six
+    processes): a replace dies when a reader holds the file open there, so the replace
+    is retried, and a read takes the writer's lock instead of racing it.
     """
     import importlib.util
     import json as _json
+    import os
+    import subprocess
+    import sys
     import tempfile as _tempfile
     import threading
+    import time
     from pathlib import Path
 
     PASSES, FAILS = [], []
@@ -693,6 +702,10 @@ def _suite_test_jobs_race():
     spec.loader.exec_module(proc)
     work = Path(_tempfile.mkdtemp(prefix="fbproc-race-"))
     proc.JOBS_FILE = work / "logs" / "process-jobs.json"
+    # The lock file is derived at import, so the redirect must carry it too - otherwise
+    # this member locks the checkout's own logs/ while the checks below stage a child
+    # against the temp copy.
+    proc._JOBS_LOCK_FILE = proc.JOBS_FILE.with_name(proc.JOBS_FILE.name + ".lock")
     errs = []
 
     def hammer(n):
@@ -715,6 +728,79 @@ def _suite_test_jobs_race():
         loaded = {"__error__": str(e)}
     check("and the state file is valid JSON after the storm",
           isinstance(loaded, dict) and "__error__" not in loaded, str(loaded)[:120])
+
+    # ---- the Windows half: a sharing violation is retried, and a read takes the lock --
+    # Windows refuses the replace while any handle holds the destination open (POSIX
+    # swaps the name), and the table's readers were lock-free by design; measured
+    # 2026-10-16 on the Windows tier, one start of twelve died this way in each
+    # direction. The reader's handle is simulated (a real one is POSIX-legal).
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError(13, "simulated sharing violation")
+        return real_replace(src, dst)
+
+    os.replace = flaky_replace
+    try:
+        raised = None
+        try:
+            proc._save({"jretry": {"pid": 1, "command": "x", "log": "l", "in": "s",
+                                   "started": "t"}})
+        except BaseException as e:                            # noqa: BLE001 - graded
+            raised = e
+    finally:
+        os.replace = real_replace
+    if raised is not None:
+        check("a save survives one sharing violation on the replace", False,
+              "%s: %s" % (type(raised).__name__, raised))
+    else:
+        try:
+            back = _json.loads(proc.JOBS_FILE.read_text(encoding="utf-8"))
+        except Exception as e:                                # noqa: BLE001 - graded
+            back = {"__error__": str(e)}
+        check("a save survives one sharing violation on the replace",
+              "jretry" in back and "__error__" not in back, str(back)[:120])
+
+    # ...and a READ takes the writer's lock: held from another process, _load() must
+    # wait for it rather than read into the window a replace would carve up.
+    jobs_path = proc.JOBS_FILE
+    lock_path = jobs_path.with_name(jobs_path.name + ".lock")
+    marker, release = work / "lock-held", work / "lock-release"
+    child = (
+        "import importlib.util, sys, time\n"
+        "from pathlib import Path\n"
+        "spec = importlib.util.spec_from_file_location('proc_lock_child', sys.argv[1])\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "mod.JOBS_FILE = Path(sys.argv[2])\n"
+        "mod._JOBS_LOCK_FILE = Path(sys.argv[3])\n"
+        "with mod._table_lock():\n"
+        "    Path(sys.argv[4]).write_text('held', encoding='utf-8')\n"
+        "    until = time.time() + 20\n"
+        "    while not Path(sys.argv[5]).exists() and time.time() < until:\n"
+        "        time.sleep(0.02)\n")
+    kid = subprocess.Popen(
+        [sys.executable, "-c", child, str(BASE / "tools" / "process.py"),
+         str(jobs_path), str(lock_path), str(marker), str(release)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    deadline = time.time() + 15
+    while not marker.exists() and time.time() < deadline:
+        time.sleep(0.02)
+    held = marker.exists()
+    threading.Timer(0.8, lambda: release.write_text("go", encoding="utf-8")).start()
+    t0 = time.time()
+    proc._load()
+    waited = time.time() - t0
+    try:
+        kid.wait(timeout=15)
+    except Exception:                                         # noqa: BLE001 - graded
+        kid.kill()
+    check("a read waits for the lock another process holds", held and waited >= 0.4,
+          "held=%s waited=%.2fs out=%s"
+          % (held, waited, (kid.stdout.read() if kid.stdout else "")[:120]))
 
     print()
     print("%d passed, %d failed" % (len(PASSES), len(FAILS)))

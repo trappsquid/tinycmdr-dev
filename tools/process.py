@@ -66,13 +66,17 @@ JOBS_FILE = BASE / "logs" / "process-jobs.json"
 _PROCS = {}          # id -> Popen, for jobs THIS session started
 STILL_ACTIVE = 259
 
-# ONE lock around every job-table read-modify-write. The table used to be read and
-# written with no lock at all, so six concurrent starts each read the same copy, each
-# picked `b1`, and six jobs shared one log. A sibling lock
+# ONE lock around every job-table read-modify-write - reads included. The table used to
+# be read and written with no lock at all, so six concurrent starts each read the same
+# copy, each picked `b1`, and six jobs shared one log. A sibling lock
 # file (flock/msvcrt) covers other processes, a re-entrant lock covers the threads a
 # batch's tool calls run on, and a bounded wait means a lock that cannot be taken
-# proceeds anyway - the save is still an atomic replace, so a reader never sees a
-# spliced table.
+# proceeds anyway. Readers take it too: Windows refuses a replace onto a file another
+# handle holds open, so a lock-free read is a save that can die (measured 2026-10-16 -
+# the Windows job lost one start of twelve, once in-process and once across six
+# processes, on exactly the two concurrency checks). `_replace_retry` then covers the
+# readers this tool does not own - the harness reads this table without the lock, and so
+# does the operator.
 _JOBS_LOCK = threading.RLock()
 _JOBS_LOCK_DEPTH = threading.local()
 _JOBS_LOCK_FILE = JOBS_FILE.with_name(JOBS_FILE.name + ".lock")
@@ -414,13 +418,38 @@ def discard_probe(state):
 
 
 def _load():
-    try:
-        return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    """The table, under the same lock the writers take (re-entrant, so a caller already
+    inside a read-modify-write does not re-take the file lock)."""
+    with _table_lock():
+        try:
+            return json.loads(JOBS_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
 
 
 _SAVE_LOCK = threading.Lock()      # one writer at a time; see _save
+
+_REPLACE_WAIT = 0.02
+_REPLACE_TRIES = 50          # ~1s: the handle of a reader that does not lock is short
+
+
+def _replace_retry(tmp, dest):
+    """os.replace, retried over a transient sharing violation.
+
+    Windows refuses the replace while any handle holds the destination open; POSIX just
+    swaps the name. The readers that are NOT ours hold it for microseconds - the
+    harness's settled-jobs block reads this table without a lock, and so does an
+    operator's `cat` - so the window is retried away (measured 2026-10-16: the Windows
+    tier lost one start of twelve to it). Bounded; then the error is the caller's."""
+    deadline = time.time() + _REPLACE_WAIT * _REPLACE_TRIES
+    while True:
+        try:
+            os.replace(tmp, dest)
+            return
+        except PermissionError:
+            if time.time() >= deadline:
+                raise
+            time.sleep(_REPLACE_WAIT)
 
 
 def _save(jobs):
@@ -443,7 +472,7 @@ def _save(jobs):
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(json.dumps(jobs, indent=2))
-            os.replace(tmp, JOBS_FILE)
+            _replace_retry(tmp, JOBS_FILE)
         except BaseException:
             try:
                 os.unlink(tmp)
