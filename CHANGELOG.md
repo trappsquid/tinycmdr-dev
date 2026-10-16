@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.20] - 2026-10-15
+
+### Fixed
+- **Logs:** the service's stderr file gets a bound — a stderr that is a regular file over 8 MB is truncated at start, and the HTTP libraries' per-request INFO chatter is muted (launchd's file had put 32 MB through since 2026-09-26) (tests/test_log_config_surface.py).
+
 ## [1.1.19] - 2026-10-14
 
 ### Changed
