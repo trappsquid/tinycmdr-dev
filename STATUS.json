@@ -19,10 +19,10 @@
     {
       "id": "chat-model-wizard",
       "title": "the chat add asks its questions in the conversation",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "d2236cd",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Bare `/model add` in chat answered one usage block. It now interviews in the conversation - local or cloud, the link, then the number when the endpoint advertises several - one row per conversation, claimed by each lane's own reader (the page, the Mattermost listener, the Telegram poller; on the listener thread, so a run owning the channel does not steer the answer away) and dropped when it finishes, cancels, ages past a 10-minute idle bound, or any other `/model` word arrives. The key value is still never typed into a chat: a cloud link that needs one is answered with the `--key-env` step.",
       "gate": "tests/test_model_surface.py grades the door, the page's claim, the pick, the bound, cancel and the wrong-answer end; tests/test_telegram.py and tests/test_interaction_surface.py grade the two lane claims; all three suites ran RED against the pre-fix build (TINYCMDR_SRC via tc-falsify), green on the batch"
