@@ -200,6 +200,34 @@ logging.basicConfig(
     handlers=[logging.handlers.QueueHandler(_log_queue)],
 )
 
+# The HTTP libraries log one INFO record per request, and the Mattermost lane polls on a
+# timer: measured 2026-10-15 on the live install, that chatter had put 32 MB through the
+# service's stderr file (launchd owns it and nothing rotates it) and thousands of the same
+# lines had cycled through the rotating log. WARNING and up still land; the request
+# chatter does not.
+for _noisy in ("httpx", "httpcore", "urllib3", "mattermostautodriver"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
+# launchd routes this process's stderr into a file and never rotates it, so the bot's own
+# rotating log does not bound that sink (the same 2026-10-15 measurement: the live
+# install's logs/launchd.err.log had been appended to since 2026-09-26). At start, a stderr
+# that IS a regular file over the cap is truncated in place - launchd opens the file
+# O_APPEND, so later writes land at the new end and the file keeps the CURRENT run's
+# history instead of every run's. A tty, a pipe or a socket is left exactly as it is.
+_STDERR_CAP_BYTES = 8 * 1024 * 1024
+
+
+def _cap_service_stderr(max_bytes=_STDERR_CAP_BYTES):
+    try:
+        st = os.fstat(2)
+        if stat.S_ISREG(st.st_mode) and st.st_size > max_bytes:
+            os.ftruncate(2, 0)
+    except OSError:
+        pass
+
+
+_cap_service_stderr()
+
 
 class _NoBlankRecords(logging.Filter):
     """A library logging an empty message gets its name attached instead of nothing.

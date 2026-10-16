@@ -172,6 +172,32 @@ so an except around super().emit() would be dead code (A-2026-10-08-141).
             check("a burst logged just before exit is all in the file (the queue is drained)",
                   proc.returncode == 0 and landed == 200, (proc.returncode, landed))
 
+            # -- the SERVICE's stderr sink: the chatter is muted and the file gets a bound --
+            # Measured 2026-10-15 on the live install: launchd's stderr file (fd 2, nothing
+            # rotates it) had 32 MB appended since 2026-09-26, mostly one `HTTP Request`
+            # INFO line per minute of Mattermost polling - the same lines also cycling
+            # through this rotating log. The libs are muted at WARNING, and a stderr that
+            # IS a regular file over the cap is truncated at start.
+            for lib in ("httpx", "httpcore", "urllib3", "mattermostautodriver"):
+                check("the %s request chatter is muted (INFO off)" % lib,
+                      not logging.getLogger(lib).isEnabledFor(logging.INFO),
+                      logging.getLogger(lib).getEffectiveLevel())
+            fat = work / "fat-stderr.log"
+            # getattr, not the attribute: the pre-fix build has no _STDERR_CAP_BYTES, and
+            # touching it there would CRASH the suite instead of failing the check below
+            # (the falsification convention: pin the literal the old build carries).
+            cap = getattr(fb, "_STDERR_CAP_BYTES", 8 * 1024 * 1024)
+            fat.write_bytes(b"junk\n" * ((cap + 1024 * 1024) // 5))
+            env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
+            env["HOME"] = str(STAGE)
+            with open(fat, "ab") as fh:
+                ran = subprocess.run([sys.executable, str(STAGE / "tinycmdr.py"), "version"],
+                                     cwd=str(STAGE), env=env, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=fh, timeout=120)
+            check("a stderr FILE over the cap is truncated at start, not left to grow",
+                  ran.returncode == 0 and fat.stat().st_size < cap,
+                  (ran.returncode, fat.stat().st_size))
+
             if FAILS:
                 print("\n%d FAILED: %s" % (len(FAILS), "; ".join(FAILS)))
                 return 1
