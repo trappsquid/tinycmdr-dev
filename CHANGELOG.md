@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.23] - 2026-10-16
+
+### Changed
+- **Chat:** the model endpoint can be added by conversation — `/model add` with no link asks local or cloud, the link, then the number when the endpoint serves several, instead of answering one usage block, and the interview row dies after 10 idle minutes, `cancel`, or any other `/model` word (tests/test_model_surface.py, tests/test_telegram.py, tests/test_interaction_surface.py).
+
 ## [1.1.22] - 2026-10-16
 
 ### Changed
