@@ -760,7 +760,24 @@ is offered now, the configured one first and marked current.
 
             # the endpoint-management words reach the verb from a chat lane: `/model add
             # <url>` is `tinycmdr model add` (the door used to answer "Nothing switched:
-            # no reachable endpoint advertises `add <url>`" - measured 2026-10-16)
+            # no reachable endpoint advertises `add <url>`" - measured 2026-10-16), and
+            # the surface shows the options: a numbered menu whose last row opens the
+            # endpoint door, and a guide for a bare `add` instead of the shell's flags
+            _menu = mod7.model_command("mattermost:suite", "")
+            check("add or change the endpoint" in _menu and "in use now" in _menu
+                  and "\n  1. " in _menu,
+                  "bare `/model` is the menu: the models, then the endpoint door",
+                  _menu[:300])
+            _add_row = str(len(mod7.model_catalog()) + 1)
+            reply = mod7.model_command("mattermost:suite", _add_row)
+            check("Adding an endpoint" in reply and "/model add http://" in reply,
+                  "the menu's last number leads to the add guide", reply[:300])
+            reply = mod7.model_command("mattermost:suite", "add")
+            check("/model add http://" in reply and "token set" in reply
+                  and "Nothing switched" not in reply,
+                  "a bare `model add` in chat is the guide, not the shell's flag wall",
+                  reply[:300])
+
             _real_in = sys.stdin
             sys.stdin = FakeTTY("")        # isatty yes, then EOF: the NUL-device shape
             try:
@@ -768,9 +785,10 @@ is offered now, the configured one first and marked current.
                 check("needs a terminal to ask on" in reply and "Nothing switched" not in reply,
                       "`model setup` from chat refuses by name, never as an unknown model",
                       reply[:300])
-                reply = mod7.model_command("mattermost:suite", "add")
+                reply = mod7.verb_from_chat("model add")
                 check("model add [<url>]" in reply and "EOFError" not in reply,
-                      "...and a bare `model add` gets the flags, not a traceback", reply[:300])
+                      "...and the verb's own bare `add` answers usage on the NUL shape",
+                      reply[:300])
             finally:
                 sys.stdin = _real_in
             reply = mod7.model_command("mattermost:suite", "endpoint")
@@ -791,6 +809,33 @@ is offered now, the configured one first and marked current.
                           for f in _cfg7["llm"].get("fallbacks") or []),
                   "`model add <url>` writes a fallback from chat",
                   (reply[:400], _cfg7["llm"].get("fallbacks")))
+
+            # ...and a number picks the model to add, from what the endpoint advertises
+            # (stdin is pinned: with a tty the shell picker would open, which a chat
+            # command never does)
+            (work / "chatdoor" / ".env").write_text(
+                "TINYCMDR_ENDPOINT_TEST_KEY=sk-good\n", encoding="utf-8")
+            _real_in = sys.stdin
+            sys.stdin = io.StringIO("")
+            try:
+                reply = mod7.model_command(
+                    "mattermost:suite",
+                    "add %s --key-env TINYCMDR_ENDPOINT_TEST_KEY" % base)
+                check("1) cloud-a" in reply and "reply `/model add" in reply,
+                      "adding an endpoint that serves several models asks by number",
+                      reply[:400])
+                reply = mod7.model_command(
+                    "mattermost:suite",
+                    "add %s --key-env TINYCMDR_ENDPOINT_TEST_KEY --model 2" % base)
+            finally:
+                sys.stdin = _real_in
+            _cfg7 = json.loads((work / "chatdoor" / "config.json").read_text(encoding="utf-8"))
+            _stub_entry = [f for f in _cfg7["llm"].get("fallbacks") or []
+                           if f.get("base_url") == base]
+            check(_stub_entry and _stub_entry[0].get("model") == "cloud-b"
+                  and "reach it with `/model cloud-b`" in reply,
+                  "...and `--model 2` resolves to the second advertised id from chat",
+                  (reply[:400], _stub_entry))
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

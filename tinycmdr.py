@@ -28386,6 +28386,32 @@ def cmdr_legacy_prefix(text):
 CMDR_MOVED = ("the command prefix is `%s` now, not `%s` - the same commands: `%s status`"
               % (CMDR, LEGACY_CMDR, CMDR))
 
+_CHAT_ADD_ROW = "add or change the endpoint"
+
+_CHAT_ADD_GUIDE = (
+    "Adding an endpoint: reply with the link — one `GET /models` checks it, and the "
+    "models it serves come back here.\n"
+    "```\n"
+    "/model add http://<box>:8081/v1                          a box on your network\n"
+    "/model add https://api.provider.com/v1 --key-env MY_KEY  a hosted provider\n"
+    "/model add <link> --primary          make it the endpoint that answers\n"
+    "/model add <link> --model <number>   when it serves more than one\n"
+    "```\n"
+    "Without `--primary` it is added as a fallback. A hosted key's value is never typed "
+    "here — put it on the host with `tinycmdr token set MY_KEY`.")
+
+
+def _model_menu_rows(cat, current):
+    """The numbered rows every chat surface shows: the catalog, then the add row."""
+    rows = []
+    for i, e in enumerate(cat, 1):
+        mark = ("   ← in use now"
+                if e["name"].lower() == str(current).lower() else "")
+        rows.append("  %d. `%s` — %s%s" % (i, e["name"], _model_place(e), mark))
+    rows.append("  %d. %s" % (len(cat) + 1, _CHAT_ADD_ROW))
+    return rows
+
+
 def model_command(session_key, arg):
     """`/tinycmdr model` for every surface.
 
@@ -28403,6 +28429,10 @@ def model_command(session_key, arg):
     # console ran the same words. The wizard is still a shell conversation - it asks
     # for the key with the echo off - and refuses by name from here.
     _sub = tokens[0].lower() if tokens else ""
+    if _sub == "add" and not [t for t in tokens[1:] if not t.startswith("-")]:
+        # No link yet: the guide, not the shell's flag wall. A link routes to the verb
+        # below - this is the one message that answers "what do I type?".
+        return _CHAT_ADD_GUIDE
     if _sub in ("add", "remove", "rm", "endpoint", "url", "host", "setup", "wizard",
                 "new", "change", "failover", "cloud-failover", "use", "set"):
         return verb_from_chat("model " + arg)
@@ -28415,17 +28445,14 @@ def model_command(session_key, arg):
     cat = model_catalog(force=name.lower() in ("list", "ls", "models"))
     known = ", ".join(f"`{e['name']}`" for e in cat)
     if not name:
-        return (f"Model for {scope}: `{current}` → `{model_route_for(current)}`\n"
-                f"`/tinycmdr model list` for the options · `/tinycmdr model <name>` to switch · "
-                f"`/tinycmdr model <name> --global` for every conversation · "
-                f"`/tinycmdr model add <url>` adds an endpoint · "
-                f"`/model default [--global]` to revert")
+        lines = [f"Model for {scope}: `{current}` → `{model_route_for(current)}`", ""]
+        lines += _model_menu_rows(cat, current)
+        lines.append("")
+        lines.append("Reply with a number · `/model <name>` to switch · `--global` applies "
+                     "it everywhere · `/model default` reverts.")
+        return "\n".join(lines)
     if name.lower() in ("list", "ls", "models"):
-        lines = ["Models this bot can run:"]
-        for i, e in enumerate(cat, 1):
-            mark = ("   ← in use now"
-                    if e["name"].lower() == str(current).lower() else "")
-            lines.append("  %d. `%s` — %s%s" % (i, e["name"], _model_place(e), mark))
+        lines = ["Models this bot can run:"] + _model_menu_rows(cat, current)
         lines.append("`/tinycmdr model <number>` switches · `/tinycmdr model default` "
                      "reverts · only off-box endpoints change where a call goes — "
                      "the local server serves whatever is loaded.")
@@ -28447,9 +28474,11 @@ def model_command(session_key, arg):
         n = int(name)
         if 1 <= n <= len(cat):
             name = cat[n - 1]["name"]
+        elif n == len(cat) + 1:
+            return _CHAT_ADD_GUIDE
         else:
             return (f"⚠️ Nothing switched: there is no model number `{name}` — "
-                    f"`/tinycmdr model list` numbers them 1–{len(cat)}.")
+                    f"`/tinycmdr model list` numbers them 1–{len(cat) + 1}.")
     e = model_entry(name)
     if not e:
         return (f"⚠️ Nothing switched: no reachable endpoint advertises "
@@ -30762,8 +30791,8 @@ _HELP_ROWS = (
      "hold new tasks until resumed", 1, 0),
     ("While I'm working", "plan", "plan [on|off|apply]",
      "read-only planning: look, don't touch, then approve", 1, 1),
-    ("Change how I work", "model", "model [name|list] [--global]",
-     "show, list or switch the model", 1, 1),
+    ("Change how I work", "model", "model [name|list|add] [--global]",
+     "show, list or switch the model; `add` adds an endpoint", 1, 1),
     ("Change how I work", "reasoning", "reasoning [level]",
      "how hard it thinks, for this conversation", 1, 1),
     ("Change how I work", "config", "config",
@@ -45861,7 +45890,8 @@ def _verb_model_endpoint(args):
             CONFIG["llm"]["api_key"] = key
             print("key saved to %s as TINYCMDR_LLM_API_KEY" % ENV_FILE.name)
     if not ids:
-        print("choose one with: tinycmdr model use <name>")
+        print("choose one with: `/model <name>` in chat, `tinycmdr model use <name>` "
+              "on the host")
         return 0
     if pick_terminal_ready():
         state = ModelPick([(i, "advertised by %s" % url, False) for i in ids],
@@ -45872,9 +45902,11 @@ def _verb_model_endpoint(args):
         if picked:
             print()
             return _switch_global_model(picked)
-        print("model unchanged - choose one later with: tinycmdr model use <name>")
+        print("model unchanged - choose one later with: `/model <name>` in chat, "
+              "`tinycmdr model use <name>` on the host")
     else:
-        print("choose one with: tinycmdr model use <name>")
+        print("choose one with: `/model <name>` in chat, `tinycmdr model use <name>` "
+              "on the host")
     return 0
 
 
@@ -46065,6 +46097,8 @@ def _verb_model_add(opts, positional):
             return 1
         print("note: %s did not answer - writing it unverified" % url)
     else:
+        if want.isdigit() and 1 <= int(want) <= len(ids):
+            want = ids[int(want) - 1]     # the row number from the list just shown
         if want and want.lower() not in [x.lower() for x in ids]:
             print("%s advertises %s - not %r"
                   % (url, ", ".join(ids[:12]) or "nothing", want), file=sys.stderr)
@@ -46075,11 +46109,14 @@ def _verb_model_add(opts, positional):
             else:
                 want = _pick_advertised_model(url, ids)
             if not want:
-                print("which model? %s advertises:\n  %s\npass --model <name>"
-                      % (url, "\n  ".join(ids[:12])), file=sys.stderr)
+                print("which model? %s advertises:\n%s\n"
+                      "reply `/model add %s --model <number>` (or pass --model <name>)"
+                      % (url, "\n".join("  %d) %s" % (i, x)
+                                        for i, x in enumerate(ids[:12], 1)), url),
+                      file=sys.stderr)
                 return 2
     if not want:
-        print("a fallback entry needs a model id: pass --model <name>", file=sys.stderr)
+        print("a fallback entry needs a model id: add `--model <name>`", file=sys.stderr)
         return 2
     if opts.get("primary"):
         if not _is_local_url(url) and not _primary_api_key() and not opts.get("force"):
@@ -46111,6 +46148,8 @@ def _verb_model_add(opts, positional):
         print(err, file=sys.stderr)
         return 1
     print(line)
+    if not opts.get("primary"):
+        print("reach it with `/model %s`" % (alias or want))
     if key_env and key_env not in _env_file_keys():
         print("note: %s is not in %s yet. Put the value there with:\n"
               "  tinycmdr token set %s      (reads it from stdin, never from a "
