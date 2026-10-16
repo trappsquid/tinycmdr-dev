@@ -595,8 +595,9 @@ is offered now, the configured one first and marked current.
                   "...and the key goes to .env under the entry's api_key_env", env[-200:])
             check("sk-good" not in json.dumps(cfg), "the key is NEVER in config.json",
                   json.dumps(cfg.get("llm")))
-            check("adding an off-LAN endpoint asks about automatic failover, and y turns it on",
-                  cfg["llm"].get("allow_cloud_fallback") is True, cfg.get("llm"))
+            check(cfg["llm"].get("allow_cloud_fallback") is True,
+                  "adding an off-LAN endpoint asks about automatic failover, and y turns it on",
+                  cfg.get("llm"))
             check("reachable" in out and "cloud-a" in out,
                   "it says the endpoint is reachable and lists what it advertised", out[-500:])
 
@@ -751,11 +752,45 @@ is offered now, the configured one first and marked current.
                   listing[:300])
             _first = mod7.model_catalog()[0]["name"]
             reply = mod7.model_command("mattermost:suite", "1")
-            check("a number switches to that menu row",
-                  "Nothing switched" not in reply and _first in reply, reply[:200])
+            check("Nothing switched" not in reply and _first in reply,
+                  "a number switches to that menu row", reply[:200])
             reply = mod7.model_command("mattermost:suite", "99")
-            check("a number outside the menu is refused with the range",
-                  "Nothing switched" in reply and "1–" in reply, reply[:200])
+            check("Nothing switched" in reply and "1–" in reply,
+                  "a number outside the menu is refused with the range", reply[:200])
+
+            # the endpoint-management words reach the verb from a chat lane: `/model add
+            # <url>` is `tinycmdr model add` (the door used to answer "Nothing switched:
+            # no reachable endpoint advertises `add <url>`" - measured 2026-10-16)
+            _real_in = sys.stdin
+            sys.stdin = FakeTTY("")        # isatty yes, then EOF: the NUL-device shape
+            try:
+                reply = mod7.model_command("mattermost:suite", "setup")
+                check("needs a terminal to ask on" in reply and "Nothing switched" not in reply,
+                      "`model setup` from chat refuses by name, never as an unknown model",
+                      reply[:300])
+                reply = mod7.model_command("mattermost:suite", "add")
+                check("model add [<url>]" in reply and "EOFError" not in reply,
+                      "...and a bare `model add` gets the flags, not a traceback", reply[:300])
+            finally:
+                sys.stdin = _real_in
+            reply = mod7.model_command("mattermost:suite", "endpoint")
+            check("primary endpoint:" in reply,
+                  "`model endpoint` reads the endpoint from chat", reply[:300])
+            # `use` runs before `add` on purpose: the add verb reloads CONFIG from the
+            # staged config.json, which would drop this suite's in-memory endpoint patch
+            reply = mod7.model_command("mattermost:suite", "use cloud-a")
+            _cfg7 = json.loads((work / "chatdoor" / "config.json").read_text(encoding="utf-8"))
+            check("default model:" in reply and _cfg7["llm"].get("model") == "cloud-a",
+                  "`model use <name>` switches the default from chat too",
+                  (reply[:300], _cfg7["llm"].get("model")))
+            reply = mod7.model_command("mattermost:suite",
+                                       "add http://127.0.0.1:9/v2 --force --model m")
+            _cfg7 = json.loads((work / "chatdoor" / "config.json").read_text(encoding="utf-8"))
+            check("fallback: http://127.0.0.1:9/v2 -> m" in reply
+                  and any(f.get("base_url") == "http://127.0.0.1:9/v2"
+                          for f in _cfg7["llm"].get("fallbacks") or []),
+                  "`model add <url>` writes a fallback from chat",
+                  (reply[:400], _cfg7["llm"].get("fallbacks")))
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

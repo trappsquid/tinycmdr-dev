@@ -28396,6 +28396,16 @@ def model_command(session_key, arg):
     """
     arg = (arg or "").strip()
     tokens = arg.split()
+    # The management words belong to the VERB: `/model add <url>` in chat IS `tinycmdr
+    # model add` (one word per thing, every surface). This door owns the word `model`
+    # in every lane, so it used to answer them with "Nothing switched: no reachable
+    # endpoint advertises `add <url>`" (measured 2026-10-16) while the shell and the
+    # console ran the same words. The wizard is still a shell conversation - it asks
+    # for the key with the echo off - and refuses by name from here.
+    _sub = tokens[0].lower() if tokens else ""
+    if _sub in ("add", "remove", "rm", "endpoint", "url", "host", "setup", "wizard",
+                "new", "change", "failover", "cloud-failover", "use", "set"):
+        return verb_from_chat("model " + arg)
     is_global = any(t.lstrip("-").lower() in ("global", "g", "all")
                     for t in tokens if t.startswith("-"))
     name = " ".join(t for t in tokens if not t.startswith("-")).strip()
@@ -28405,9 +28415,10 @@ def model_command(session_key, arg):
     cat = model_catalog(force=name.lower() in ("list", "ls", "models"))
     known = ", ".join(f"`{e['name']}`" for e in cat)
     if not name:
-        return (f"Model for {scope}: `{current}` → {model_route_for(current)}\n"
+        return (f"Model for {scope}: `{current}` → `{model_route_for(current)}`\n"
                 f"`/tinycmdr model list` for the options · `/tinycmdr model <name>` to switch · "
                 f"`/tinycmdr model <name> --global` for every conversation · "
+                f"`/tinycmdr model add <url>` adds an endpoint · "
                 f"`/model default [--global]` to revert")
     if name.lower() in ("list", "ls", "models"):
         lines = ["Models this bot can run:"]
@@ -45994,9 +46005,18 @@ def _verb_model_add_interactive(opts):
 def _verb_model_add(opts, positional):
     if not positional:
         # No URL: ask, the same way `setup` does. A pipe or a script still gets the usage
-        # text, because a prompt there would read EOF and look like a hang.
+        # text, because a prompt there would read EOF and look like a hang. The guard
+        # cannot see one Windows shape - NUL is a CHARACTER device, so isatty() is True
+        # for a service or `< NUL` - so the ask is wrapped the way the wizard's is: EOF
+        # means "no answerable terminal", never a traceback (same shape as the wizard's,
+        # 2026-10-08).
         if sys.stdin.isatty() and _CLI.get("app") is None:
-            return _verb_model_add_interactive(opts)
+            try:
+                return _verb_model_add_interactive(opts)
+            except EOFError:
+                log.info("model add: stdin reported a tty but could not answer (EOF)")
+                print(MODEL_ADD_HELP, file=sys.stderr)
+                return 2
         print(MODEL_ADD_HELP, file=sys.stderr)
         return 2
     url = positional[0].strip().rstrip("/")

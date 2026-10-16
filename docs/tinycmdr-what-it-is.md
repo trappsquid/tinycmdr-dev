@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                47,780 lines / 2.25 MB in ONE file, no package, no framework
+code                47,800 lines / 2.25 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -37,7 +37,7 @@ custom tools        4 example tools ship in ./tools/ (native .py, register-style
 chat commands       21 CLI verbs, 13 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               60 suites / 52,380 lines / 5,601 checks that need no model, plus a graded
+tests               60 suites / 52,415 lines / 5,606 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 6 blocks: llm 30, telegram 4, mattermost 6, web 4, search 3, agent 120
@@ -109,7 +109,8 @@ bg <task>        run it in the background
 pause            hold new tasks until resumed (`pause off`)
 plan             read-only planning: look, don't touch, then approve
 model            show, list or switch the model (`list` numbers them; a number switches;
-                 `--global` for every conversation)
+                 `--global` for every conversation; `add <url>`/`remove`/`endpoint`/`failover`
+                 manage the endpoints, with flags)
 reasoning        how hard it thinks, for this conversation
 config           get, set, unset or list settings - e.g. `config set agent.max_steps 40`
 approvals        what the confirm gate stopped asking about (`approvals clear` asks again)
@@ -134,7 +135,8 @@ search           the web-search providers: state, add, remove, allow, test
 run              start the agent in this window, exactly as the file does
 quit (kill, exit)
                  take THIS install down: stop its service, then its processes
-model setup      the model wizard; `model use/add/remove/endpoint/failover` manage endpoints
+model setup      the model wizard - it asks for the API key with the echo off, so it can
+                 only run in a shell (chat runs the verb's other words with flags)
 update <src>     put a newer build in place by hand (file, zip or folder); `clean --yes`
 ```
 
@@ -434,7 +436,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 47,780-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 47,800-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -478,7 +480,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     measured by hand in section 4.1 - est_tokens as sent on
                           a clean unpack, plus the endpoint's own count when it
                           answers /tokenize; the command and both legs are there
-readability               47,780 lines, one file, no dependency tree to audit
+readability               47,800 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
