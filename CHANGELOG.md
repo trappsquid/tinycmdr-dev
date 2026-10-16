@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.21] - 2026-10-16
+
+### Added
+- **Chat:** the model endpoints can be managed from a chat lane — `/tinycmdr model add <url>`, `remove`, `endpoint`, `failover` and `use` were answered with "Nothing switched: no reachable endpoint advertises `add <url>`" in Mattermost and Telegram and now run the same verb a shell runs, while `model setup` still refuses by name because it asks for the API key with the echo off (tests/test_model_surface.py).
+
 ## [1.1.20] - 2026-10-15
 
 ### Fixed

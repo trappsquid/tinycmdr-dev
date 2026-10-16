@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "chat-model-door",
+      "title": "the chat lanes run the model endpoint verbs",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "d81236a",
+        "expect": "untagged"
+      },
+      "detail": "The lanes' /model answers through model_command, which owns the word `model` in every lane, so `/tinycmdr model add <url>` in Mattermost or Telegram came back \"Nothing switched: no reachable endpoint advertises `add <url>`\" while the same words ran in a shell (measured 2026-10-16). `add`, `remove`, `endpoint`, `failover` and `use` now ride through to the same verb the shell runs; the wizard still refuses by name (its key ask has the echo off), and a no-URL `model add` answers its usage text instead of an EOF traceback where stdin is the Windows NUL device.",
+      "gate": "tests/test_model_surface.py: five checks RED on the pre-fix build (TINYCMDR_SRC), green on the batch; three of the suite's own calls that passed the label as the condition are fixed"
+    },
+    {
       "id": "service-stderr-bound",
       "title": "the service's stderr file can no longer grow without a bound",
       "state": "shipped",
