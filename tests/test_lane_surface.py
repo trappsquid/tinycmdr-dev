@@ -1012,53 +1012,73 @@ The lane rules this grades, all of them visible only by RUNNING the file:
 
     `config` runs the same probe against a config the CALLER owns (the example-as-shipped
     case); the default is the minimal page config.
+
+    A LOST PORT RETRIES ONCE. free_port() picks a port nothing holds at PICK time and the
+    child binds it later; on a loaded runner another suite's child can take the pick
+    first, and the page then never answers (measured 2026-10-16 on the Windows tier: two
+    checks red with no child words to say why). The retry fires ONLY when the child's own
+    output names a bind collision - any other no-answer stays red, with the child's tail
+    carried into the failing check by the caller.
     """
-        if config is None:
-            config = {"llm": LLM, "web": {"enabled": True, "host": "127.0.0.1", "port": port}}
-        (dirpath / "config.json").write_text(json.dumps(config), encoding="utf-8")
-        env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
-        env["HOME"] = str(dirpath)
-        # a test must not put tabs in somebody's browser: every staged child that serves
-        # would otherwise auto-open the page (macOS says a browser is available)
-        env["TINYCMDR_NO_BROWSER"] = "1"
-        proc = subprocess.Popen([sys.executable, str(dirpath / "tinycmdr.py")],
-                                cwd=str(dirpath), env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        served = authed = False
-        t0 = time.time()
-        while time.time() - t0 < deadline and proc.poll() is None:
+        own = config is None
+        said = ""
+        for attempt in (0, 1):
+            if attempt:
+                port = free_port()                  # the retry: same shape, fresh port
+            if own:
+                config = {"llm": LLM, "web": {"enabled": True, "host": "127.0.0.1",
+                                              "port": port}}
+            elif isinstance(config.get("web"), dict):
+                config["web"]["port"] = port
+            (dirpath / "config.json").write_text(json.dumps(config), encoding="utf-8")
+            env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
+            env["HOME"] = str(dirpath)
+            # a test must not put tabs in somebody's browser: every staged child that serves
+            # would otherwise auto-open the page (macOS says a browser is available)
+            env["TINYCMDR_NO_BROWSER"] = "1"
+            proc = subprocess.Popen([sys.executable, str(dirpath / "tinycmdr.py")],
+                                    cwd=str(dirpath), env=env, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            served = authed = False
+            t0 = time.time()
+            while time.time() - t0 < deadline and proc.poll() is None:
+                try:
+                    with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port,
+                                                timeout=1) as r:
+                        if r.status == 200:
+                            served = True
+                            break
+                except Exception:                                        # noqa: BLE001
+                    time.sleep(0.5)
+            tok = ""
+            envf = dirpath / ".env"
+            if envf.exists():
+                for ln in envf.read_text(encoding="utf-8").splitlines():
+                    if ln.startswith("TINYCMDR_WEB_TOKEN="):
+                        tok = ln.split("=", 1)[1].strip()
+            if served and tok:
+                try:
+                    req = urllib.request.Request("http://127.0.0.1:%d/api/tasks" % port,
+                                                 headers={"X-Tinycmdr-Token": tok})
+                    with urllib.request.urlopen(req, timeout=5) as r:
+                        authed = r.status == 200
+                except Exception:                                        # noqa: BLE001
+                    authed = False
+            if proc.poll() is None:
+                proc.kill()
             try:
-                with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port,
-                                            timeout=1) as r:
-                    if r.status == 200:
-                        served = True
-                        break
-            except Exception:                                        # noqa: BLE001
-                time.sleep(0.5)
-        tok = ""
-        envf = dirpath / ".env"
-        if envf.exists():
-            for ln in envf.read_text(encoding="utf-8").splitlines():
-                if ln.startswith("TINYCMDR_WEB_TOKEN="):
-                    tok = ln.split("=", 1)[1].strip()
-        if served and tok:
-            try:
-                req = urllib.request.Request("http://127.0.0.1:%d/api/tasks" % port,
-                                             headers={"X-Tinycmdr-Token": tok})
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    authed = r.status == 200
-            except Exception:                                        # noqa: BLE001
-                authed = False
-        if proc.poll() is None:
-            proc.kill()
-        try:
-            out, err = proc.communicate(timeout=10)
-        except Exception:                                            # noqa: BLE001
-            out, err = "", ""
-        said = (out or "") + (err or "")
-        logf = dirpath / "tinycmdr.log"
-        if logf.exists():
-            said += logf.read_text(encoding="utf-8", errors="replace")
+                out, err = proc.communicate(timeout=10)
+            except Exception:                                            # noqa: BLE001
+                out, err = "", ""
+            said = (out or "") + (err or "")
+            logf = dirpath / "tinycmdr.log"
+            if logf.exists():
+                said += logf.read_text(encoding="utf-8", errors="replace")
+            lost_port = ("is held by another process" in said
+                         or "address already in use" in said.lower()
+                         or "winerror 10048" in said.lower())
+            if served or not lost_port:
+                break                               # served, or a cause a retry cannot fix
         return served, authed, said
 
 
@@ -1078,8 +1098,10 @@ The lane rules this grades, all of them visible only by RUNNING the file:
             # state is the page OFF (next case).
             port = free_port()
             served, authed, said = serve_and_probe(work / "cli_only", port)
-            check(served, "no token, page on: the page answers on the configured port")
-            check(authed, "and the token it minted gates it (a gated route: 200)")
+            check(served, "no token, page on: the page answers on the configured port",
+                  said[-400:])
+            check(authed, "and the token it minted gates it (a gated route: 200)",
+                  said[-400:])
             check("cannot start" not in said, "it is NOT a startup abort")
             _env = (work / "cli_only" / ".env").read_text(encoding="utf-8")
             check("TINYCMDR_WEB_TOKEN=" in _env, "the minted token lands in .env", _env[-120:])
