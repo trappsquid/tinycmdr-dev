@@ -3582,10 +3582,10 @@
     {
       "id": "web-key-form-opaque-origin",
       "title": "the one-time key form accepts a real browser's POST",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "de44260",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The capability-only one-time key page route accepts an opaque Origin, so a real browser's form POST is no longer refused with 403, while the Host allowlist and every authenticated route keep the strict check.",
       "gate": "tests/test_webui.py drives the form as a browser does - navigation, same-origin POST, opaque Origin, foreign Origin 403, the key written to .env mode 600, the burn - and every authenticated route still refusing a null origin"
@@ -3593,10 +3593,10 @@
     {
       "id": "pre-delivery-checkpoint",
       "title": "a run checks its own state before delivering",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "a78c038",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A bare answer delivered while the harness's own state says work remains - an open plan step, a completion announced earlier while calls were queued, or a request-named path that does not exist - earns one mandatory check turn, ask_user is not opened once in that state, and the next answer or question goes through; the advisory mid-run reminder and its agent.deliver_after_announcements key are gone.",
       "gate": "tests/test_stall.py grades the plan, announcement, missing-path and ask_user cases, each of which fails on the pre-fix build"
