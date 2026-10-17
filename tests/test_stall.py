@@ -3919,31 +3919,17 @@ def test_the_turn_cap_is_a_checkpoint_not_an_end():
           calls == 5, f"model calls: {calls}")
 
 
-def test_a_run_that_keeps_announcing_completion_gets_one_reminder():
-    """ADVISORY since 2026-10-10. Measured on the live box: a model narrating "pass
-    complete" mid-audit had the old demand land at step 51 and the run was wrapped
-    while it still had hours of work. The count now earns exactly one reminder line,
-    ends nothing and blocks no continuation - words cannot end a run; the state-based
-    idle counter below is what guards the "one more check" class."""
+def _checkpoint_run(key, request, scripted, plan=None):
+    """One run against a stubbed model, with the run state the test needs."""
     import copy as _copy
-    probe = TMP / "announce_probe.txt"
-    probe.write_text("stable\n", encoding="utf-8")
-    def round_n(n):
-        return {"role": "assistant",
-                "content": f"Fresh pass {n} is complete. One last check before writing it up.",
-                "tool_calls": [{"id": str(n), "function": {
-                    "name": "read_file",
-                    "arguments": json.dumps({"path": str(probe) + "-" + str(n)})}}]}
-    # distinct paths so the loop guard cannot fire first, and one honest answer at the end
-    for n in range(1, 8):
-        (TMP / f"announce_probe.txt-{n}").write_text(f"stable {n}\n", encoding="utf-8")
-    scripted = [round_n(n) for n in range(1, 9)]
-    scripted.append({"role": "assistant", "content": "Final report: nothing left undone."})
-
+    fb.SESSIONS_DIR = TMP / "sessions"
+    fb.SESSIONS_DIR.mkdir(exist_ok=True)
+    fb.AGENT.histories.clear()
     saved_chat = fb.AGENT._chat
     saved = dict(fb.CONFIG["agent"])
-    seen, payloads, used = [], [], {"n": 0}
     seq = list(scripted)
+    used = {"n": 0}
+    payloads = []
 
     def fake_chat(messages, model=None, use_tools=True, usage=None, max_tokens=None,
                   cancel_event=None, on_delta=None, session_key=None, **kw):
@@ -3954,40 +3940,62 @@ def test_a_run_that_keeps_announcing_completion_gets_one_reminder():
         used["n"] += 1
         return r
 
-    key = "announce-session"
+    st = fb.run_state(key, create=True)
+    st["plan"] = list(plan or [])
+    st["derived"] = False
+    st["announced"] = 0
+    st["checkpoint"] = 0
     fb.AGENT._chat = fake_chat
-    fb.run_state(key, create=True)["plan"] = [{"id": 1, "text": "the pass", "status": "doing"}]
     fb.CONFIG["agent"].update(max_steps=100, max_minutes=30, auto_continue=True,
                               auto_continue_max=2, plan_from_request=False,
-                              deliver_after_announcements=3, progress_updates=False)
+                              progress_updates=False)
     try:
-        out = fb.AGENT.run(key, "do the pass and report", say_cb=seen.append)
+        out = fb.AGENT.run(key, request, say_cb=lambda s: None)
     finally:
         fb.AGENT._chat = saved_chat
         fb.CONFIG["agent"].clear()
         fb.CONFIG["agent"].update(saved)
-        fb.run_state(key, create=True)["plan"] = []
-        fb.run_state(key, create=True)["announced"] = 0
+        st = fb.run_state(key, create=True)
+        st["plan"] = []
+        st["announced"] = 0
+        st["checkpoint"] = 0
+        st["request_paths"] = []
+    return out, used["n"], payloads
 
+
+_CHECKPOINT_MARK = "the harness's own state says the task is not finished"
+
+
+def test_an_open_plan_earns_one_checkpoint_before_the_answer():
+    """STATE, not words (2026-10-16): a plan step the model set is still open, so the
+    answer that would end the run gets ONE harness turn first. A second answer without
+    tool calls ships as written - the gate costs a call, never the delivery."""
+    out, calls, payloads = _checkpoint_run(
+        "checkpoint-plan", "do the pass and report", [
+            {"role": "assistant", "content": "Done: the pass is complete."},
+            {"role": "assistant", "content": "Final: nothing left undone."},
+            {"role": "assistant", "content": "a third answer must never be asked for"},
+        ], plan=[{"id": 1, "text": "write the chapter", "status": "doing"}])
     blobs = [json.dumps(p) for p in payloads]
-    # The reminder persists in the conversation once delivered, so the property is
-    # "delivered once and never duplicated", not "in exactly one payload".
-    _counts = [sum(1 for m in p if "said this work was complete" in json.dumps(m))
+    check("checkpoint: the open plan step is named",
+          "plan step(s) still open" in blobs[-1]
+          and "write the chapter" in blobs[-1], blobs[-1][-600:])
+    check("checkpoint: one turn, then the next bare answer ships",
+          calls == 2 and "Final: nothing left undone." in out,
+          (calls, out[:200]))
+    _counts = [sum(1 for m in p if _CHECKPOINT_MARK in json.dumps(m))
                for p in payloads]
-    check("delivery reminder: delivered once and never duplicated",
+    check("checkpoint: delivered once and never duplicated",
           any(_counts) and max(_counts) == 1, _counts)
-    check("delivery reminder: no end is forced by the words",
-          "Delivery guard" not in out and "No progress" not in out, out[:200])
-    check("delivery reminder: the model's own ending is the run's ending",
-          "nothing left undone" in out, out[:200])
 
 
-def test_zero_deliver_reminders_disables_even_the_line():
-    """0 = off, explicitly (2026-10-10): the old `or 3` turned an explicit 0 back
-    into 3, so an operator could not switch the reminder off."""
-    import copy as _copy
-    probe = TMP / "announce_zero.txt"
-    probe.write_text("stable\n", encoding="utf-8")
+def test_a_completion_announced_earlier_earns_one_checkpoint():
+    """The announcement count is state (2026-10-16): the model said the work was
+    complete while queueing more tool calls, so the answer that would end the run is
+    checked once against what it actually did. No plan is needed for this trigger."""
+    probe = TMP / "announce_probe.txt"
+    for n in range(1, 4):
+        (TMP / f"announce_probe.txt-{n}").write_text(f"stable {n}\n", encoding="utf-8")
 
     def round_n(n):
         return {"role": "assistant",
@@ -3996,45 +4004,68 @@ def test_zero_deliver_reminders_disables_even_the_line():
                     "name": "read_file",
                     "arguments": json.dumps({"path": str(probe) + "-" + str(n)})}}]}
 
-    for n in range(1, 6):
-        (TMP / f"announce_zero.txt-{n}").write_text(f"stable {n}\n", encoding="utf-8")
-    scripted = [round_n(n) for n in range(1, 6)]
-    scripted.append({"role": "assistant", "content": "Done: the scripted end."})
+    out, calls, payloads = _checkpoint_run(
+        "checkpoint-announce", "do the pass and report",
+        [round_n(1), round_n(2), round_n(3),
+         {"role": "assistant", "content": "Report: the pass is done."},
+         {"role": "assistant", "content": "Final: nothing left undone."},
+         {"role": "assistant", "content": "a third answer must never be asked for"}])
+    sent = json.dumps(payloads)
+    check("checkpoint: the announcement count is the trigger",
+          "announced the work complete 3 time(s)" in sent, sent[-600:])
+    check("checkpoint: the model's own final answer ends the run",
+          calls == 5 and "nothing left undone" in out, (calls, out[:200]))
 
-    saved_chat = fb.AGENT._chat
+
+def test_a_missing_request_path_earns_one_checkpoint():
+    """The third state signal (2026-10-16): a path the request names does not exist,
+    so the answer claiming it was delivered is checked once."""
+    target = TMP / "checkpoint-deliverable.md"
+    if target.exists():
+        target.unlink()
+    out, calls, payloads = _checkpoint_run(
+        "checkpoint-path", "write the report to %s" % target, [
+            {"role": "assistant", "content": "All set: the deliverable is written."},
+            {"role": "assistant", "content": "Could not create the deliverable."},
+            {"role": "assistant", "content": "a third answer must never be asked for"},
+        ])
+    sent = json.dumps(payloads)
+    check("checkpoint: the missing request path is named",
+          "do not exist" in sent and str(target) in sent, sent[-600:])
+    check("checkpoint: the next bare answer ships",
+          calls == 2 and "Could not create the deliverable." in out,
+          (calls, out[:200]))
+
+
+def test_ask_user_is_bounced_once_when_state_says_work_remains():
+    """The question is a delivery too (2026-10-16): asking whether to continue while a
+    plan step is open gets one harness result instead of a parked run, and the NEXT
+    question goes through - the operator's call is never taken away."""
+    key = "checkpoint-ask"
+    st = fb.run_state(key, create=True)
+    st["plan"] = [{"id": 1, "text": "finish the report", "status": "doing"}]
+    st["derived"] = False
+    st["checkpoint"] = 0
+    st["request_paths"] = []
     saved = dict(fb.CONFIG["agent"])
-    payloads, used = [], {"n": 0}
-    seq = list(scripted)
-
-    def fake_chat(messages, model=None, use_tools=True, usage=None, max_tokens=None,
-                  cancel_event=None, on_delta=None, session_key=None, **kw):
-        payloads.append(_copy.deepcopy(messages))
-        if used["n"] >= len(seq):
-            raise AssertionError("kept asking past the scripted end")
-        r = seq[used["n"]]
-        used["n"] += 1
-        return r
-
-    key = "announce-zero"
-    fb.AGENT._chat = fake_chat
-    fb.CONFIG["agent"].update(deliver_after_announcements=0, max_steps=100,
-                              max_minutes=30, plan_from_request=False,
-                              progress_updates=False)
+    fb.CONFIG["agent"]["ask_user"] = True
     try:
-        out = fb.AGENT.run(key, "pass after pass", say_cb=lambda s: None)
+        first = fb.tool_ask_user({"question": "Shall I continue with the rest?"},
+                                 {"session_key": key})
+        check("ask_user: the question is not opened while work remains",
+              first.startswith("NOT ASKED"), first[:200])
+        check("ask_user: the refusal names the open step",
+              "finish the report" in first, first[:300])
+        second = fb.tool_ask_user({"question": "Which chapter first?"},
+                                  {"session_key": key})
+        check("ask_user: the NEXT question goes through",
+              not second.startswith("NOT ASKED"), second[:200])
     finally:
-        fb.AGENT._chat = saved_chat
         fb.CONFIG["agent"].clear()
         fb.CONFIG["agent"].update(saved)
-        fb.run_state(key, create=True)["announced"] = 0
-
-    blobs = [json.dumps(p) for p in payloads]
-    # Both wordings, because the pre-fix build's line must fail this too.
-    _forbidden = ("announced this work as complete", "said this work was complete")
-    check("deliver_after_announcements 0: no reminder line at all",
-          all(not any(f in b for f in _forbidden) for b in blobs), len(payloads))
-    check("deliver_after_announcements 0: the run ends on its own answer",
-          "the scripted end" in out, out[:160])
+        st["plan"] = []
+        st["checkpoint"] = 0
+        st["request_paths"] = []
 
 
 def test_a_run_with_nothing_new_wraps_up_with_the_reason_and_a_way_back():

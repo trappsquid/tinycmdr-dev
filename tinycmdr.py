@@ -740,13 +740,6 @@ DEFAULT_CONFIG = {
         # (2026-10-04). 0 keeps the old ask-once behaviour; the delivery still annotates a
         # run that will not act ("stopped short") rather than asking forever.
         "nudge_retries": 3,
-        # Delivery REMINDER (advisory only since 2026-10-10): how many times a reply may
-        # say the work is complete while tool calls are still queued before ONE line
-        # suggests delivering, if it is done. It never ends a run and never blocks a
-        # continuation: a phrase list cannot tell narration from a stall, and the old
-        # version demanded the report mid-flight on the live box (the demand landed at
-        # step 51 of an audit that then worked for hours). 0 disables the reminder.
-        "deliver_after_announcements": 3,
         # The state-based half of the same idea - what actually guards the "one more
         # check" attractor. A turn whose EVERY tool call was a duplicate (same arguments
         # AND same result) or a refusal taught the run nothing: `idle_turn_nudge` such
@@ -16375,6 +16368,24 @@ def tool_ask_user(args, ctx):
         return ("ERROR: a sub-agent has nobody to ask — finish with what you have "
                 "and report the open question in your findings.")
     sk = (ctx or {}).get("session_key") or ""
+    # The checkpoint's second door (2026-10-16): a question is a delivery too. When the
+    # harness's own state says the task is unfinished, the question is not opened - the
+    # model gets one harness result naming the state, and the NEXT question goes through.
+    # Refused by state, never by the question's words, so asking a real blocker costs
+    # one turn and never the operator's call.
+    _st = run_state(sk) if sk else None
+    if _st is not None and not _st.get("checkpoint") and plan_mode(sk) != "plan":
+        _why = _checkpoint_reasons(sk)
+        if _why:
+            _st["checkpoint"] = 1
+            log.warning("[%s] ask_user bounced by the pre-delivery checkpoint: %s",
+                        sk, " | ".join(_why)[:400])
+            return ("NOT ASKED: the harness did not open this question - its own run "
+                    "state says the task is unfinished:\n- " + "\n- ".join(_why)
+                    + "\nContinue the work now with tool calls: the request still "
+                      "stands, and do not ask whether to keep going. If a decision only "
+                      "the operator can make is what blocks you, ask that question "
+                      "again in one line and it will be opened.")
     want = None
     if args.get("timeout"):
         want = parse_duration(args["timeout"])
@@ -19709,9 +19720,10 @@ def _state(mutate=None):
 # to pin ... then writing it up") and answered every announcement with another tool round instead
 # of the report. ADVISORY ONLY since 2026-10-10: this is a phrase list, and a phrase list cannot
 # tell narration from a stall - it fired mid-flight on the live box (the demand landed at step 51
-# of an audit that kept working for hours). The count still logs and earns ONE reminder line;
-# what ends a stuck run now is `idle_turn_stop`, which counts duplication and refusals - state,
-# not words - so no model's phrasing can end a task early.
+# of an audit that kept working for hours). The count is STATE about the run - the
+# pre-delivery checkpoint reads it when the run then delivers - and what ends a stuck
+# run is `idle_turn_stop`, which counts duplication and refusals - state, not words -
+# so no model's phrasing can end a task early.
 _COMPLETION_RX = re.compile(
     r"\b(pass|task|job|analysis|work|audit|review|report|run)\b[^.\n]{0,60}?"
     r"\b(complete|completed|done|finished)\b"
@@ -19834,6 +19846,97 @@ def _action_only(text):
     return bool(t) and len(t) <= _ACTION_ONLY_MAX_CHARS \
         and not t.endswith("?") and not re.search(r"\d", t) \
         and bool(_ACTION_ONLY_RX.match(t))
+
+
+# The PRE-DELIVERY CHECKPOINT (2026-10-16): a run about to deliver an answer while
+# the harness's OWN STATE says work remains gets one more turn before that answer
+# ships. The trigger is state, never wording - an open plan step, a completion the
+# run announced earlier, or a path the request names that does not exist - because a
+# phrase list cannot tell narration from a finished task (the 2026-10-10 lesson). The
+# turn is bounded at ONE per run, and a second answer without tool calls is delivered
+# as written: the gate can cost one model call, never block delivery.
+_REQUEST_PATH_EXT = frozenset((
+    "md", "txt", "rst", "json", "jsonl", "csv", "tsv", "pdf", "zip", "gz", "tgz",
+    "png", "jpg", "jpeg", "gif", "svg", "py", "sh", "ps1", "js", "ts", "html",
+    "htm", "yaml", "yml", "toml", "ini", "cfg", "log", "sqlite", "db", "docx",
+    "xlsx", "pptx", "mp4", "mp3", "wav", "xml",
+))
+_REQUEST_PATH_RX = re.compile(
+    r"(?<![\w:/\\])"
+    r"((?:~|\.{1,2})?[/\\][\w.@+-]+(?:[/\\][\w.@+-]+)*"
+    r"|[\w.@+-]+(?:[/\\][\w.@+-]+)*\.[A-Za-z][A-Za-z0-9]{1,7})"
+    r"(?![\w/\\])")
+
+
+def _request_paths(text):
+    """Paths the request names, in order, deduped, bounded at eight.
+
+    A bare word with no separator, no `~` and no file extension is prose; a dotted
+    hostname carries an extension nobody writes files with, which is why the extension
+    list is what keeps it out. Cheap on purpose: this only decides whether ONE model
+    call is worth spending, never whether an answer ships.
+    """
+    out = []
+    for tok in _REQUEST_PATH_RX.findall(str(text or "")):
+        name = re.split(r"[/\\]", tok)[-1]
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if not (re.search(r"[/\\]", tok) or tok.startswith("~")
+                or ext in _REQUEST_PATH_EXT):
+            continue
+        if tok not in out:
+            out.append(tok)
+        if len(out) >= 8:
+            break
+    return out
+
+
+def _request_path_exists(raw):
+    """The path as the file tools resolve it, so one spelling means one file."""
+    try:
+        return Path(_tool_path(raw)).exists()
+    except (OSError, ValueError):
+        return True    # unreadable is not evidence of missing work
+
+
+def _checkpoint_reasons(key):
+    """What the harness KNOWS is unfinished, as facts the model can check.
+
+    Empty means the gate stays out of the way. The plan counts when the MODEL set it,
+    or when a derived plan has actually moved: the harness parses steps out of
+    multi-part requests, and a question answered in one turn must not be held for the
+    parser's guess.
+    """
+    st = run_state(key) or {}
+    reasons = []
+    plan = st.get("plan") or []
+    left = [(s.get("id"), s.get("text")) for s in plan
+            if (s.get("status") or "open") in ("open", "doing", "blocked")]
+    moved = any((s.get("status") or "open") != "open" for s in plan)
+    if left and (not st.get("derived") or moved):
+        named = "; ".join("%s. %s" % (i, t) for i, t in left[:6])
+        reasons.append("plan step(s) still open: " + named
+                       + (" (and %d more)" % (len(left) - 6) if len(left) > 6 else ""))
+    announced = int(st.get("announced") or 0)
+    if announced:
+        reasons.append("this run announced the work complete %d time(s) while still "
+                       "queueing tool calls" % announced)
+    missing = [p for p in (st.get("request_paths") or [])
+               if not _request_path_exists(p)]
+    if missing:
+        reasons.append("the request names path(s) that do not exist: "
+                       + ", ".join(missing[:4]))
+    return reasons
+
+
+def _checkpoint_turn(reasons):
+    """The one harness turn the checkpoint spends (see the run loop and ask_user)."""
+    return ("SYSTEM: you were about to deliver that answer, and the harness's own state "
+            "says the task is not finished:\n- " + "\n- ".join(reasons) + "\n"
+            "This is ONE check, not a question to the operator. Compare the request "
+            "with what you actually did: if anything it asks for is missing, continue "
+            "now with the next tool call - the request still stands, and do not ask "
+            "whether to keep going. If the task really is finished, deliver the answer "
+            "now and name plainly what you could not verify.")
 
 
 # What one turn WAS, as data (added 2026-09-24, logging only)
@@ -23322,11 +23425,13 @@ class Agent:
             _run = run_state(session_key, create=True)
             _run["calls"] = 0
             _run["progress_at"] = 0
-            # Per-RUN counters: the completion reminder and the compaction tally. The
-            # announcement count SURVIVES a continuation segment (segments are one run),
-            # so the reminder fires once per run rather than once per segment.
+            # Per-RUN state: the announcement count and the checkpoint's one turn. Both
+            # SURVIVE a continuation segment (segments are one run), so the checkpoint
+            # fires once per run rather than once per segment. The announced counter is
+            # what the checkpoint reads at delivery.
             _run["announced"] = 0
-            _run["deliver_nudge"] = False
+            _run["checkpoint"] = 0
+            _run["request_paths"] = _request_paths(user_text)
             _run["idle_turns"] = 0
             _run["idle_nudge"] = False
             _run["idle_stop"] = False
@@ -23541,22 +23646,17 @@ class Agent:
                         _harness_spoke_last(messages, reply),
                         reply, tool_calls, _messages_chars(messages))
                     _prompt_seen = _prompt_now
-                    # Delivery REMINDER: count announcements of completion that arrive WITH
-                    # more tool calls queued. At the threshold the run gets ONE line that
-                    # suggests delivering if it is done - advisory only (2026-10-10): it
-                    # never ends a run and never blocks a continuation, because a phrase
-                    # list cannot tell narration from a stall.
+                    # A completion announced while more tool calls are queued is STATE
+                    # about this run: the count is what the pre-delivery checkpoint reads
+                    # if the run then delivers. The old mid-run reminder line is gone
+                    # (2026-10-16): it was the same advice at a worse moment, and the
+                    # checkpoint attaches the count to the answer it actually affects.
                     if tool_calls:
                         if _COMPLETION_RX.search(str(reply.get("content") or "")):
                             _run["announced"] = int(_run.get("announced") or 0) + 1
-                            _d = CONFIG["agent"].get("deliver_after_announcements")
-                            _deliver_after = 3 if _d is None else max(0, int(_d))
                             log.info("[%s] completion announced %d time(s) with %d tool "
-                                     "call(s) queued (reminder at %d)",
-                                     session_key, _run["announced"], len(tool_calls),
-                                     _deliver_after)
-                            if _deliver_after and _run["announced"] == _deliver_after:
-                                _run["deliver_nudge"] = True
+                                     "call(s) queued",
+                                     session_key, _run["announced"], len(tool_calls))
                     if not tool_calls:
                         # A correction that arrived while the model was writing this answer
                         # gets a turn of its own: an answer composed before the correction is
@@ -23828,6 +23928,28 @@ class Agent:
                                     log.debug("no-answer notice failed",
                                               exc_info=True)
                             continue
+                        # THE PRE-DELIVERY CHECKPOINT (2026-10-16). This is the one
+                        # moment a bare answer is about to ship, so it is where the
+                        # harness's state gets one last word. It fires only when that
+                        # state says work remains (see _checkpoint_reasons), only once
+                        # per run, and never on a harness-forced ending - the wrap-up
+                        # paths already ask for the four-line report. A second answer
+                        # without tool calls ships as written, so the gate cannot block
+                        # delivery: it costs at most one model call on affected runs.
+                        if (not _run.get("checkpoint") and not spun
+                                and not _run.get("idle_stop")
+                                and status not in ("truncated", "empty", "budget")
+                                and plan_mode(session_key) != "plan"
+                                and (reply.get("content") or "").strip()):
+                            _reasons = _checkpoint_reasons(session_key)
+                            if _reasons:
+                                _run["checkpoint"] = 1
+                                messages.append({"role": "user",
+                                                 "content": _checkpoint_turn(_reasons)})
+                                log.warning("[%s] pre-delivery checkpoint (%d state "
+                                            "fact(s)): %s", session_key,
+                                            len(_reasons), " | ".join(_reasons)[:400])
+                                continue
                         if _delta_gate["streamed"] and narration_drop_cb:
                             # The streamed text WAS this answer; the caller posts the
                             # real one (annotated, chunked), so the draft goes.
@@ -24336,14 +24458,6 @@ class Agent:
                                 f"moved. Mark the current step done with the `plan` tool, "
                                 f"say what is blocking it, or revise the plan. Right now "
                                 f"the plan says: {plan_current_line(session_key)}.")
-                    if _run.pop("deliver_nudge", False):
-                        nudges.append(
-                            f"SYSTEM: you have said this work was complete "
-                            f"{int(_run.get('announced') or 0)} times while still queueing "
-                            f"tool calls. If the task IS finished, deliver the report now "
-                            f"with no further tool calls and say plainly which parts you "
-                            f"could not verify; if it is not finished, ignore this line "
-                            f"and continue - nothing here stops the run.")
                     if _run.pop("idle_nudge", False):
                         nudges.append(
                             f"SYSTEM: the last {int(_run.get('idle_turns') or 0)} turns "
