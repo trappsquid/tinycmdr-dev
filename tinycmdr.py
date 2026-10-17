@@ -34392,15 +34392,19 @@ def run_webui():
             return hmac.compare_digest(
                 given.encode("utf-8", "replace"), token.encode("utf-8"))
 
-        def _origin_ok(self):
+        def _origin_ok(self, opaque_ok=False):
             """Same-origin/Host check for EVERY route.
 
             The token is mandatory; this rule is defence in depth on top of it. Host must
             be a loopback name (or the configured bind host), and an Origin header, when
             the browser sends one, must match that host AND its port (cookies are
             host-scoped, so the port is part of the check). curl, the installer's probe
-            and the supervisor send no Origin and keep working; an opaque "null" origin
-            (a file:// page, a sandboxed iframe) is refused.
+            and the supervisor send no Origin and keep working. An opaque "null" origin
+            (a file:// page, a sandboxed iframe, some embedded views) is refused - except
+            on a capability-only route (`opaque_ok`), where the id itself is the
+            credential and no cookie rides, so there is nothing for a cross-origin page
+            to forge (measured 2026-10-16: the shipped one-time key link was refused by a
+            real browser's form POST that carried `Origin: null`).
             """
             host_hdr = (self.headers.get("Host") or "").strip().lower()
             # _web_authority, not rsplit: a bare IPv6 Host ("[::1]", no port - what a
@@ -34427,6 +34431,8 @@ def run_webui():
             origin = (self.headers.get("Origin") or "").strip()
             if not origin:
                 return True                     # curl, the installer, the supervisor
+            if opaque_ok and origin.lower() == "null":
+                return True                     # the capability is the id, not the page
             # The FULL authority, port included. Cookies are bound to the host, not the
             # port, so a page served from another port of this same name still carries
             # the session cookie - and the host-only compare let it drive the API
@@ -35061,7 +35067,11 @@ def run_webui():
         def do_POST(self):
             if not self._target_ok():
                 return
-            if not self._origin_ok():
+            # The one-time key form is capability-only (the id is the credential, no
+            # cookie rides), so an opaque `Origin: null` is not a cross-origin threat
+            # there - and the shipped link was refused by a real browser's POST that
+            # sent one (measured 2026-10-16). Every other route keeps the strict check.
+            if not self._origin_ok(opaque_ok=self.path.startswith("/secret/")):
                 self._forbidden()
                 return
             if self.path.startswith("/secret/"):

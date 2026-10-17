@@ -662,6 +662,16 @@ def main():
     check(req("GET", "/api/tasks",
               {**TOK, "Origin": "http://127.0.0.1:%d" % (port + 1)})[0] == 403,
           "an Origin on another port of the same name: 403")
+    # The one-time key form is capability-only: the id in the URL is the credential and
+    # no cookie rides, so an opaque Origin has nothing to forge there - while every
+    # authenticated route still refuses it. Measured 2026-10-16: the shipped link's POST
+    # was refused by a real browser that sent `Origin: null`.
+    _sid = fb._secret_door_mint("TEST_KEY", "http://127.0.0.1:9/v1", "web:probe")
+    check(req("POST", "/secret/%s" % _sid, {"Origin": "null"},
+              b"key=not+a+key")[0] == 400,
+          "the one-time key form takes an opaque Origin (capability-only route)")
+    check(req("POST", "/api/tasks", {**TOK, "Origin": "null"}, b"{}")[0] == 403,
+          "...while every authenticated route still refuses it")
     check(fb._web_authority("[::1]:8790") == ("::1", "8790")
           and fb._web_authority("box") == ("box", "")
           and fb._web_authority("127.0.0.1") != fb._web_authority("127.0.0.1:8790"),
