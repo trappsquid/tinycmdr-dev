@@ -662,16 +662,109 @@ def main():
     check(req("GET", "/api/tasks",
               {**TOK, "Origin": "http://127.0.0.1:%d" % (port + 1)})[0] == 403,
           "an Origin on another port of the same name: 403")
-    # The one-time key form is capability-only: the id in the URL is the credential and
-    # no cookie rides, so an opaque Origin has nothing to forge there - while every
-    # authenticated route still refuses it. Measured 2026-10-16: the shipped link's POST
-    # was refused by a real browser that sent `Origin: null`.
-    _sid = fb._secret_door_mint("TEST_KEY", "http://127.0.0.1:9/v1", "web:probe")
-    check(req("POST", "/secret/%s" % _sid, {"Origin": "null"},
-              b"key=not+a+key")[0] == 400,
-          "the one-time key form takes an opaque Origin (capability-only route)")
+    # ---- the one-time key form, as a BROWSER sends it -------------------------
+    # The handler tests (tests/test_model_surface.py) cannot see the door: Host, Origin
+    # and the form body are the contract here. Measured 2026-10-16: the shipped link
+    # answered a real browser's POST with 403 (Origin: null) because the capability-only
+    # route was held to the page-token Origin rule.
+    class _Provider(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if not self.path.rstrip("/").endswith("/models"):
+                self.send_response(404)
+                self.end_headers()
+                return
+            if self.headers.get("Authorization") != "Bearer sk-good":
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            body = json.dumps({"data": [{"id": "cloud-a"}, {"id": "cloud-b"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    class _ProviderServer(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            pass                                    # a hung-up probe is not a suite error
+
+    _prov = _ProviderServer(("127.0.0.1", 0), _Provider)
+    threading.Thread(target=_prov.serve_forever, daemon=True).start()
+    _purl = "http://127.0.0.1:%d/v1" % _prov.server_address[1]
+    _same = "http://127.0.0.1:%d" % port
+    # The add inside the form runs a verb that reloads CONFIG from disk (the same shape
+    # the cohort block above guards): snapshot the in-memory web/llm blocks and the two
+    # files, and put them back, or later checks read this test's fallback as theirs.
+    _saved_web = dict(fb.CONFIG["web"])
+    _saved_llm = dict(fb.CONFIG["llm"])
+    _saved_cfg = (STAGE / "config.json").read_text(encoding="utf-8")
+    _saved_env = ((STAGE / ".env").read_text(encoding="utf-8")
+                  if (STAGE / ".env").exists() else None)
+    try:
+        _sid = fb._secret_door_mint("TEST_KEY", _purl, "web:probe")
+        _page = req("GET", "/secret/%s" % _sid)
+        check(_page[0] == 200 and b'type="password"' in _page[1]
+              and b"TEST_KEY" in _page[1],
+              "the key page serves the masked form to a browser navigation",
+              _page[:60])
+        check(req("GET", "/secret/%s" % _sid,
+                  {"Origin": "http://evil.example"})[0] == 403,
+              "a cross-origin GET of the key page: 403 (the GET stays strict)")
+        check(req("POST", "/secret/%s" % _sid, {"Origin": _same},
+                  b"key=sk-wrong")[0] == 400,
+              "a same-origin form POST reaches the handler (a refused key is 400)")
+        check(req("POST", "/secret/%s" % _sid, {"Origin": "null"},
+                  b"key=sk-wrong")[0] == 400,
+              "an opaque-Origin form POST is taken (capability-only route, no 403)")
+        check(req("POST", "/secret/%s" % _sid,
+                  {"Origin": "http://evil.example"}, b"key=sk-good")[0] == 403,
+              "a foreign Origin on the form: 403, and no key written")
+        _code, _pick, _ = req("POST", "/secret/%s" % _sid, {"Origin": _same},
+                              b"key=sk-good", limit=20000)
+        _env_text = (STAGE / ".env").read_text(encoding="utf-8")
+        check(_code == 200 and b"Choose the model" in _pick
+              and "sk-good" not in _pick.decode()
+              and any(ln.startswith("TEST_KEY=sk-good") for ln in _env_text.splitlines()),
+              "the accepted key goes to .env and the page asks the model",
+              (_code, _pick[:200]))
+        if os.name != "nt":
+            check(oct(os.stat(STAGE / ".env").st_mode & 0o777) == "0o600",
+                  "the .env holding the key is mode 600",
+                  oct(os.stat(STAGE / ".env").st_mode & 0o777))
+        _code, _done, _ = req("POST", "/secret/%s" % _sid, {"Origin": "null"},
+                              b"model=cloud-a", limit=20000)
+        _cfg = json.loads((STAGE / "config.json").read_text(encoding="utf-8"))
+        _entry = [f for f in _cfg["llm"].get("fallbacks") or []
+                  if f.get("base_url") == _purl]
+        check(_code == 200 and b"Added" in _done and bool(_entry)
+              and _entry[0].get("model") == "cloud-a"
+              and _entry[0].get("api_key_env") == "TEST_KEY",
+              "the model pick finishes the add from the door, key env wired",
+              (_code, _done[:200], _entry))
+        check(req("GET", "/secret/%s" % _sid)[0] == 410
+              and req("POST", "/secret/%s" % _sid, {"Origin": "null"},
+                      b"key=sk-good")[0] == 410,
+              "the link is single-use: the page and the POST both answer 410 after it")
+    finally:
+        _prov.shutdown()
+        _prov.server_close()
+        (STAGE / "config.json").write_text(_saved_cfg, encoding="utf-8")
+        if _saved_env is None:
+            if (STAGE / ".env").exists():
+                (STAGE / ".env").unlink()
+        else:
+            (STAGE / ".env").write_text(_saved_env, encoding="utf-8")
+        fb.CONFIG["web"] = _saved_web
+        fb.CONFIG["llm"] = _saved_llm
+        os.environ.pop("TEST_KEY", None)
     check(req("POST", "/api/tasks", {**TOK, "Origin": "null"}, b"{}")[0] == 403,
-          "...while every authenticated route still refuses it")
+          "...while every authenticated route still refuses an opaque Origin")
     check(fb._web_authority("[::1]:8790") == ("::1", "8790")
           and fb._web_authority("box") == ("box", "")
           and fb._web_authority("127.0.0.1") != fb._web_authority("127.0.0.1:8790"),

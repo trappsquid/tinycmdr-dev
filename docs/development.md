@@ -200,6 +200,14 @@ a release published into the source repo is a release nobody can fetch.
    (render, the prose numbers, gate, commit, push), each one skippable and each one skipped at least
    once.
 
+**A touched platform carries its test in the same batch.** A change that edits a platform branch
+(a Windows path, a POSIX mode check) or a door's request contract (Host, Origin, body) lands with
+a test that exercises that path on that platform - `tests/windows-tier.json` says where a Windows
+suite is graded, and `tests/test_webui.py` grades the page's request contract. A cut is not
+proposed, and `release.sh` is not run, until that test exists and the gate is green; the notes name
+it. (Measured 2026-10-16: a route shipped with handler-level tests only, and a real browser's
+request was refused by the door that advertised it.)
+
 **A fix does not wait for a release, and a release is not grown by fixes.** Fixes land on `main` as
 ordinary commits; when a version is due, the batch above ships whatever `main` holds - it is never
 held open to gather more work, and its notes name the user-visible changes, not the work that
