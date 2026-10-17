@@ -3966,6 +3966,16 @@ def _checkpoint_run(key, request, scripted, plan=None):
 _CHECKPOINT_MARK = "the harness's own state says the task is not finished"
 
 
+def _payload_text(payloads):
+    """What the model actually read, unescaped.
+
+    json.dumps turns a Windows path into `C:\\\\...`, so a literal-path assertion
+    against the dump fails on Windows while the checkpoint is doing its job (caught in
+    the Windows tier, 2026-10-17).
+    """
+    return "\n".join(str(m.get("content") or "") for p in payloads for m in p)
+
+
 def test_an_open_plan_earns_one_checkpoint_before_the_answer():
     """STATE, not words (2026-10-16): a plan step the model set is still open, so the
     answer that would end the run gets ONE harness turn first. A second answer without
@@ -4010,7 +4020,7 @@ def test_a_completion_announced_earlier_earns_one_checkpoint():
          {"role": "assistant", "content": "Report: the pass is done."},
          {"role": "assistant", "content": "Final: nothing left undone."},
          {"role": "assistant", "content": "a third answer must never be asked for"}])
-    sent = json.dumps(payloads)
+    sent = _payload_text(payloads)
     check("checkpoint: the announcement count is the trigger",
           "announced the work complete 3 time(s)" in sent, sent[-600:])
     check("checkpoint: the model's own final answer ends the run",
@@ -4029,12 +4039,29 @@ def test_a_missing_request_path_earns_one_checkpoint():
             {"role": "assistant", "content": "Could not create the deliverable."},
             {"role": "assistant", "content": "a third answer must never be asked for"},
         ])
-    sent = json.dumps(payloads)
+    sent = _payload_text(payloads)
     check("checkpoint: the missing request path is named",
           "do not exist" in sent and str(target) in sent, sent[-600:])
     check("checkpoint: the next bare answer ships",
           calls == 2 and "Could not create the deliverable." in out,
           (calls, out[:200]))
+
+
+def test_a_windows_drive_letter_path_earns_one_checkpoint():
+    """Windows spells the same request with a drive letter (2026-10-17): the token
+    must arrive whole, or the checkpoint names half a path. The Windows run of this
+    suite caught the escaped-path assertion; this case runs everywhere."""
+    win = r"C:\Users\me\out\checkpoint-win.md"
+    out, calls, payloads = _checkpoint_run(
+        "checkpoint-winpath", "write it to %s" % win, [
+            {"role": "assistant", "content": "Written."},
+            {"role": "assistant", "content": "Final: the drive-letter path was not created."},
+            {"role": "assistant", "content": "a third answer must never be asked for"},
+        ])
+    sent = _payload_text(payloads)
+    check("checkpoint: the Windows path is named in full", win in sent, sent[-600:])
+    check("checkpoint: the drive-letter run delivers its second answer",
+          calls == 2 and "was not created" in out, (calls, out[:200]))
 
 
 def test_ask_user_is_bounced_once_when_state_says_work_remains():
