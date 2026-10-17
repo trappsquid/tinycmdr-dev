@@ -5,6 +5,17 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.25] - 2026-10-16
+
+### Added
+- **Agent:** a run about to deliver an answer while the harness's own state says work remains — an open plan step, a completion announced earlier, or a request-named path that does not exist — gets one mandatory check before it ships, and `ask_user` is not opened once while that state holds (tests/test_stall.py).
+
+### Changed
+- **Agent:** the advisory mid-run completion reminder and its `agent.deliver_after_announcements` key are gone; the pre-delivery checkpoint carries the same advice when the answer is delivered (tests/test_stall.py).
+
+### Fixed
+- **Web:** the one-time key form refused a real browser's POST with 403 because the browser sends an opaque origin — the capability-only page route accepts it now, while every authenticated route and the Host allowlist keep the strict check (tests/test_webui.py).
+
 ## [1.1.24] - 2026-10-16
 
 ### Changed
