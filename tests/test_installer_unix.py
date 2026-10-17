@@ -1524,8 +1524,8 @@ def main():
         # suite (test_installer_windows.py). 77 is this tree's "could not grade the subject on
         # this host", the same answer it gives when no acceptable interpreter is present - and
         # the runner counts a skip as red on purpose, so this cannot hide. The tier file
-        # declares it not_applicable for the same reason: as a `scheduled` suite it turned
-        # the Windows nightly red on its every run, on this one skip (measured 2026-10-12).
+        # declares it not_applicable for the same reason: in a graded tier this one skip
+        # turned the Windows job red on every run (measured 2026-10-12).
         print("SKIP Windows: this suite grades the Unix installer (bash + systemd + AF_UNIX); "
               "test_installer_windows.py covers the Windows one")
         return 77

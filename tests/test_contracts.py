@@ -286,11 +286,14 @@ def main():
           "%s vs %s" % (_release_repo, _fetch))
 
     # ---- the Windows tier is stated in ONE file, and it is complete ---------------------
-    # tests/windows-tier.json is the single place this is declared: `must` (graded on Windows
-    # in the dev CI on every push), `scheduled` (the rest of what can run there: nightly and on
-    # demand), `excluded` (red on Windows, each with the reason it is not fixed), and
-    # `not_applicable` (cannot run there at all, and says so itself). Both workflows name a
-    # TIER - run_all.py --tier - instead of carrying a suite list, because two hand-kept lists
+    # tests/windows-tier.json is the single place this is declared: `must` and `scheduled`
+    # partition what can run on Windows (the first is the platform-branch subset, the second
+    # the rest), `excluded` (red on Windows, each with the reason it is not fixed), and
+    # `not_applicable` (cannot run there at all, and says so itself). Both workflows grade
+    # `--tier windows` - the whole set - on every push (2026-10-17): the old split graded
+    # `must` per push and the rest nightly, and the surface grades must+scheduled, so a
+    # scheduled-suite break was invisible to the source line until the surface ran it. Both
+    # workflows name a TIER instead of carrying a suite list, because two hand-kept lists
     # drift: a suite that only the product's workflow ran on Windows reached the install
     # surface untested (measured 2026-10-08, tests/test_lane_choice.py).
     _tier = json.loads((BASE / "tests" / "windows-tier.json").read_text(encoding="utf-8"))
@@ -325,8 +328,9 @@ def main():
         _dev_expanded |= _hits
     check("...and every dev_only suite is still declared somewhere that grades it",
           # `must`/`scheduled` on Windows, or `not_applicable` with its platform declared
-          # (tests/test_installer_unix.py: POSIX-only, and as a `scheduled` suite it made
-          # the Windows nightly red on its own skip every night).
+          # (tests/test_installer_unix.py: POSIX-only, declared not_applicable because in a
+          # graded tier its own skip turned the Windows job red on every run, measured
+          # 2026-10-12).
           _dev_expanded and _dev_expanded <= (_buckets["must"] | _buckets["scheduled"]
                                               | _buckets["not_applicable"]),
           sorted(_dev_expanded - (_buckets["must"] | _buckets["scheduled"]
@@ -342,7 +346,7 @@ def main():
     _wf_prod = (BASE / "maintenance" / "product-files" / "tests.yml").read_text(
         encoding="utf-8")
     check("both Windows jobs name a TIER, not a suite list",
-          "--tier must" in _wf_dev and "--tier windows" in _wf_prod
+          "--tier windows" in _wf_dev and "--tier windows" in _wf_prod
           and "--exclude tests/" not in _wf_prod,
           [_ln.strip() for _ln in _wf_prod.splitlines() if "--exclude" in _ln][:4])
     _items = json.loads((BASE / "STATUS.json").read_text(encoding="utf-8"))["items"]

@@ -270,14 +270,17 @@ product-suite fix reaches the surface without a release.
 
 **The Windows tier is one declared file**: `tests/windows-tier.json`, read by
 `tests/run_all.py --tier <must|scheduled|windows>` and named by both workflows instead of a
-hand-kept list in each. `must` is graded on Windows in the dev CI on every push, `scheduled` is the
-rest of what can run there (nightly, and on demand), `excluded` is red there and carries its reason,
+hand-kept list in each. `must` and `scheduled` partition what can run on Windows (the first is the
+platform-branch subset, the second the rest), `excluded` is red there and carries its reason,
 `not_applicable` cannot run there at all, and `dev_only` marks the suites the product does not ship
-(the surface reads the same file and skips them out loud). `tests/test_contracts.py` fails if a
-suite in the tree is not declared exactly once, if an exclusion carries no reason, or if
-`STATUS.json`'s `windows-tier-on-the-install-surface` item disagrees; the runner refuses a pattern
-that matches no suite. Two lists drifting is what put a Windows-only crash in a suite the surface
-ran and the dev line never did (measured 2026-10-08, tests/test_lane_choice.py).
+(the surface reads the same file and skips them out loud). **Both CI jobs grade `--tier windows` -
+the whole set - on every push** (2026-10-17): the old split graded `must` per push and the rest
+nightly, so a scheduled-suite break could sit a day in a job nobody watched while the surface, which
+grades must+scheduled, saw it first. `tests/test_contracts.py` fails if a suite in the tree is not
+declared exactly once, if an exclusion carries no reason, if either job names a different tier, or
+if `STATUS.json`'s `windows-tier-on-the-install-surface` item disagrees; the runner refuses a
+pattern that matches no suite. Two lists drifting is what put a Windows-only crash in a suite the
+surface ran and the dev line never did (measured 2026-10-08, tests/test_lane_choice.py).
 
 **The archives are not byte-reproducible across builds** (zip metadata differs; `install.sh` and
 the other plain files are identical). So a re-download is checked against the release's own

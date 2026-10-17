@@ -86,11 +86,11 @@ ENVELOPE_SUITE = "tests/test_envelope.py"
 # reached the surface untested (measured 2026-10-08, tests/test_lane_choice.py).
 WINDOWS_TIER = TESTS / "windows-tier.json"
 TIERS = {
-    # graded on Windows in the dev CI, every push
+    # the platform-branch suites: a fast subset when a full Windows sweep is not needed
     "must": ("must",),
-    # everything else that can run on Windows: nightly, and on demand
+    # the rest of what can run on Windows
     "scheduled": ("scheduled",),
-    # what the install surface's windows job runs
+    # everything Windows-capable; BOTH CI jobs grade this, on every push (2026-10-17)
     "windows": ("must", "scheduled"),
 }
 
