@@ -731,6 +731,11 @@ is offered now, the configured one first and marked current.
             # Telegram and the page all land in model_command) offers the configured
             # model too (reported 2026-10-12)
             mod7 = stage(work / "chatdoor")
+            # The key form's door: a staged module has no web lane, so the wizard's
+            # preflight would read "down". Pin the LAN shape for the flow tests; the
+            # off/down hints get their own overrides in the key-form block below.
+            _door_lan = lambda: ("lan", "http://127.0.0.1:9999")
+            mod7._secret_door_state = _door_lan
             mod7.CONFIG["llm"]["base_url"] = base
             mod7.CONFIG["llm"]["model"] = "local-gguf-27b"
             mod7.CONFIG["llm"]["api_key"] = "sk-good"
@@ -783,7 +788,7 @@ is offered now, the configured one first and marked current.
                   "a bare `model add` in chat asks the first question in the chat",
                   reply[:300])
             reply = mod7.model_command("mattermost:suite", "add cloud")
-            check("Send the provider's link" in reply and "token set" in reply,
+            check("Send the provider's link" in reply and "page" in reply,
                   "...and a kind word already typed starts at the link question",
                   reply[:300])
 
@@ -907,7 +912,7 @@ is offered now, the configured one first and marked current.
             reply = mod7.model_command(_wkey, "add")
             reply = mod7._web_command("cloud", _wkey)
             check(reply[0] == "reply" and "https://api.deepseek.com/v1" in reply[1]
-                  and "token set" in reply[1],
+                  and "page" in reply[1],
                   "`cloud` starts at the provider-shaped link question", str(reply)[:300])
             reply = mod7._web_command("cancel", _wkey)
             check(reply[0] == "reply" and "Cancelled" in reply[1]
@@ -943,6 +948,91 @@ is offered now, the configured one first and marked current.
             check(mod7._web_command("cloud", _wkey)[0] == "task",
                   "any other `/model` word abandons the wizard instead of leaving it",
                   str(mod7._web_command("cloud", _wkey))[:160])
+
+            # ---- the key form: a provider secret never crosses the chat ----------------
+            try:
+                # 1) the preflight names the two states that make the form impossible
+                mod7._secret_door_state = lambda: ("off", "")
+                mod7.model_command(_wkey, "add")
+                _off = mod7._web_command("cloud", _wkey)
+                check(_off[0] == "reply" and "web.enabled" in _off[1]
+                      and "token set" in _off[1]
+                      and mod7._web_command("local", _wkey)[0] == "task",
+                      "page off: the cloud ask names the switch and ends the wizard",
+                      str(_off)[:400])
+                mod7._secret_door_state = lambda: ("down", "port 8790 held")
+                mod7.model_command(_wkey, "add")
+                _down = mod7._web_command("cloud", _wkey)
+                check(_down[0] == "reply" and "not listening" in _down[1]
+                      and "doctor" in _down[1] and "token set" in _down[1]
+                      and mod7._web_command("local", _wkey)[0] == "task",
+                      "page down: the cloud ask names the fault and the host command",
+                      str(_down)[:400])
+                # 2) page up: a 401 endpoint gets a one-time link, never a key question
+                mod7._secret_door_state = _door_lan
+                port_k, srv_k = serve()
+                base_k = "http://127.0.0.1:%d/v1" % port_k
+                try:
+                    mod7.model_command(_wkey, "add")
+                    _kind_k = mod7._web_command("cloud", _wkey)
+                    _link = mod7._web_command(base_k, _wkey)
+                    _sid = (str(_link[1]).split("/secret/", 1)[1].split(" ", 1)[0]
+                            if "/secret/" in str(_link[1]) else "")
+                    _env_name = (mod7._secret_door_take(_sid) or {}).get("env") or ""
+                    check(_kind_k[0] == "reply" and "page" in _kind_k[1]
+                          and _link[0] == "reply" and "needs a key" in _link[1]
+                          and bool(_sid) and "never enters the chat" in _link[1],
+                          "401: the wizard posts a one-time link, not a key question",
+                          (str(_kind_k)[:200], str(_link)[:400]))
+                    _typed = mod7._model_wizard_reply(_wkey, "sk-typed-into-the-chat")
+                    check("goes on the page" in str(_typed)
+                          and "sk-typed-into-the-chat" not in str(_typed),
+                          "a key typed into the chat is refused, never taken",
+                          str(_typed)[:200])
+                    _code, _bad = mod7._secret_form_submit(_sid, {"key": "sk-bad"})
+                    _env_now = (work / "chatdoor" / ".env").read_text(encoding="utf-8")
+                    check(_code == 400 and "refused" in _bad.lower()
+                          and "sk-bad" not in _env_now,
+                          "a refused key is never written to .env",
+                          (_code, _bad[:200]))
+                    _code, _pick_html = mod7._secret_form_submit(_sid, {"key": "sk-good"})
+                    _env_now = (work / "chatdoor" / ".env").read_text(encoding="utf-8")
+                    _got = [ln for ln in _env_now.splitlines()
+                            if _env_name and ln.startswith(_env_name + "=")]
+                    check(_code == 200 and "Choose the model" in _pick_html
+                          and "sk-good" not in _pick_html and bool(_got),
+                          "an accepted key lands in .env; the page asks the model",
+                          (_code, _pick_html[:300], _got))
+                    if os.name != "nt":
+                        _mode = oct((work / "chatdoor" / ".env").stat().st_mode & 0o777)
+                        check(_mode == "0o600",
+                              "the .env holding the key is mode 600", _mode)
+                    _code, _done = mod7._secret_form_submit(_sid, {"model": "cloud-a"})
+                    _cfg7 = json.loads((work / "chatdoor" / "config.json")
+                                       .read_text(encoding="utf-8"))
+                    _entry = [f for f in _cfg7["llm"].get("fallbacks") or []
+                              if f.get("base_url") == base_k]
+                    check(_code == 200 and "Added" in _done and bool(_entry)
+                          and _entry[0].get("model") == "cloud-a"
+                          and _env_name
+                          and _entry[0].get("api_key_env") == _env_name,
+                          "the model pick finishes the add, key env wired",
+                          (_code, _done[:300], _entry))
+                    check(mod7._secret_door_take(_sid) is None,
+                          "the link burns after the add", _sid)
+                    check(mod7._model_wizard_reply(_wkey, "hello") is None,
+                          "...and the chat wizard row ends with it", None)
+                finally:
+                    srv_k.shutdown()
+                    srv_k.server_close()
+                # 3) an aged link is dead before it can write
+                _sid2 = mod7._secret_door_mint("X_API_KEY", base_k, "w:ttl")
+                with mod7._SECRET_DOOR_LOCK:
+                    mod7._SECRET_DOOR[_sid2]["at"] -= mod7._SECRET_DOOR_TTL + 1
+                check(mod7._secret_door_take(_sid2) is None,
+                      "an aged link is dropped before it can write anything", _sid2)
+            finally:
+                mod7._secret_door_state = _door_lan
 
             # ---- helpers ----------------------------------------------------------------
             check(mod._next_endpoint_env([{"api_key_env": "TINYCMDR_ENDPOINT1_API_KEY"}])

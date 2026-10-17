@@ -28428,8 +28428,11 @@ def _model_help_text(cat, current):
 # The in-chat model wizard: `/model add` with no link asks its questions IN the chat
 # instead of answering one usage block (his call, 2026-10-16). One row per conversation,
 # dropped when it finishes, is cancelled, or ages out - a question left open must never
-# swallow a message sent later. The KEY question stays a shell conversation: its value
-# is never typed into a chat.
+# swallow a message sent later. A provider KEY is never typed into a chat: the wizard
+# mints a one-time link to the page's secret form, which writes .env and burns the id
+# (his correction, 2026-10-16 - deleting the chat message needed a bot role that must
+# not be assumed). With the page off or not listening the wizard names the host command
+# instead of walking into a dead end.
 _MODEL_WIZARD = {}
 _MODEL_WIZARD_LOCK = threading.Lock()
 _MODEL_WIZARD_TTL = 600.0        # seconds a row may wait between answers
@@ -28439,8 +28442,8 @@ _MODEL_WIZARD_CANCEL = ("cancel", "stop", "never mind", "nevermind", "quit")
 
 def _model_wizard_link_ask(kind):
     if kind in ("cloud", "hosted", "online", "provider", "remote"):
-        return ("Send the provider's link, e.g. `https://api.deepseek.com/v1` — its key "
-                "is set on the host (`tinycmdr token set NAME`), never here "
+        return ("Send the provider's link, e.g. `https://api.deepseek.com/v1` - a key "
+                "is entered on the box's page when the endpoint asks for one "
                 "(`cancel` stops).")
     return "Send the link, e.g. `http://<box>:8081/v1` (`cancel` stops)."
 
@@ -28509,6 +28512,27 @@ def _model_wizard_reply(session_key, text):
     step = row.get("step")
     if step == "kind":
         if low in _ENDPOINT_KIND_WORDS:
+            if low in ("cloud", "hosted", "online", "provider", "remote"):
+                # The key needs a door that can take a secret WITHOUT the chat: the
+                # one-time form on the page. Catch the two states that make that
+                # impossible here, so the interview never walks into a dead end.
+                state, base = _secret_door_state()
+                name = _next_endpoint_env(CONFIG["llm"].get("fallbacks") or [])
+                if state == "off":
+                    _model_wizard_end(session_key)
+                    return ("Hosted endpoints need a key, and the key form lives on "
+                            "the page - which is off on this box (`web.enabled: "
+                            "false`). Turn it on (`tinycmdr setup`, or set it and "
+                            "restart), then `/model add` again. Or set the key on the "
+                            "host: `tinycmdr token set %s`, then `/model add <link> "
+                            "--key-env %s`." % (name, name))
+                if state == "down":
+                    _model_wizard_end(session_key)
+                    return ("Hosted endpoints need a key, and the key form's page is "
+                            "enabled but not listening (%s). `tinycmdr doctor` names "
+                            "it; meanwhile set the key on the host: `tinycmdr token "
+                            "set %s`, then `/model add <link> --key-env %s`."
+                            % (base or "no web lane recorded", name, name))
             row["kind"], row["step"], row["tries"] = low, "link", 0
             return _model_wizard_link_ask(low)
         return _model_wizard_wrong(row, session_key, said, "`local` or `cloud`")
@@ -28519,6 +28543,29 @@ def _model_wizard_reply(session_key, text):
         url = said.rstrip("/")
         res = probe_endpoint(url, _endpoint_key(""))
         ids = [str(i) for i in res["ids"]] if res["ok"] else []
+        if not res["ok"] and res["status"] in (401, 403):
+            state, base = _secret_door_state()
+            name = _next_endpoint_env(CONFIG["llm"].get("fallbacks") or [])
+            if state in ("off", "down"):
+                _model_wizard_end(session_key)
+                return ("`%s` needs a key (HTTP %d), and the key form's page is %s. "
+                        "Set the key on the host - `tinycmdr token set %s` - then "
+                        "`/model add %s --key-env %s` here."
+                        % (url, res["status"],
+                           "off (`web.enabled: false`)" if state == "off" else
+                           "not listening (%s)" % (base or "no web lane"), name,
+                           url, name))
+            sid = _secret_door_mint(name, url, session_key)
+            link = "%s/secret/%s" % (base, sid)
+            note = ("" if state == "lan" else
+                    " The page listens on loopback: open it on this box, or forward "
+                    "its port over ssh.")
+            row["url"], row["keyenv"], row["link"] = url, name, link
+            row["step"], row["tries"] = "secret", 0
+            return ("`%s` needs a key (HTTP %d). Send it at %s - one use, ten "
+                    "minutes, straight into this box's .env as `%s`; the key never "
+                    "enters the chat.%s (`skip` adds it unverified, `cancel` stops.)"
+                    % (url, res["status"], link, name, note))
         if len(ids) > 1:
             row["url"], row["ids"], row["step"], row["tries"] = url, ids[:12], "pick", 0
             return ("`%s` serves several models:\n%s\nReply the number (`cancel` stops)."
@@ -28527,6 +28574,15 @@ def _model_wizard_reply(session_key, text):
         out = verb_from_chat("model add %s" % url)
         _model_wizard_end(session_key)
         return out
+    if step == "secret":
+        url = str(row.get("url") or "")
+        if low == "skip":
+            out = verb_from_chat("model add %s --force" % url)
+            _model_wizard_end(session_key)
+            return out
+        return ("The key goes on the page, not in the chat: %s (or `skip` to add %s "
+                "unverified, `cancel` to stop)."
+                % (row.get("link") or "(the link above)", url))
     if step == "pick":
         url, ids = str(row.get("url") or ""), list(row.get("ids") or [])
         want = (ids[int(said) - 1]
@@ -28540,6 +28596,195 @@ def _model_wizard_reply(session_key, text):
         return out
     _model_wizard_end(session_key)
     return None
+
+
+# The one-time secret form: a provider key never enters a chat. The wizard mints an id,
+# the chat carries only the link, the page POSTs the value into .env, and the id burns.
+# In memory only: a restart drops every pending link (nothing to leak, nothing to age on
+# disk), and the TTL bounds a link that was never opened.
+_SECRET_DOOR = {}
+_SECRET_DOOR_LOCK = threading.Lock()
+_SECRET_DOOR_TTL = 600.0
+_SECRET_DOOR_TRIES = 5
+
+
+def _secret_door_prune():
+    now = time.time()
+    with _SECRET_DOOR_LOCK:
+        for sid, rec in list(_SECRET_DOOR.items()):
+            if now - float(rec.get("at") or 0.0) > _SECRET_DOOR_TTL:
+                _SECRET_DOOR.pop(sid, None)
+
+
+def _secret_door_state():
+    """How this box can take a key right now: (state, page base url).
+
+    "off"      `web.enabled` false - the operator's switch, and the hint names it.
+    "down"     enabled but no web lane bound - a fault, and `doctor` names it.
+    "loopback" the page listens on 127.0.0.1 - the link opens on the box or a tunnel.
+    "lan"      the page listens on 0.0.0.0 - the link is the box's LAN address.
+    """
+    web = CONFIG.get("web") or {}
+    if not web.get("enabled", True):
+        return "off", ""
+    rec = (_lane_state_read().get("lanes") or {}).get("web") or {}
+    if not rec.get("ok"):
+        return "down", str(rec.get("detail") or "")
+    port = web_port_recorded() or web_port_effective()
+    host = str(web.get("host") or "127.0.0.1")
+    if host in ("0.0.0.0", "::", ""):
+        ip = _web_outbound_ip()
+        if ip:
+            return "lan", "http://%s:%d" % (_url_host(ip), port)
+        return "loopback", "http://127.0.0.1:%d" % port
+    return "loopback", "http://%s:%d" % (_url_host(host), port)
+
+
+def _secret_door_mint(env_name, url, session_key):
+    _secret_door_prune()
+    import secrets as _secrets
+    sid = _secrets.token_urlsafe(32)
+    with _SECRET_DOOR_LOCK:
+        _SECRET_DOOR[sid] = {"env": env_name, "url": url, "session": session_key,
+                             "at": time.time(), "tries": 0, "stage": "key", "ids": []}
+    return sid
+
+
+def _secret_door_take(sid):
+    """A live record (a copy), or None - expired, unknown, or out of tries."""
+    _secret_door_prune()
+    with _SECRET_DOOR_LOCK:
+        rec = _SECRET_DOOR.get(str(sid or ""))
+        return dict(rec) if rec is not None else None
+
+
+def _secret_door_update(sid, **fields):
+    with _SECRET_DOOR_LOCK:
+        rec = _SECRET_DOOR.get(str(sid or ""))
+        if rec is not None:
+            rec.update(fields)
+
+
+def _secret_door_burn(sid):
+    with _SECRET_DOOR_LOCK:
+        _SECRET_DOOR.pop(str(sid or ""), None)
+
+
+def _run_model_add(args):
+    """(exit code, output) for `model add ...` - the page reports the REAL result.
+
+    verb_from_chat returns the text with an "(exit N)" tail a page should not have to
+    parse, and a page that says "Added" over a refusal is the shape this suite exists to
+    catch (measured 2026-10-16: the provider was already the primary and the page still
+    said Added).
+    """
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = run_verb(["model", "add"] + [str(a) for a in args])
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 0
+    except Exception as e:                                       # noqa: BLE001
+        return 1, "model add failed: %s" % e
+    return int(code or 0), (buf.getvalue().strip() or "(no output)")
+
+
+def _secret_page(body):
+    return ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>tinycmdr - model key</title><style>body{font-family:system-ui,"
+            "sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;line-height:1.5}"
+            "input,select,button{font-size:1rem;padding:.5rem;margin:.4rem 0}"
+            "input{width:100%%}.bad{color:#b00020}.ok{color:#0a7a2f}"
+            "code,pre{background:#f2f2f2}pre{padding:.5rem;overflow:auto}</style>"
+            "</head><body><h2>Provider key</h2>%s</body></html>" % body)
+
+
+def _secret_form_html(rec, sid):
+    """One pending key (or model pick) as a form - no script, no state in the page."""
+    env = html.escape(str(rec.get("env") or ""))
+    url = html.escape(str(rec.get("url") or ""))
+    action = html.escape(str(sid))
+    if rec.get("stage") == "model" and rec.get("ids"):
+        opts = "".join("<option value=\"%s\">%s</option>"
+                       % (html.escape(str(i)), html.escape(str(i)))
+                       for i in rec["ids"])
+        return ("<p>Key stored as <code>%s</code> in .env (mode 600). Choose the model "
+                "for <code>%s</code>:</p><form method=\"post\" action=\"/secret/%s\">"
+                "<select name=\"model\">%s</select> "
+                "<button type=\"submit\">Add endpoint</button></form>"
+                % (env, url, action, opts))
+    return ("<p>Storing the key for <code>%s</code> as <code>%s</code> in this box's "
+            ".env (mode 600). It is never written to a chat.</p>"
+            "<form method=\"post\" action=\"/secret/%s\">"
+            "<input type=\"password\" name=\"key\" autocomplete=\"off\" "
+            "autocapitalize=\"off\" spellcheck=\"false\" "
+            "placeholder=\"provider key\"><button type=\"submit\">Store key</button>"
+            "</form><p>One use, ten minutes.</p>" % (url, env, action))
+
+
+def _secret_form_submit(sid, form):
+    """(http code, page body) for one POST to /secret/<id>.
+
+    The value is proved against the provider BEFORE it is written, .env takes it (mode
+    600) and the endpoint is added with --key-env so it is actually wired. A provider
+    that serves several models asks once more here, because the model matters.
+    """
+    rec = _secret_door_take(sid)
+    if rec is None:
+        return 410, ("<p class=\"bad\">This link is used, expired, or unknown. Run "
+                     "`/model add` in the chat for a new one.</p>")
+    if rec.get("stage") == "model":
+        want = " ".join(str(form.get("model") or "").split())
+        if want not in [str(i) for i in rec.get("ids") or []]:
+            return 400, "<p class=\"bad\">Pick one of the listed models.</p>"
+        code, out = _run_model_add([rec["url"], "--key-env", rec["env"],
+                                    "--model", want])
+        _secret_door_burn(sid)
+        _model_wizard_end(rec.get("session") or "")
+        if code != 0:
+            return 400, ("<p class=\"bad\">The endpoint was not added.</p>"
+                         "<pre>%s</pre>" % html.escape(out))
+        return 200, ("<p class=\"ok\">Added <code>%s</code> -&gt; <code>%s</code>.</p>"
+                     "<pre>%s</pre><p>You can close this tab and return to the chat.</p>"
+                     % (html.escape(rec["url"]), html.escape(want), html.escape(out)))
+    value = str(form.get("key") or "").strip()
+    if not value or " " in value or len(value) > 512:
+        return 400, "<p class=\"bad\">That is not one key. Try again.</p>"
+    res = probe_endpoint(rec["url"], value)
+    if not res["ok"] and res["status"] in (401, 403):
+        with _SECRET_DOOR_LOCK:
+            live = _SECRET_DOOR.get(str(sid))
+            if live is not None:
+                live["tries"] = int(live.get("tries") or 0) + 1
+                if live["tries"] >= _SECRET_DOOR_TRIES:
+                    _SECRET_DOOR.pop(str(sid), None)
+                    return 400, ("<p class=\"bad\">Refused, and this link is spent. "
+                                 "Run `/model add` again.</p>")
+        return 400, ("<p class=\"bad\">The provider refused that key (HTTP %d) - "
+                     "nothing was stored. Try again, or run `/model add` again.</p>"
+                     % res["status"])
+    if not _env_set_safe(rec["env"], value):
+        _secret_door_burn(sid)
+        _model_wizard_end(rec.get("session") or "")
+        return 500, "<p class=\"bad\">Could not write .env - the add ended.</p>"
+    os.environ[rec["env"]] = value
+    ids = [str(i) for i in res["ids"]] if res["ok"] else []
+    if len(ids) > 1:
+        _secret_door_update(sid, stage="model", ids=ids[:12])
+        return 200, _secret_form_html(_secret_door_take(sid) or rec, sid)
+    code, out = _run_model_add([rec["url"], "--key-env", rec["env"]]
+                               + (["--model", ids[0]] if len(ids) == 1 else []))
+    _secret_door_burn(sid)
+    _model_wizard_end(rec.get("session") or "")
+    if code != 0:
+        return 400, ("<p class=\"bad\">Key stored as <code>%s</code> (mode 600), but "
+                     "the endpoint was not added.</p><pre>%s</pre>"
+                     % (html.escape(rec["env"]), html.escape(out)))
+    return 200, ("<p class=\"ok\">Key stored as <code>%s</code> (mode 600) and the "
+                 "endpoint added.</p><pre>%s</pre>"
+                 "<p>You can close this tab and return to the chat.</p>"
+                 % (html.escape(rec["env"]), html.escape(out)))
 
 
 def model_command(session_key, arg):
@@ -34284,6 +34529,20 @@ def run_webui():
             if not self._origin_ok():
                 self._forbidden()
                 return
+            if self.path.startswith("/secret/"):
+                # The one-time key form: the id IS the capability (32 random bytes, one
+                # use, ten minutes), so no page token - the user may be on a phone that
+                # never logged in. The page writes exactly ONE named .env variable and
+                # reads nothing.
+                sid = self.path[len("/secret/"):].split("?", 1)[0].strip("/")
+                rec = _secret_door_take(sid)
+                if rec is None:
+                    self._send(_secret_page(
+                        "<p class=\"bad\">This link is used, expired, or unknown. "
+                        "Run `/model add` in the chat for a new one.</p>"), 410)
+                    return
+                self._send(_secret_page(_secret_form_html(rec, sid)))
+                return
             if self.path.startswith("/api/health"):
                 # The tier split (A-2026-10-05-38): a loopback peer or a token holder
                 # sees the whole page; any other peer gets ok+version only. `_auth_ok`
@@ -34804,6 +35063,19 @@ def run_webui():
                 return
             if not self._origin_ok():
                 self._forbidden()
+                return
+            if self.path.startswith("/secret/"):
+                sid = self.path[len("/secret/"):].split("?", 1)[0].strip("/")
+                data = self._raw(4096)
+                if data is None:
+                    self._send(_secret_page("<p class=\"bad\">Empty or overlong "
+                                            "body.</p>"), 413)
+                    return
+                from urllib.parse import parse_qs
+                form = {k: str((v or [""])[0])
+                        for k, v in parse_qs(data.decode("utf-8", "replace")).items()}
+                code, body = _secret_form_submit(sid, form)
+                self._send(_secret_page(body), code)
                 return
             if self.path.startswith("/a2a"):
                 # The A2A JSON-RPC endpoint: SendMessage runs one message through this
