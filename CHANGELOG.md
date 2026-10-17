@@ -5,6 +5,12 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.24] - 2026-10-16
+
+### Changed
+- **Chat:** a cloud `/model add` no longer dead-ends on a host command — a 401 posts a one-time link to the page's masked key form, which writes `.env` only after the provider accepts the key and adds the endpoint with `--key-env`, and a page that is off or not listening gets a hint naming the switch or the fault (tests/test_model_surface.py).
+- **Prompt:** the `ask_user` tool description and the doctrine name the permission-ask anti-pattern — after a botch, or while part of the job is unfinished, the request stands, so the model fixes and finishes it or says what blocks it.
+
 ## [1.1.23] - 2026-10-16
 
 ### Changed

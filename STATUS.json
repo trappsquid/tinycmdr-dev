@@ -3557,6 +3557,27 @@
       },
       "detail": "A call is checked against the JSON-Schema subset its tool declares (type unions included) before the handler runs, and a tool's declared env keys answer at call time through one ctx credential seam instead of refusing the tool's whole file at load.",
       "gate": "tests/test_tool_args_surface.py grades both gates"
+    },
+    {
+      "id": "ask-user-permission-ask-named",
+      "title": "the ask doctrine names the permission-ask anti-pattern",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "00699c3",
+        "expect": "untagged"
+      },
+      "detail": "The ask_user tool description and the system-prompt doctrine now name the demonstrated anti-pattern - after a botch, or while part of the job is unfinished, the request stands: fix and finish it, or say what blocks you - and the 'preference' door is narrowed to a choice the request itself leaves open."
+    },
+    {
+      "id": "model-wizard-key-one-time-page",
+      "title": "a cloud model add takes its key on a one-time page form",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "86f6c59",
+        "expect": "untagged"
+      },
+      "detail": "A cloud `/model add` no longer dead-ends on a host command: a 401 mints a one-time link to the page's masked key form, which writes .env only after the provider accepts the key, adds the endpoint with --key-env, and burns the id; a page that is off or not listening gets a hint naming the switch or the fault.",
+      "gate": "tests/test_model_surface.py grades the link, the refused key writing nothing, the model pick, the burn and the aged link"
     }
   ]
 }
