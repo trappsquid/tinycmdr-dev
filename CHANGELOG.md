@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.26] - 2026-10-18
+
+### Changed
+- **Setup:** the page token has no length or character rule — any non-empty value without control characters is written, and an empty one still mints a strong token (tests/test_verbs.py).
+
+### Fixed
+- **Web:** the page's links named the VPN tunnel's address while a client owned the default route, so setup, `web`, doctor and the chat key-form link were unreachable from the box's own LAN; the address pick reads the adapter table and skips tunnel and virtual interfaces, and all three installers drop them too (tests/test_webui.py, tests/test_installer_unix.py, tests/test_installer_windows.py).
+
 ## [1.1.25] - 2026-10-16
 
 ### Added
