@@ -3604,10 +3604,10 @@
     {
       "id": "web-announce-skips-vpn",
       "title": "the page's links skip a VPN tunnel's address",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "42ad4c5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The address a link names came from the default route, so while a VPN client owned the route setup, `web`, doctor and the chat key-form link all handed out the tunnel's address, which no other machine on the box's LAN can reach, even though the page was bound to 0.0.0.0 and listening. The pick now reads the adapter table and skips tunnel and virtual interfaces, keeps the route only when a physical adapter carries it or no lister works, a VPN-only box still names its tunnel address, and the Host allowlist learns the announced address.",
       "gate": "tests/test_webui.py grades the route-on-a-physical-adapter case, the tunnel skip, the VPN-only fallback, the no-lister fallback, both text parsers and the Host allowlist; tests/test_installer_unix.py and tests/test_installer_windows.py grade the installers' address lists"
@@ -3615,10 +3615,10 @@
     {
       "id": "web-token-no-shape-rule",
       "title": "the page token takes any non-empty value",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "42ad4c5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A 20+ letters/digits/underscore/hyphen rule refused a typed page token at `token set` and at the setup prompt. The page's token is the operator's own string: any non-empty value without control characters or edge whitespace is written, and an empty value still mints a strong one. The two service-fixed shapes (Mattermost, Telegram) stay, because a value of the wrong shape can never authenticate.",
       "gate": "tests/test_verbs.py grades a three-character page token being written, beside the remaining refusals (empty, control characters, BOM strip) and the Mattermost shape"
