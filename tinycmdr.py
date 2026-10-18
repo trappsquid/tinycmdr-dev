@@ -323,12 +323,17 @@ DEFAULT_CONFIG = {
         "max_tokens": 16384,
         "final_max_tokens": 8192,     # forced wrap-up call at the budget limit
         "max_tokens_ceiling": 65536,  # one-shot retry cap when cut off mid-think
-        # No single generation may be given more than this many SECONDS at the decode rate the
-        # endpoint last measured. 16,384 tokens is a 6-minute generation at 45 tok/s and half an
-        # hour at 8 - and 8 was measured on this box (2026-09-29) while several requests shared
-        # its two slots. 0 disables it, and an endpoint that has not reported a rate yet leaves
-        # the cap alone, so nothing changes until something has actually been measured.
-        "max_call_seconds": 300,
+        # No single generation may take longer than this many SECONDS at the decode rate
+        # the endpoint last measured: the per-call cap becomes
+        # min(max_tokens, window // 4, rate * this). 900 is the shipped bound - 16,384
+        # tokens at 18.2 tok/s - so a healthy local box sends its configured cap, while a
+        # pathologically slow one is still bounded (2 tok/s -> 1,800 tokens, not a
+        # two-hour generation). 300 was the old value and had been kept by every install
+        # as a copied config entry; _call_seconds steps it once, in code, so the change
+        # reaches every box on update (measured 2026-10-18: 21.6-32 tok/s on a local
+        # endpoint, whose 16,384-token cap the 300s value cut to 6,480-9,570). 0 disables
+        # the bound, and an endpoint that has not reported a rate leaves the cap alone.
+        "max_call_seconds": 900,
         "request_timeout": 1200,
         # Hard wall-clock bound = request_timeout + request_grace. requests'
         # timeout bounds INACTIVITY, not total time: an endpoint that trickles
@@ -2152,6 +2157,103 @@ def _context_ceiling():
     return num if num > 0 else None
 
 
+CALL_SECONDS_SHIPPED = 900
+CALL_SECONDS_LEGACY = 300      # the value every install before 1.1.27 copied
+
+
+def _call_seconds():
+    """llm.max_call_seconds with the shipped default applied AGNOSTICALLY.
+
+    The installers copy config.example.json into config.json, so a value changed in the
+    example reaches nobody who installed before the change: every existing box carries
+    `max_call_seconds: 300` and would keep a 16,384-token cap cut to 6,480 on a 21.6
+    tok/s endpoint (measured 2026-10-18). A stored value equal to the OLD shipped
+    default is therefore read as "nobody chose this" - the same rule `mem_limit_chars`
+    uses - stepped to CALL_SECONDS_SHIPPED once, and said in the log so it is never
+    silent. Any other number is the operator's and is honoured; 0 still disables the
+    bound. New installs carry no key at all, so the next change to this default needs
+    no step at all.
+    """
+    raw = CONFIG["llm"].get("max_call_seconds")
+    if raw is None or raw == "":
+        return CALL_SECONDS_SHIPPED
+    try:
+        configured = int(raw)
+    except (TypeError, ValueError):
+        log.warning("llm.max_call_seconds is %r, which is not a number - using %d",
+                    raw, CALL_SECONDS_SHIPPED)
+        return CALL_SECONDS_SHIPPED
+    if configured == CALL_SECONDS_LEGACY:
+        log.info("llm.max_call_seconds %d is the value earlier installs copied - "
+                 "using %d (set 0 to disable, or your own number)",
+                 configured, CALL_SECONDS_SHIPPED)
+        return CALL_SECONDS_SHIPPED
+    try:
+        hard = (float(CONFIG["llm"].get("request_timeout") or 0)
+                + float(CONFIG["llm"].get("request_grace") or 0))
+    except (TypeError, ValueError):
+        hard = 0.0
+    if hard > 0 and configured >= hard:
+        # Past the transport's own bound the call is abandoned first, whatever this says -
+        # and the two settings have to move together for a box slow enough to need it.
+        log.warning("llm.max_call_seconds %ds is at or past this build's transport bound "
+                    "(%ds = request_timeout + request_grace): the call is abandoned "
+                    "there first, so raise those two as well",
+                    configured, int(hard))
+    return configured
+
+
+def _call_budget_tokens(rate, seconds):
+    """Tokens one call may generate inside `seconds` at `rate` tok/s, or 0 when either is
+    unknown (no measurement yet, or the bound is disabled). The 256 floor keeps a
+    pathologically slow endpoint from being asked for a token or two."""
+    try:
+        rate, seconds = float(rate or 0), float(seconds or 0)
+    except (TypeError, ValueError):
+        return 0
+    if rate <= 0 or seconds <= 0:
+        return 0
+    return max(256, int(rate * seconds))
+
+
+def _wrapup_cap(final_cfg, window, rate, seconds):
+    """The forced wrap-up's cap: the configured value, the window's quarter, and the SAME
+    time budget every other call gets.
+
+    Without the budget a 2 tok/s box asks for 8,192 tokens in the run's LAST call - 68
+    minutes, which the transport abandons at its own bound, so the final answer dies
+    truncated. 0 means "let the envelope decide" when nothing else is known.
+    """
+    cap = int(final_cfg or 0)
+    if window and int(window) > 0:
+        quarter = max(256, int(window) // 4)
+        cap = min(cap or quarter, quarter)
+    budget = _call_budget_tokens(rate, seconds)
+    if budget and (not cap or budget < cap):
+        cap = budget
+    return cap
+
+
+def _escalation_cap(cap, ceiling, window, rate, seconds):
+    """The retry cap for a cut-off-mid-think call: 0 when no larger call is allowed.
+
+    The retry exists so reasoning that ate the whole cap gets one bigger attempt - but
+    the SAME time budget that sized the first attempt must size it, or the retry is the
+    unbounded door: at 2 tok/s a 65,536-token ceiling is a nine-hour generation with no
+    stall signal (its stream keeps trickling). When the budget allows nothing bigger
+    than the cap that just failed, there is no retry; the caller says why.
+    """
+    cap, limit = int(cap or 0), int(ceiling or 0)
+    if not cap or not limit:
+        return 0
+    budget = _call_budget_tokens(rate, seconds)
+    if budget:
+        limit = min(limit, budget)
+    if window and int(window) > 0:
+        limit = min(limit, int(window))
+    return limit if limit > cap else 0
+
+
 def static_prompt_tokens(session_key=None):
     """Tokens the STATIC half of every request costs: system prompt + sent schemas.
 
@@ -3911,15 +4013,59 @@ def _delegate_gate(url):
 # same endpoint served 8-57 tok/s depending on how many requests were in flight against its two
 # slots. Keyed by the server root, so the configured base_url and the request URL agree.
 _DECODE_TPS = {}
+_TPS_PERSIST_TTL = 24 * 3600.0   # how long a rate measured by an EARLIER run is trusted
+_TPS_NOTE_AT = {}                # endpoint root -> when the rate was last written to disk
+_TPS_NOTE_EVERY = 60.0           # the state file is not rewritten on every call
 
 
 def decode_rate(url=None):
-    """The decode rate last measured for this endpoint, or 0 when nothing has been measured."""
+    """The decode rate last measured for this endpoint, or 0 when nothing is known.
+
+    The in-memory number is the current process's own measurement. On a miss it adopts
+    what the PREVIOUS process wrote into the endpoint-facts store, bounded by
+    _TPS_PERSIST_TTL: otherwise a restart on a 2 tok/s box would ask for the configured
+    16,384-token cap on its first call, which the transport abandons at its own bound
+    and the answer dies truncated. A stale rate only mis-sizes one call - the first
+    response measures again and replaces it.
+    """
+    base = url or CONFIG["llm"].get("base_url")
+    root = _endpoint_root(base)
     try:
-        return float(_DECODE_TPS.get(
-            _endpoint_root(url or CONFIG["llm"].get("base_url"))) or 0)
+        measured = float(_DECODE_TPS.get(root) or 0)
     except (TypeError, ValueError):
+        measured = 0.0
+    if measured > 0:
+        return measured
+    try:
+        ent = _endpoint_facts(base)
+        tps = float(ent.get("tps") or 0)
+        at = float(ent.get("tps_at") or 0)
+    except Exception:                                        # noqa: BLE001 - no store = no rate
         return 0.0
+    if tps > 0 and at > 0 and time.time() - at <= _TPS_PERSIST_TTL:
+        _DECODE_TPS[root] = tps
+        return tps
+    return 0.0
+
+
+def _note_decode_rate(url, tps):
+    """Remember a measured decode rate: in memory for the next call, on disk for the next
+    PROCESS. The disk write is bounded to once per minute per endpoint - this runs on
+    every LLM call, and the endpoint-facts store is a read-modify-write under the lane
+    lock."""
+    try:
+        tps = float(tps)
+    except (TypeError, ValueError):
+        return
+    if tps <= 0:
+        return
+    root = _endpoint_root(url)
+    _DECODE_TPS[root] = tps
+    now = time.time()
+    if now - float(_TPS_NOTE_AT.get(root) or 0.0) < _TPS_NOTE_EVERY:
+        return
+    _TPS_NOTE_AT[root] = now
+    _endpoint_note(url, tps=round(tps, 1), tps_at=round(now, 1))
 
 
 _LLAMA_EXT_ANNOUNCED = set()
@@ -21830,11 +21976,11 @@ class Agent:
         # A smaller reply only ever leaves MORE room for the conversation, so the budget
         # computed above stays conservative. max_call_seconds 0, or no rate measured yet,
         # leaves the cap exactly as it was.
-        _mc = float(CONFIG["llm"].get("max_call_seconds") or 0)
+        _mc = float(_call_seconds())
         _tps = decode_rate(base)
-        if _mc > 0 and _tps > 0 and reply > 0:
-            _bounded = max(256, int(_tps * _mc))
-            if _bounded < reply:
+        if _mc > 0 and _tps > 0:
+            _bounded = _call_budget_tokens(_tps, _mc)
+            if _bounded and _bounded < reply:
                 log.info("[%s] %s tok/s measured - this call is capped at %d tokens "
                          "(%.0fs at that rate), not %d", session_key, _tps, _bounded,
                          _mc, reply)
@@ -22509,8 +22655,7 @@ class Agent:
                                 usage["server_tps"] = sstats["server_tps"]
                                 # The measured rate, for the NEXT call's size: see
                                 # decode_rate and max_call_seconds.
-                                _DECODE_TPS[_endpoint_root(url)] = float(
-                                    sstats["server_tps"])
+                                _note_decode_rate(url, sstats["server_tps"])
                         log.info("stream %s: %d chunk(s)%s%s, first delta %s, "
                                  "%s tok/s (server), %s",
                                  url, sstats.get("deltas", 0),
@@ -22823,6 +22968,13 @@ class Agent:
                             usage.get("peak_prompt", 0), pt)
                         usage["cache_hit"] = usage.get("cache_hit", 0) + \
                             _cached_tokens_from_usage(u)
+                        _got_c = int(u.get("completion_tokens") or 0)
+                        if _got_c > 0 and secs > 0:
+                            # Includes prefill, so it UNDERSTATES the decode rate - the
+                            # safe direction for a cap, and the only rate a non-streaming
+                            # endpoint ever gives (the stream's usage line names it
+                            # directly).
+                            _note_decode_rate(url, _got_c / secs)
                     else:
                         # server didn't report usage — estimate from payload
                         est_p = self._messages_token_est(messages)
@@ -22875,20 +23027,20 @@ class Agent:
                         and not msg.get("tool_calls")):
                     ceiling = int(
                         CONFIG["llm"].get("max_tokens_ceiling") or 0)
-                    # Bounded by the window, never by window // 4: a retry that asks for more
-                    # tokens than the endpoint can hold is cut off at the window and answers
-                    # nothing, which is the failure this retry exists to prevent - while a
-                    # retry clamped down to the cap that just came back empty would be no
-                    # retry at all. window // 4 is the NORMAL cap, so this stays far above it
-                    # and the escalation is still an escalation.
+                    # Bounded by the window AND by the same time budget that sized this
+                    # call: a retry above the window is cut off and answers nothing, and
+                    # a retry under an unbounded ceiling is the slow box's nine-hour
+                    # generation (2 tok/s x 65,536) with no stall signal. When the budget
+                    # allows nothing bigger than the cap that just failed, there is no
+                    # retry and the log names the lever instead.
                     _win = int(env.get("window") or 0)
-                    if _win and ceiling:
-                        ceiling = min(ceiling, _win)
+                    _tps = decode_rate(url)
+                    _mc = _call_seconds()
+                    bigger = _escalation_cap(cap, ceiling, _win, _tps, _mc)
                     # one retry, straight to the ceiling: re-thinking from
                     # scratch at 8K -> 32K -> 64K would pay for the
                     # reasoning three times over
-                    bigger = ceiling if (ceiling > cap and not escalated) else 0
-                    if bigger > cap:
+                    if bigger and not escalated:
                         log.warning(
                             "cut off at max_tokens=%d after %d chars of "
                             "reasoning with no answer — retrying once at "
@@ -22900,6 +23052,17 @@ class Agent:
                         if usage is not None:
                             usage["escalated"] = True
                         continue
+                    elif not escalated:
+                        # No larger call fits the budget. Saying nothing would look like
+                        # an ordinary empty answer; name the arithmetic and the lever.
+                        log.warning(
+                            "cut off at max_tokens=%d after %d chars of reasoning "
+                            "with no answer, and no larger call fits: %.1f tok/s at "
+                            "a %ds call bound allows %d tokens - raise "
+                            "llm.max_call_seconds for this box",
+                            cap, usage["last_reasoning_chars"] if usage else 0,
+                            _tps, _mc,
+                            int(_tps * _mc) if _mc > 0 and _tps > 0 else 0)
                 if (not empty_retried and finish == "stop"
                         and not (msg.get("content") or "").strip()
                         and not msg.get("tool_calls")):
@@ -24589,19 +24752,19 @@ class Agent:
                             "actually checked (or `VERIFIED: nothing`)." + hint)})
                         try:
                             # A wrap-up is ONE generation, so it is clamped the way every
-                            # other call is (window // 4) rather than trusted at the
-                            # configured 8,192: on an 8k window that allowance is larger
-                            # than the window itself, and asking for it is how a small
-                            # box ends a run with a truncated, empty final answer.
+                            # other call is: the window's quarter AND the same time budget
+                            # (a 2 tok/s box asking for 8,192 tokens in the run's LAST call
+                            # is 68 minutes, and the transport abandons it truncated).
                             _final = CONFIG["llm"].get("final_max_tokens") or None
                             try:
                                 _win = int((self._envelope(session_key) or {})
                                            .get("window") or 0)
                             except Exception:
                                 _win = 0
-                            if _win:
-                                _final = min(int(_final or _win // 4),
-                                             max(256, _win // 4))
+                            _final = _wrapup_cap(
+                                _final, _win,
+                                decode_rate(getattr(self, "llm_url", None)),
+                                _call_seconds())
                             reply = self._chat(
                                 self._payload(messages, state=False,
                                               session_key=session_key), model,

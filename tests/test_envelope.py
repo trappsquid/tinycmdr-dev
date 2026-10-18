@@ -950,6 +950,102 @@ window, which is exactly what the detection probe returns on a real box.
                 fb._DECODE_TPS.clear()
                 fb._DECODE_TPS.update(_saved_rate)
 
+            # --- the bound applies to EVERY install, not only a fresh one ------------------
+            # config.example.json is copied into config.json at install, so a changed
+            # default in the example reaches nobody who installed earlier: every existing
+            # box carries the old 300. `_call_seconds` steps a stored value equal to the
+            # OLD shipped default, in code, so `tinycmdr update` is the only thing a box
+            # does - and 16,384 is what its configured max_tokens asks for once the
+            # budget is 900s at the 21-32 tok/s a local endpoint measures.
+            _saved_cs = fb.CONFIG["llm"].get("max_call_seconds")
+            try:
+                fb.CONFIG["llm"].pop("max_call_seconds", None)
+                check(fb._call_seconds() == fb.CALL_SECONDS_SHIPPED == 900,
+                      "no stored value: the shipped 900s bound applies "
+                      f"({fb._call_seconds()})")
+                fb.CONFIG["llm"]["max_call_seconds"] = 300
+                check(fb._call_seconds() == 900,
+                      "a config carrying the old copied 300 is stepped to 900, so the "
+                      f"fix reaches every existing install on update ({fb._call_seconds()})")
+                fb.CONFIG["llm"]["max_call_seconds"] = 1800
+                check(fb._call_seconds() == 1800,
+                      "...while a value the operator chose is honoured "
+                      f"({fb._call_seconds()})")
+                fb.CONFIG["llm"]["max_call_seconds"] = 0
+                check(fb._call_seconds() == 0,
+                      f"0 still disables the bound ({fb._call_seconds()})")
+                # 2 tok/s x 900s = 1,800 tokens per call, not a 16,384-token two-hour one
+                fb.CONFIG["llm"]["max_call_seconds"] = 300
+                fb._DECODE_TPS[_rate_key] = 2.0
+                very_slow = at_window(fb, 131072)
+                check(very_slow["reply"] == 1800,
+                      "2 tok/s: one call is 900s of generation, 1,800 tokens "
+                      f"({very_slow['reply']})")
+                # ...and the mid-think retry is bounded by the same budget: at 2 tok/s
+                # nothing bigger than the cap that just failed fits, so no 65,536-token
+                # nine-hour retry
+                check(fb._escalation_cap(1800, 65536, 131072, 2.0, 900) == 0,
+                      "2 tok/s: the mid-think retry is refused, not run at the ceiling "
+                      f"({fb._escalation_cap(1800, 65536, 131072, 2.0, 900)})")
+                check(fb._escalation_cap(16384, 65536, 131072, 30.0, 900) == 27000,
+                      "30 tok/s: the retry escalates to 900s of generation (27,000) "
+                      f"({fb._escalation_cap(16384, 65536, 131072, 30.0, 900)})")
+                check(fb._escalation_cap(16384, 65536, 131072, 30.0, 0) == 65536,
+                      "...the configured ceiling still wins when the bound is off "
+                      f"({fb._escalation_cap(16384, 65536, 131072, 30.0, 0)})")
+                check(fb._escalation_cap(16384, 20000, 131072, 30.0, 900) == 20000,
+                      "...as does a ceiling below the budget "
+                      f"({fb._escalation_cap(16384, 20000, 131072, 30.0, 900)})")
+                check(fb._escalation_cap(16384, 65536, 12000, 30.0, 900) == 0,
+                      "...and a window below the failed cap has no room either "
+                      f"({fb._escalation_cap(16384, 65536, 12000, 30.0, 900)})")
+                # the forced wrap-up and the floor of the budget
+                check(fb._call_budget_tokens(2.0, 900) == 1800,
+                      "the budget helper is rate x seconds (2 tok/s -> 1,800)")
+                check(fb._call_budget_tokens(0, 900) == 0
+                      and fb._call_budget_tokens(30.0, 0) == 0,
+                      "...and 0 when either side is unknown")
+                check(fb._call_budget_tokens(0.1, 900) == 256,
+                      "...with a 256-token floor for a pathological endpoint")
+                check(fb._wrapup_cap(8192, 131072, 2.0, 900) == 1800,
+                      "the forced wrap-up takes the SAME budget, not its 8,192 "
+                      f"({fb._wrapup_cap(8192, 131072, 2.0, 900)})")
+                check(fb._wrapup_cap(8192, 6000, 0, 0) == 1500,
+                      "...and still the window's quarter on a small box "
+                      f"({fb._wrapup_cap(8192, 6000, 0, 0)})")
+                check(fb._wrapup_cap(8192, 131072, 30.0, 900) == 8192,
+                      "...while a fast box keeps its configured wrap-up "
+                      f"({fb._wrapup_cap(8192, 131072, 30.0, 900)})")
+                # the rate a PREVIOUS run measured is what sizes a cold start
+                # (a TEST-NET endpoint: it is only ever used as a store key here)
+                _url = "http://192.0.2.9:9/v1"
+                fb._endpoint_note(_url, tps=7.5, tps_at=fb.time.time())
+                fb._DECODE_TPS.clear()
+                fb._ENDPOINT_FACTS["loaded"] = False
+                check(abs(fb.decode_rate(_url) - 7.5) < 1e-6,
+                      "a rate measured by an earlier run is adopted on a cold start "
+                      f"({fb.decode_rate(_url)})")
+                fb._endpoint_note(_url, tps=7.5, tps_at=fb.time.time() - 3 * 86400)
+                fb._DECODE_TPS.clear()
+                fb._ENDPOINT_FACTS["loaded"] = False
+                check(fb.decode_rate(_url) == 0.0,
+                      "...unless it is older than the trust window, where the first "
+                      f"call measures again ({fb.decode_rate(_url)})")
+                fb._DECODE_TPS.clear()
+                fb._TPS_NOTE_AT.clear()
+                fb._note_decode_rate(_url, 3.0)
+                check(fb._DECODE_TPS.get(fb._endpoint_root(_url)) == 3.0,
+                      "a fresh measurement is held in memory for the next call")
+                fb._TPS_NOTE_AT.clear()
+                fb._DECODE_TPS.clear()
+            finally:
+                if _saved_cs is None:
+                    fb.CONFIG["llm"].pop("max_call_seconds", None)
+                else:
+                    fb.CONFIG["llm"]["max_call_seconds"] = _saved_cs
+                fb._DECODE_TPS.clear()
+                fb._DECODE_TPS.update(_saved_rate)
+
             # --- each endpoint's request is sized to its OWN window ----------
             # A failover box is a different box. The window/envelope used to be keyed to the
             # SESSION, so a big primary handed a small fallback a payload sized for the
