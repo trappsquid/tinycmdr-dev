@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.27] - 2026-10-18
+
+### Changed
+- **LLM:** a call's output cap follows the endpoint's measured decode rate and window — one time budget sizes the normal call, the mid-think retry and the forced wrap-up — so a fast box sends its configured 16,384, a slow one is bounded by wall clock instead of a copied 300-second value, the rate survives a restart, and a non-streaming endpoint records one too (tests/test_envelope.py).
+
 ## [1.1.26] - 2026-10-18
 
 ### Changed
