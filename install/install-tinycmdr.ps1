@@ -566,11 +566,19 @@ function Get-TinycmdrLanIps {
     # The addresses a LAN visitor can actually type, best-effort, for the summary and
     # the post-start page line: "<this-pc>" is a placeholder, not a URL, and the
     # operator typed a remembered port while every line here said something else
-    # (reported 2026-10-10). Never fails: no address prints the placeholder.
+    # (reported 2026-10-10). A VPN client's adapter is NOT one of them - its address is
+    # unreachable from this box's LAN even though the client's route owns the default
+    # route (measured 2026-10-18) - so tunnel and virtual-switch aliases are dropped
+    # and a private address leads. Never fails: no address prints the placeholder.
     try {
-        return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-                 Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
-                 Select-Object -ExpandProperty IPAddress)
+        $rows = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                  Where-Object {
+                      $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and
+                      $_.InterfaceAlias -notmatch 'vpn|wireguard|openvpn|tailscale|zerotier|nordlynx|surfshark|proton|tap[- ]|loopback|npcap|wsl|hyper-v|vethernet|virtualbox|vmware|docker' })
+        return @($rows | Sort-Object `
+                    @{ Expression = { if ($_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)') { 0 } else { 1 } } }, `
+                    IPAddress |
+                  Select-Object -ExpandProperty IPAddress)
     } catch { return @() }
 }
 function Head ($m) { Write-Host "`n== $m" -ForegroundColor Cyan }

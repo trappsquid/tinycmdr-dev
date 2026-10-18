@@ -2208,39 +2208,101 @@ def main():
           "conversation and registers nothing under that name",
           (_keys113, _made113, fb.web_entry("web-abc.carry"), _st113, _bd113[:200]))
 
-    # ---- A-114: the LAN address is the ROUTE's, never the resolver's guess -----
+    # ---- A-114: the LAN address is the ROUTE's when a physical NIC carries it -----
     # A stock Debian/Ubuntu/Raspberry Pi OS answers its own hostname with 127.0.1.1,
     # so the resolver-first pick announced "http://127.0.1.1:8790/" and never put the
     # real LAN IP into the Host check; a Hyper-V/WSL/Docker vEthernet can sort before
     # the real NIC. The default-route address (a UDP connect, no packet sent) is the
-    # answer, and ALL of 127/8 is skipped in the fallback.
+    # answer when a physical adapter carries it, and ALL of 127/8 is skipped in the
+    # fallback.
     _real_out114 = getattr(fb, "_web_outbound_ip", None)
+    _real_if114 = getattr(fb, "_web_iface_rows", None)
     _real_lh114 = fb._web_local_hosts
     _cache114 = set(fb._WEB_HOSTS_CACHE) if fb._WEB_HOSTS_CACHE is not None else None
     try:
+        def _rows114(rows):
+            fb._web_iface_rows = lambda: list(rows)
+
         fb._web_local_hosts = lambda: {"127.0.1.1", "127.0.0.1", "localhost", "10.9.8.7"}
         fb._web_outbound_ip = lambda: "172.16.4.4"
+        _rows114([("172.16.4.4", "eth0"), ("192.168.1.20", "vEthernet (WSL)")])
         check(fb._web_lan_ip() == "172.16.4.4",
-              "the LAN address announced is the default route's, not the resolver's "
-              "first answer", fb._web_lan_ip())
+              "the LAN address announced is the default route's when a physical adapter "
+              "carries it, not the resolver's first answer", fb._web_lan_ip())
+        # The shape this pick exists for: a VPN owns the default route, so the route
+        # address sits on the tunnel and the physical LAN address is the only one a
+        # visitor can reach. Measured on a Windows box: route and announce were both the
+        # VPN's 172 address while the page sat on a 10.x LAN.
+        fb._web_outbound_ip = lambda: "172.20.0.240"
+        _rows114([("172.20.0.240", "IVPN"), ("10.9.8.9", "Ethernet 3"),
+                  ("169.254.8.8", "Local Area Connection")])
+        check(fb._web_lan_ip() == "10.9.8.9",
+              "a tunnel's default-route address is skipped for the physical LAN address",
+              fb._web_lan_ip())
+        _rows114([("10.9.8.9", "utun3")])
+        fb._web_outbound_ip = lambda: "10.9.8.9"
+        check(fb._web_lan_ip() == "10.9.8.9",
+              "...and a box whose only address is the tunnel's still names it rather "
+              "than nothing", fb._web_lan_ip())
+        _rows114([])
+        fb._web_outbound_ip = lambda: "172.16.4.4"
+        check(fb._web_lan_ip() == "172.16.4.4",
+              "...a platform whose lister fails keeps the route answer, which is the "
+              "behaviour before the lister", fb._web_lan_ip())
         fb._web_local_hosts = lambda: {"127.0.1.1", "127.0.0.1", "localhost"}
         fb._web_outbound_ip = lambda: ""
         check(fb._web_lan_ip() == "",
               "...and without a route answer every 127/8 name is skipped (Debian's "
               "127.0.1.1 is not an address anyone can visit)", fb._web_lan_ip())
+        _csv114 = ('"IPAddress","InterfaceAlias"\r\n"10.9.8.9","Ethernet 3"\r\n'
+                   '"172.20.0.240","IVPN"\r\n"127.0.0.1","Loopback Pseudo-Interface 1"\r\n')
+        _rows_win = fb._web_iface_rows_csv(_csv114)
+        check(_rows_win[:2] == [("10.9.8.9", "Ethernet 3"),
+                                ("172.20.0.240", "IVPN")],
+              "the Windows lister's CSV names the adapter beside each address", _rows_win)
+        check(fb._web_iface_is_physical("Ethernet 3")
+              and not fb._web_iface_is_physical("IVPN")
+              and not fb._web_iface_is_physical("vEthernet (WSL)")
+              and fb._web_iface_is_physical("Wi-Fi 6"),
+              "a physical adapter passes, a VPN client's and a virtual switch do not",
+              [n for n in ("Ethernet 3", "IVPN", "vEthernet (WSL)", "Wi-Fi 6")
+               if fb._web_iface_is_physical(n)])
+        _if_mac = ("lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384\n"
+                   "\tinet 127.0.0.1 netmask 0xff000000\n"
+                   "en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\n"
+                   "\tinet 10.9.8.42 netmask 0xffffff00 broadcast 10.9.8.255\n"
+                   "utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380\n"
+                   "\tinet 172.20.0.240 --> 172.20.0.240 netmask 0xffffffff\n"
+                   "gif0: flags=8010<POINTOPOINT,MULTICAST> mtu 1280\n")
+        check(fb._web_iface_rows_posix(_if_mac, mac=True) ==
+              [("127.0.0.1", "lo0"), ("10.9.8.42", "en0"),
+               ("172.20.0.240", "utun3")],
+              "macOS ifconfig names the interface beside each address",
+              fb._web_iface_rows_posix(_if_mac, mac=True))
+        _if_linux = ("1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever\n"
+                     "2: eth0    inet 10.9.8.9/24 brd 10.9.8.255 scope global eth0\n"
+                     "3: wg0    inet 172.20.0.240/32 scope global wg0\n")
+        check(fb._web_iface_rows_posix(_if_linux) ==
+              [("127.0.0.1", "lo"), ("10.9.8.9", "eth0"),
+               ("172.20.0.240", "wg0")],
+              "iproute2's one-line form does too",
+              fb._web_iface_rows_posix(_if_linux))
         if _cache114 is not None:
             fb._web_local_hosts = _real_lh114
             fb._WEB_HOSTS_CACHE.clear()
             fb._WEB_HOSTS_CACHE.update({"127.0.0.1", "localhost"})
-            fb._web_outbound_ip = lambda: "172.16.4.4"
+            fb._web_outbound_ip = lambda: "172.20.0.240"
+            _rows114([("172.20.0.240", "IVPN"), ("10.9.8.9", "Ethernet 3")])
             fb._web_hosts_resolve()
-            check("172.16.4.4" in fb._web_local_hosts(),
-                  "the Host check knows this box's own route address, so a LAN visitor "
-                  "typing the IP is not refused", sorted(fb._web_local_hosts())[:8])
+            check("10.9.8.9" in fb._web_local_hosts(),
+                  "the Host check knows the ANNOUNCED LAN address, so a visitor who "
+                  "typed the link is not refused", sorted(fb._web_local_hosts())[:8])
     finally:
         fb._web_local_hosts = _real_lh114
         if _real_out114 is not None:
             fb._web_outbound_ip = _real_out114
+        if _real_if114 is not None:
+            fb._web_iface_rows = _real_if114
         if _cache114 is not None:
             fb._WEB_HOSTS_CACHE.clear()
             fb._WEB_HOSTS_CACHE.update(_cache114)

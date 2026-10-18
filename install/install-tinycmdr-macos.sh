@@ -1862,16 +1862,19 @@ if [ "$SERVE" = 1 ]; then
     if [ "$WEB_ON" = 1 ]; then
         if [ "$WEB_HOST" = "0.0.0.0" ]; then
             # The addresses a visitor can actually type: "<this-host>" is a placeholder,
-            # not a URL (reported 2026-10-10). Best-effort - the default interface, then
-            # hostname -I where it exists; the placeholder stays when neither answers.
-            _lan_dev="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+            # not a URL (reported 2026-10-10). The default-route DEVICE is not the
+            # answer when a VPN is connected - route names the tunnel, and its address
+            # is unreachable from this box's LAN (measured 2026-10-18) - so the physical
+            # `en*` interfaces are asked, and hostname -I stays the last resort.
             _lan_ips=""
-            if [ -n "$_lan_dev" ]; then
-                _lan_ips="$(ipconfig getifaddr "$_lan_dev" 2>/dev/null || true)"
-            fi
+            for _dev in $(ifconfig -a 2>/dev/null | sed -n 's/^\(en[0-9][0-9]*\):.*/\1/p'); do
+                _one="$(ipconfig getifaddr "$_dev" 2>/dev/null || true)"
+                [ -n "$_one" ] && _lan_ips="$_lan_ips $_one"
+            done
+            _lan_ips="$(printf '%s\n' $_lan_ips | grep -vE '^169\.254\.|^$' | head -3)"
             if [ -z "$_lan_ips" ]; then
                 _lan_ips="$(hostname -I 2>/dev/null | tr ' ' '\n' \
-                    | grep -vE '^127\.|^$' | head -3 || true)"
+                    | grep -vE '^127\.|^169\.254\.|^$' | head -3 || true)"
             fi
             if [ -n "$_lan_ips" ]; then
                 printf '%s\n' "$_lan_ips" | while read -r _ip; do

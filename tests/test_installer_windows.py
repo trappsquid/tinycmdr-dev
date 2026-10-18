@@ -585,6 +585,10 @@ def main():
           _chatpage[:240])
     check("...and LAN URLs carry the box's real addresses, not <this-pc>",
           "Get-TinycmdrLanIps" in install and "http://<this-pc>:$WebPort" not in install)
+    _lanfn = between(install, "function Get-TinycmdrLanIps", "function Head")
+    check("...and a VPN client's adapter is not one of them",
+          "InterfaceAlias -notmatch" in _lanfn and "vpn" in _lanfn.lower(),
+          _lanfn[:300])
 
     print("\n== tinycmdr.cmd refuses the Microsoft Store python stub ==")
     check("the shim looks python up with where + findstr",

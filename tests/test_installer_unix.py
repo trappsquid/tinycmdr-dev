@@ -292,18 +292,20 @@ def free_port():
 
 def plan_lan_ips():
     """The addresses the MAC installer's own lookup would find here, so a check can tell
-    "printed a real address" from "printed the placeholder" only when the box has one."""
+    "printed a real address" from "printed the placeholder" only when the box has one.
+    Same order as the installer: the physical `en*` interfaces, then hostname -I."""
     ips = []
-    dev = subprocess.run(["sh", "-c",
-                          "route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}'"],
-                         capture_output=True, text=True).stdout.strip()
-    if dev:
-        got = subprocess.run(["ipconfig", "getifaddr", dev], capture_output=True, text=True)
-        if got.returncode == 0:
-            ips += [x.strip() for x in got.stdout.split() if x.strip()]
+    got = subprocess.run(["sh", "-c",
+                          "ifconfig -a 2>/dev/null | sed -n 's/^\\(en[0-9][0-9]*\\):.*/\\1/p'"],
+                         capture_output=True, text=True)
+    for dev in got.stdout.split():
+        one = subprocess.run(["ipconfig", "getifaddr", dev], capture_output=True, text=True)
+        if one.returncode == 0:
+            ips += [x.strip() for x in one.stdout.split()
+                    if x.strip() and not x.strip().startswith("169.254.")]
     if not ips:
         got = subprocess.run(["sh", "-c",
-                              "hostname -I 2>/dev/null | tr ' ' '\\n' | grep -vE '^127\\.|^$'"],
+                              "hostname -I 2>/dev/null | tr ' ' '\\n' | grep -vE '^127\\.|^169\\.254\\.|^$'"],
                              capture_output=True, text=True)
         ips += [x.strip() for x in got.stdout.split() if x.strip()]
     return ips

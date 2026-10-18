@@ -2145,6 +2145,15 @@ def _body():
                   rc == 0 and "BOM" in out
                   and "TINYCMDR_TEST_KEY=bom-prefixed-1234" in (workdir / ".env").read_text(encoding="utf-8"),
                   (rc, out[:160]))
+            # The page's token is the operator's own string. A length rule refused a
+            # short typed value at `token set` and at the setup prompt (reported
+            # 2026-10-18); the only refusals left are the ones that cannot work.
+            rc, out, err = call(fb, ["token", "set", "TINYCMDR_WEB_TOKEN"], stdin="abc\n")
+            check("a page token has no length or character rule: a short typed one is "
+                  "written, not refused",
+                  rc == 0 and "TINYCMDR_WEB_TOKEN=abc" in
+                  (workdir / ".env").read_text(encoding="utf-8"), (rc, err[:200]))
+            os.environ.pop("TINYCMDR_WEB_TOKEN", None)
             rc, out, err = call(fb, ["token", "set", "TINYCMDR_MM_TOKEN"], stdin="short\n")
             check("a Mattermost token of the wrong shape is refused, with the shape named",
                   rc == 1 and "26 letters/digits" in err, (rc, err[:200]))

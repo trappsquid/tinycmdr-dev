@@ -1017,9 +1017,11 @@ _SECRET_SHAPES = {
                           "Bot Accounts"),
     "TINYCMDR_TG_TOKEN": (re.compile(r"^\d{5,12}:[A-Za-z0-9_-]{30,}$"),
                           "<digits>:<35 characters>, from @BotFather"),
-    "TINYCMDR_WEB_TOKEN": (re.compile(r"^[A-Za-z0-9_-]{20,}$"),
-                           "20+ letters/digits/underscore/hyphen (an empty value at "
-                           "`token set` mints one)"),
+    # NO entry for TINYCMDR_WEB_TOKEN: the service fixes the other two shapes, but this
+    # one is the operator's own string, and a length or character rule on it refused
+    # perfectly usable values (measured 2026-10-18: a typed short token was rejected by
+    # `token set` and by the setup wizard). Any non-empty value without control
+    # characters is accepted; `token set` with an empty value mints a strong one.
 }
 
 
@@ -28748,7 +28750,7 @@ def _secret_door_state():
     port = web_port_recorded() or web_port_effective()
     host = str(web.get("host") or "127.0.0.1")
     if host in ("0.0.0.0", "::", ""):
-        ip = _web_outbound_ip()
+        ip = _web_lan_ip()
         if ip:
             return "lan", "http://%s:%d" % (_url_host(ip), port)
         return "loopback", "http://127.0.0.1:%d" % port
@@ -34044,6 +34046,16 @@ def _web_hosts_resolve():
     addr = _web_outbound_ip()
     if addr:
         extra.add(addr)
+    # The address the link NAMES must be accepted too: on a box whose default route is a
+    # tunnel, the route address and the announced LAN address differ, and a visitor who
+    # typed the link has to get in (the resolver usually names it as well, but not on
+    # every platform).
+    try:
+        lan = _web_lan_ip()
+    except Exception:                                        # noqa: BLE001
+        lan = ""
+    if lan:
+        extra.add(lan)
     if _WEB_HOSTS_CACHE is not None:
         _WEB_HOSTS_CACHE.update(extra)
 
@@ -36188,7 +36200,8 @@ def _web_token_mint(announce=True):
 
 
 def _web_outbound_ip():
-    """The IPv4 a LAN visitor should type: this box's DEFAULT-ROUTE address.
+    """This box's DEFAULT-ROUTE address, or "" - one CANDIDATE for a LAN visitor, not
+    the answer (see `_web_lan_ip`).
 
     Found by connecting a UDP socket and reading the local end - connect() only asks
     the routing table and no packet is sent, the shape every "what is my IP" uses. The
@@ -36212,22 +36225,183 @@ def _web_outbound_ip():
     return ""
 
 
+# The address a LAN visitor should type is the one on a PHYSICAL adapter. The
+# default-route address alone is not enough: while a VPN owns the default route, the
+# routing table answers with the tunnel's address, so every link the box printed named
+# an address nothing else on its LAN can reach - even though the page was bound to
+# 0.0.0.0 and listening (measured on a Windows box with a VPN client connected: the
+# page link and the chat key-form link both carried the VPN's 172 address while the
+# box's LAN address was a 10.x one).
+_WEB_IFACE_TTL = 60.0        # a VPN connect/disconnect is picked up inside this window
+_WEB_IFACE_CACHE = {"at": 0.0, "rows": []}
+# Unix device names, and the aliases Windows gives an adapter. A VPN client's TAP
+# adapter can carry a plain alias (`Ethernet 4`), so the alias list is the named clients
+# plus the virtual-switch families. Conservative on purpose: a wrong exclusion costs the
+# operator the link it names, while a missed one only leaves the old behaviour.
+_WEB_VIRTUAL_IFACE = re.compile(
+    r"^(?:utun|ppp|tun|tap|ipsec|gif|stf|awdl|llw|ap\d+|bridge|zt|tailscale|wg\d*|"
+    r"docker|br-|veth|virbr|cni|flannel|gre\d*|sit\d*|ip6tnl|lxc|vboxnet|vmnet|npcap)",
+    re.I)
+_WEB_VIRTUAL_ALIAS = re.compile(
+    r"vpn|wireguard|openvpn|tailscale|zerotier|nordlynx|surfshark|proton|tap[- ]|"
+    r"loopback|npcap|wsl|hyper-v|vethernet|virtualbox|vmware|docker", re.I)
+
+
+def _web_iface_rows_csv(text):
+    """[(address, interface)] from Get-NetIPAddress's CSV, BOM or not.
+
+    Kept pure so a suite can feed it the aliases a Windows box really has without a
+    PowerShell (or a VPN) in the test.
+    """
+    import csv
+    import io as _io
+    rows = []
+    for rec in csv.DictReader(_io.StringIO(str(text or "").lstrip("\ufeff"))):
+        addr = str(rec.get("IPAddress") or "").strip()
+        alias = str(rec.get("InterfaceAlias") or "").strip()
+        if addr:
+            rows.append((addr, alias))
+    return rows
+
+
+def _web_iface_rows_posix(text, mac=False):
+    """[(address, interface)] from `ifconfig -a` (mac = BSD shape) or `ip -4 -o addr`.
+
+    Shared by the two dialects because the address is what matters and only the way the
+    interface name is spelled differs; a Linux host without iproute2 falls back to
+    ifconfig, and its output is the BSD shape too.
+    """
+    rows = []
+    iface = ""
+    for line in str(text or "").splitlines():
+        if mac:
+            m = re.match(r"^([A-Za-z0-9_.-]+):\s", line)
+            if m:
+                iface = m.group(1)
+                continue
+            m = re.match(r"^\s+inet\s+(\d+\.\d+\.\d+\.\d+)", line)
+            if m and iface:
+                rows.append((m.group(1), iface))
+            continue
+        m = re.match(r"^\d+:\s+([^\s:@]+)", line)
+        if not m:
+            continue
+        a = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+)/", line)
+        if a:
+            rows.append((a.group(1), m.group(1)))
+    return rows
+
+
+def _web_iface_rows():
+    """[(address, interface)] for this box's IPv4 adapters; [] when no lister works.
+
+    One lister per platform, each naming the interface with the address, because the
+    routing table alone cannot say whether an address sits on a tunnel. Cached
+    (_WEB_IFACE_TTL): an announce happens per start and a chat link per mint, so this is
+    not a request-path cost, and a failed probe is retried on the next call.
+    """
+    now = time.time()
+    if _WEB_IFACE_CACHE["rows"] and now - float(_WEB_IFACE_CACHE["at"] or 0) < _WEB_IFACE_TTL:
+        return list(_WEB_IFACE_CACHE["rows"])
+    rows = []
+    try:
+        if os.name == "nt":
+            exe = str(Path(os.environ.get("SystemRoot") or r"C:\Windows")
+                      / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+            if not Path(exe).is_file():
+                exe = "powershell"
+            rc, out, _err, _to = run_capture(
+                [exe, "-NoProfile", "-NonInteractive", "-Command",
+                 "Get-NetIPAddress -AddressFamily IPv4 | "
+                 "Select-Object IPAddress,InterfaceAlias | "
+                 "ConvertTo-Csv -NoTypeInformation"], 8)
+            if rc == 0:
+                rows = _web_iface_rows_csv(out)
+        elif sys.platform == "darwin":
+            rc, out, _err, _to = run_capture(["/sbin/ifconfig", "-a"], 6)
+            if rc == 0:
+                rows = _web_iface_rows_posix(out, mac=True)
+        else:
+            rc, out, _err, _to = run_capture(["ip", "-4", "-o", "addr", "show"], 6)
+            if rc == 0:
+                rows = _web_iface_rows_posix(out)
+            if not rows:
+                rc, out, _err, _to = run_capture(["ifconfig", "-a"], 6)
+                if rc == 0:
+                    rows = _web_iface_rows_posix(out, mac=True)
+    except Exception:                                        # noqa: BLE001
+        rows = []
+    _WEB_IFACE_CACHE.update({"at": now, "rows": rows})
+    return list(rows)
+
+
+def _web_addr_usable(addr):
+    """A dotted IPv4 a visitor could type: not loopback, not link-local."""
+    parts = str(addr or "").split(".")
+    if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+        return False
+    first, second = int(parts[0]), int(parts[1])
+    if first in (0, 127):
+        return False
+    if first == 169 and second == 254:      # autoconfiguration, not a LAN address
+        return False
+    return True
+
+
+def _web_addr_private(addr):
+    """RFC 1918 - the range a home or office LAN is almost always in."""
+    p = [int(x) for x in str(addr).split(".")]
+    return (p[0] == 10 or (p[0] == 172 and 16 <= p[1] <= 31)
+            or (p[0] == 192 and p[1] == 168))
+
+
+def _web_iface_is_physical(name):
+    """Is this adapter one a LAN visitor shares? Unnamed counts as physical: no
+    evidence against it, and the address filters still apply."""
+    name = str(name or "").strip()
+    if not name:
+        return True
+    if re.fullmatch(r"lo\d*", name, re.I):
+        return False
+    return not (_WEB_VIRTUAL_IFACE.search(name) or _WEB_VIRTUAL_ALIAS.search(name))
+
+
 def _web_lan_ip():
     """This box's IPv4 a LAN visitor would type, or "".
 
-    The default-route address first; the resolver's answers are the fallback with ALL
-    of 127/8 excluded - 127.0.1.1 is what a Debian box prints for its own hostname,
-    not an address anyone can visit, and announcing it (with "that link works from any
-    machine on your network" beside it) was the wrong door (A-2026-10-08-114)."""
-    addr = _web_outbound_ip()
-    if addr:
-        return addr
+    The default-route address wins when a PHYSICAL adapter carries it; one on a tunnel
+    does not, because a VPN owning the default route makes the routing table answer
+    with an address no other machine on this box's LAN can reach (measured on a Windows
+    box: the printed link named the VPN's 172 address while the page, bound to 0.0.0.0,
+    sat on a 10.x LAN). Physical adapters come next, private ranges first; a box whose
+    only address is the tunnel's still gets that address rather than nothing, and a
+    platform whose lister fails keeps the route answer, which is the pre-lister
+    behaviour. The resolver's answers are the LAST fallback with ALL of 127/8 excluded -
+    127.0.1.1 is what a Debian box prints for its own hostname, not an address anyone
+    can visit (A-2026-10-08-114).
+    """
+    route = _web_outbound_ip()
+    try:
+        rows = [(a, i) for a, i in _web_iface_rows() if _web_addr_usable(a)]
+    except Exception:                                        # noqa: BLE001
+        rows = []
+    physical = [(a, i) for a, i in rows if _web_iface_is_physical(i)]
+    if route and _web_addr_usable(route):
+        if not rows or any(a == route for a, _i in physical):
+            return route
+    for a, _i in physical:
+        if _web_addr_private(a):
+            return a
+    if physical:
+        return physical[0][0]
+    if route and _web_addr_usable(route):
+        return route
     try:
         names = _web_local_hosts() - {"localhost"}
     except Exception:                                        # noqa: BLE001
         names = set()
     for n in sorted(names):
-        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", n) and not n.startswith("127."):
+        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", n) and _web_addr_usable(n):
             return n
     return ""
 
@@ -42225,9 +42399,10 @@ def _run_setup_interactive(rest=None):
         # and anything falsy (0, absent) means "ask the helper".
         page_port = _web_port_int(web.get("port"), 0) or web_port_effective()
         cur_tok = _web_token()
-        # The write path enforces the shape (`token set`'s rule: 20+ of letters, digits,
-        # _ or -), and a refused value must come back as a question, not as a link that
-        # quietly still carries the old token.
+        # The write path refuses only a value that cannot work (empty, control
+        # characters, edge whitespace); there is no length or character rule on the
+        # page's token, so a typed value is taken as given. A refused one must come back
+        # as a question, not as a link that quietly still carries the old token.
         for _try in range(3):
             ans_tok = _ask_secret("   Access token (Enter to %s): "
                                   % ("keep the current one" if cur_tok else "mint one"))

@@ -2065,11 +2065,17 @@ if [ "$SERVE" = 1 ]; then
     fi
 
     # The addresses a visitor can actually type: "<this-host>" is a placeholder, not a
-    # URL (reported 2026-10-10). hostname -I is the Linux door; the placeholder stays
-    # where it answers nothing.
+    # URL (reported 2026-10-10). A tunnel adapter is not one either - a VPN owning the
+    # default route hands out an address its own LAN cannot reach (measured 2026-10-18) -
+    # so the physical interfaces are named first and hostname -I is the last resort.
     if [ "$WEB_ON" = 1 ]; then
         if [ "$WEB_HOST" = "0.0.0.0" ]; then
-            _lan_ips="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^127\.|^$' | head -3 || true)"
+            _lan_ips="$(ip -4 -o addr show 2>/dev/null \
+                | awk '$2 !~ /^(lo|utun|ppp|tun|tap|ipsec|wg|tailscale|zerotier|docker|br-|veth|virbr|cni|flannel|zt|gre|sit|ip6tnl|lxc|vboxnet|vmnet|npcap)/ { for (i = 1; i <= NF; i++) if ($i == "inet") { split($(i+1), a, "/"); print a[1] } }' \
+                | grep -vE '^127\.|^169\.254\.|^$' | head -3 || true)"
+            if [ -z "$_lan_ips" ]; then
+                _lan_ips="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^127\.|^169\.254\.|^$' | head -3 || true)"
+            fi
             if [ -n "$_lan_ips" ]; then
                 _page_hosts=""
                 for _ip in $_lan_ips; do
