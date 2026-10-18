@@ -570,13 +570,26 @@ def dedup_should_omit(session, digest, target):
 # macOS: the three helpers that talk to the OS.
 # ===========================================================================
 def _spawn_group():
-    """Popen kwargs that put the helper in its own session / process group.
+    """Popen kwargs that put the helper in its own session / process group AND keep
+    its console window from appearing.
 
-    A timed-out `subprocess.run` kills only the DIRECT child; the PowerShell
-    helper's own children survived it. A new group
-    is what makes `_kill_tree` able to take the whole tree down."""
+    The bot runs under pythonw (console-free), so every console program it starts -
+    powershell.exe is every Windows helper - gets a NEW, VISIBLE console window unless
+    the spawn asks for none: CREATE_NO_WINDOW is that ask, and the STARTUPINFO half
+    covers a shell that honours the show state. CREATE_NEW_PROCESS_GROUP alone does not
+    hide it. A timed-out helper still needs `_kill_tree` to reach its whole tree, which
+    is what the group is for."""
     if IS_WIN:
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        kw = {"creationflags": (getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                | subprocess.CREATE_NEW_PROCESS_GROUP)}
+        try:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+            kw["startupinfo"] = si
+        except Exception:
+            pass
+        return kw
     return {"start_new_session": True}
 
 
@@ -588,7 +601,7 @@ def _kill_tree(proc):
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=KILL_GRACE)
+                           timeout=KILL_GRACE, **_spawn_group())
         except (OSError, subprocess.SubprocessError):
             pass
     else:
@@ -2228,7 +2241,8 @@ def _win_clipboard(args, ctx):
         proc = subprocess.Popen(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command",
              "Set-Clipboard -Value ([Console]::In.ReadToEnd())"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            **_spawn_group())
         _, err = proc.communicate(str(text).encode("utf-8"), timeout=INPUT_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _fail("Set-Clipboard failed: %s" % exc)

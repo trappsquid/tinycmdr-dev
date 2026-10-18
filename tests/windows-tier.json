@@ -4,6 +4,7 @@
     "tests/test_authority_surface.py",
     "tests/test_byte_surface.py",
     "tests/test_checkin.py",
+    "tests/test_console_window.py",
     "tests/test_config_example.py",
     "tests/test_contracts.py",
     "tests/test_delegation.py",

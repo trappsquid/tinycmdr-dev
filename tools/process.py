@@ -157,13 +157,33 @@ def _table_lock():
 #     still reports its real exit code (the table used to say "code not captured");
 #   * forward a spool file to the child's stdin, so `action=send` can answer a prompt
 #     (an installer, a REPL, a 'y/n') on any platform - no FIFO, no daemon.
+#
+# sys.argv[4] is "1" when the child's console must be HIDDEN. The parent computes it
+# (_HIDE_CHILD) because the wrapper cannot: under pythonw this wrapper is a GUI-subsystem
+# process with no console, and every console program it starts - powershell.exe is the
+# shell tool's - gets a NEW, VISIBLE console window unless the spawn asks for none. That
+# window IS the flash on every command the shell tool probes. CREATE_NO_WINDOW is not
+# inherited through pythonw, so it has to be set on this Popen, the last hop.
+_HIDE_CHILD = "1" if os.name == "nt" else "0"
+
 _WRAPPER = r'''
 import json, subprocess, sys, time
 argv = json.loads(sys.argv[1])
 shell = sys.argv[2] == "1"
 spool = sys.argv[3] or ""
+hide = sys.argv[4] == "1" if len(sys.argv) > 4 else False
+kw = {}
+if hide:
+    kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        kw["startupinfo"] = si
+    except Exception:
+        pass
 proc = subprocess.Popen(argv, shell=shell, stdout=sys.stdout.fileno(),
-                        stderr=subprocess.STDOUT, stdin=subprocess.PIPE)
+                        stderr=subprocess.STDOUT, stdin=subprocess.PIPE, **kw)
 offset = 0
 try:
     while True:
@@ -291,7 +311,7 @@ def spawn_detached(jid, argv, shell):
     with open(log_path, "wb") as fout:
         proc = subprocess.Popen(
             [sys.executable, "-c", _WRAPPER, json.dumps(argv),
-             "1" if shell else "0", str(spool)],
+             "1" if shell else "0", str(spool), _HIDE_CHILD],
             stdout=fout, stderr=fout, stdin=subprocess.DEVNULL,
             cwd=str(BASE), **_hidden())
     return proc, log_path, spool
@@ -353,7 +373,7 @@ def spawn_probe(argv, shell):
         state["spool"] = ""
     proc = subprocess.Popen(
         [sys.executable, "-c", _WRAPPER, json.dumps(argv), "1" if shell else "0",
-         state["spool"] or ""],
+         state["spool"] or "", _HIDE_CHILD],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL, cwd=str(BASE), **_hidden())
 

@@ -27502,7 +27502,8 @@ def copy_via_host_tool(text):
             continue
         try:
             done = subprocess.run(cmd, input=text.encode("utf-8"), timeout=5,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  **hidden_proc_kwargs())
         except Exception:                                        # noqa: BLE001
             log.debug("clipboard tool failed: %s", " ".join(cmd), exc_info=True)
             continue

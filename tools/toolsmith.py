@@ -34,6 +34,27 @@ import sys
 import tempfile
 from pathlib import Path
 
+
+def _hidden():
+    """Popen kwargs that keep a console child from flashing a window.
+
+    The harness runs under pythonw (console-free), so a console program it starts
+    without CREATE_NO_WINDOW gets a NEW, VISIBLE console window. Same contract as
+    tools/process.py's _hidden; this probe spawns an interpreter, which is a console
+    program when sys.executable is python.exe."""
+    if os.name != "nt":
+        return {}
+    kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = subprocess.SW_HIDE
+        kw["startupinfo"] = si
+    except Exception:
+        pass
+    return kw
+
+
 NAME = "toolsmith"
 DESCRIPTION = ("Make, import or index a drop-in tool: scaffold a native tool from a short arg "
                "spec, wrap any existing script as a manifest tool, list what tools/ has and "
@@ -239,7 +260,8 @@ def _load_check(target, ctx):
         # not create (A-2026-10-11-05); the guard the suites use rides in explicitly.
         proc = subprocess.run([sys.executable, tmp], capture_output=True, text=True,
                               timeout=120,
-                              env={**os.environ, "TINYCMDR_NO_MATERIALIZE": "1"})
+                              env={**os.environ, "TINYCMDR_NO_MATERIALIZE": "1"},
+                              **_hidden())
         out = (proc.stdout or "") + (proc.stderr or "")
     except Exception as exc:
         return "check failed to run: %s" % exc
