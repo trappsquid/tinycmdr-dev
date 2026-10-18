@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.28] - 2026-10-18
+
+### Fixed
+- **Windows:** a shell command no longer flashes a PowerShell window on top of everything — the job wrapper every command is probed through, the computer-use helper, the toolsmith probe and the clipboard tool all spawn with CREATE_NO_WINDOW (tests/test_console_window.py).
+
 ## [1.1.27] - 2026-10-18
 
 ### Changed

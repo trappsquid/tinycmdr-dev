@@ -3633,6 +3633,17 @@
       },
       "detail": "A call's output cap was min(max_tokens, window // 4) and then cut by a 300-second value every install had copied from config.example.json: a 21.6 tok/s endpoint asked for 6,480 tokens instead of its configured 16,384 (measured 2026-10-18), and the mid-think retry, the forced wrap-up and a non-streaming endpoint ignored the bound entirely (at 2 tok/s the retry could run nine hours). One budget now sizes all three - min(max_tokens, window // 4, rate x seconds) - with 900 s shipped, so the configured cap is what a 18.2+ tok/s box sends; a stored 300 is the old copied default and is stepped in code, so every install gets the change on update without a config edit; the measured rate is persisted in the endpoint-facts store for 24 hours so a restart sizes its first call, a non-stream response records completion tokens / elapsed, and a value at or past the transport bound logs that request_timeout must move with it.",
       "gate": "tests/test_envelope.py grades the budget arithmetic, the legacy step (300 -> 900, an operator's 1800 kept, 0 off), the 2 tok/s cap and the refused retry, the wrap-up clamp, the 256 floor, the fresh and stale persisted rate, and the in-memory note"
+    },
+    {
+      "id": "windows-console-window-flash",
+      "title": "a shell command no longer flashes a console window",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1587316",
+        "expect": "untagged"
+      },
+      "detail": "The bot runs under pythonw with no console, so every console program it started without CREATE_NO_WINDOW got a new, visible window - the job wrapper every shell command is auto-background probed through (the reported PowerShell flash), the computer-use PowerShell helper, the toolsmith probe and the clipboard tool - and all four now ask for a hidden console, with a Windows check that a child spawned through the wrapper reports no console window.",
+      "gate": "tests/test_console_window.py grades the wrapper's spawn kwargs on every platform and, on Windows, that a console child spawned through it has GetConsoleWindow() 0"
     }
   ]
 }
