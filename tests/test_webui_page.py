@@ -854,7 +854,7 @@ def main():
           and "ALL COHORTS" in (names[3] or "") and "ADD COHORT" in (names[4] or ""),
           f"the rail pins the praetorium, one row per cohort, the fan-out row, "
           f"then ADD COHORT ({names})")
-    check("COHORS III" in (names[2] or "") and (res["cohorts"][2] or {}).get("bad"),
+    check("Cohort III" in (names[2] or "") and (res["cohorts"][2] or {}).get("bad"),
           f"the silent cohort wears the bad dot, numbered ({names[2]!r})")
     check("connection refused" in ((res["cohorts"][2] or {}).get("title") or ""),
           f"...and its error is one hover away ({(res['cohorts'][2] or {}).get('title')!r})")

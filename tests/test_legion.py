@@ -297,6 +297,80 @@ def test_cohort_frame(coh):
         coh.drive_run = saved
 
 
+def test_cohort_commands(coh):
+    """A hub tab's slash commands run this box's page door, never the model.
+
+    The page's `/status`, `/new`, `/help` and unknown-command answer are the one
+    command door; an A2A message reads it first. The model is replaced with a spy,
+    so a command that fell through would show as a drive_run call.
+    """
+    coh.CONFIG["web"]["a2a"] = True
+    coh.CONFIG["web"]["a2a_policy"] = "full"
+    ran = {"n": 0, "text": ""}
+
+    def fake_drive(session_key, text, reporter, **kw):
+        ran["n"] += 1
+        ran["text"] = text
+        return "the model ran on " + text
+
+    saved_drive = coh.drive_run
+    saved_restart = coh.perform_restart
+    coh.drive_run = fake_drive
+    coh.perform_restart = lambda *a, **k: None
+    try:
+        def send(text, task_id, context_id="ctx-cmd"):
+            task, err = coh.a2a_handle("SendMessage", {"message": {
+                "parts": [{"text": text}], "taskId": task_id,
+                "contextId": context_id}})
+            answer = (((task or {}).get("status") or {}).get("message") or {}) \
+                .get("parts", [{}])[0].get("text", "")
+            return err, answer, task
+
+        err, answer, task = send("/status", "T-cmd-status")
+        check(err is None and "tinycmdr v" in answer and ran["n"] == 0
+              and ((task.get("status") or {}).get("state")) == "TASK_STATE_COMPLETED",
+              "/status is answered by the page's command door, not the model",
+              (err, answer[:80], ran))
+        err, answer, _ = send("/new", "T-cmd-new")
+        check(err is None and "Session cleared" in answer and ran["n"] == 0,
+              "/new clears the cohort's own conversation", (err, answer[:80], ran))
+        err, answer, _ = send("/help", "T-cmd-help")
+        check(err is None and "Commands:" in answer and ran["n"] == 0,
+              "/help is the same list the page prints", (err, answer[:80], ran))
+        err, answer, _ = send("/zzz", "T-cmd-unknown")
+        check(err is None and answer.startswith("Unknown command.") and ran["n"] == 0,
+              "an unknown slash command is refused by name, never sent as prose",
+              (err, answer[:80], ran))
+        err, answer, _ = send("plain words", "T-cmd-task")
+        check(err is None and ran["n"] == 1 and ran["text"] == "plain words",
+              "...while ordinary words still reach the model", (err, ran))
+        err, answer, _ = send("/stop", "T-cmd-idle")
+        check(err is None and "Nothing is running" in answer and ran["n"] == 1,
+              "/stop with no run answers plainly", (err, answer[:80], ran))
+        ctrl = coh.RUNS.open("a2a-ctx-stop")
+        try:
+            err, answer, _ = send("/stop", "T-cmd-stop", "ctx-stop")
+            check(err is None and "Stop requested" in answer
+                  and ctrl.cancel_event.is_set(),
+                  "/stop reaches a live A2A run's cancel event",
+                  (err, answer[:80], ctrl.cancel_event.is_set()))
+        finally:
+            coh.RUNS.close(ctrl)
+        coh.CONFIG["web"]["a2a_policy"] = "read_only"
+        err, answer, _ = send("/restart", "T-cmd-ro")
+        check(err is None and "REFUSED" in answer and "read-only" in answer
+              and ran["n"] == 1,
+              "read_only refuses a host-changing command over A2A",
+              (err, answer[:80], ran))
+        err, answer, _ = send("/status", "T-cmd-ro-read")
+        check(err is None and "tinycmdr v" in answer,
+              "...while reads still answer", (err, answer[:80]))
+    finally:
+        coh.CONFIG["web"]["a2a_policy"] = "full"
+        coh.drive_run = saved_drive
+        coh.perform_restart = saved_restart
+
+
 def test_cohort_policy_and_card(coh):
     """web.a2a_policy: read_only binds only A2A runs; the card declares the extension."""
     coh.CONFIG["web"]["a2a_policy"] = "read_only"
@@ -482,6 +556,26 @@ def test_hub_busy_refusal(hub):
         rid2, err2, code2 = hub.legion_send("coh", "one more thing")
         check(rid2 is None and code2 == 409 and "already on campaign" in (err2 or ""),
               "a second order while one runs: 409 with the reason", (err2, code2))
+    finally:
+        run.done = True
+        hub.WEB_RUNS.pop(run.id, None)
+
+
+def test_hub_stop_while_busy(hub):
+    """A cohort on campaign takes /stop: the cancel rides out, no second order."""
+    run, busy = hub._web_claim_run(hub.legion_key("old"), "",
+                                   make=lambda rid: hub.LegionRun(rid, "old", "ctx"))
+    check(busy is None, "the stop test takes an idle cohort", busy)
+    try:
+        hub._legion_record("old", context_id="ctx")
+        rid, err, code = hub.legion_send("old", "/stop")
+        check(rid == run.id and err is None and code == 200,
+              "/stop reaches the running cohort instead of the 409",
+              (rid, err, code, run.id))
+        check(any(l.get("kind") == "system"
+                  and "stop requested" in (l.get("text") or "")
+                  for l in run.lines),
+              "the run says what was asked", run.lines[-2:])
     finally:
         run.done = True
         hub.WEB_RUNS.pop(run.id, None)
@@ -684,6 +778,7 @@ def main():
     srv_old, _state_old = make_peer(declare_lines=False, mode="fast")
     try:
         test_cohort_frame(coh)
+        test_cohort_commands(coh)
         test_cohort_policy_and_card(coh)
 
         hub_with_peer(hub, srv, "coh")
@@ -696,6 +791,7 @@ def main():
         test_hub_no_cohorts(hub)
         test_hub_dispatch(hub, state)
         test_hub_busy_refusal(hub)
+        test_hub_stop_while_busy(hub)
         test_hub_broadcast(hub)
         test_hub_task_store_fallback(hub, state_slow)
         test_hub_lines_fallback(hub)

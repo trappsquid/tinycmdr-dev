@@ -448,7 +448,11 @@ envelope and caps, and the page suite's shim the renderer.
 - **The legion** (one page, several boxes): with `agent.a2a_remotes` set, this box's page
   relays orders to those cohorts server-to-server - `/api/legion` (overview) plus exact
   paths `session`/`lines` and one POST op family (`send`, `send-all`, `tab-open`,
-  `tab-close`, `add-remote`, `update-remote`, `remove-remote`). An order or a tab names a
+  `tab-close`, `open`, `add-remote`, `update-remote`, `remove-remote`). `open` is OPEN
+  COHORT: the cohort's own page address with its token in the URL fragment (never the
+  query), so a browser gets the full page at that box's origin; the relayed channel is
+  the hub's view, and an inbound command runs the same `_web_command` door this box's
+  page uses before its text can reach the model. An order or a tab names a
   CONFIGURED cohort and never a URL, so the relay cannot be aimed anywhere the operator
   did not write down; cohort tokens stay in this box's `.env` via `token_env`. `add-remote`
   is ADD COHORT: the authenticated page's own write into that config - a box the operator

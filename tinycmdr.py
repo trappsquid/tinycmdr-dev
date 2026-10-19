@@ -4977,6 +4977,30 @@ def _a2a_policy():
     return "full"
 
 
+def _a2a_command_refusal(text):
+    """The refusal a read-only cohort answers for a command that would change it.
+
+    `web.a2a_policy: "read_only"` bounds what a PEER may do here; a slash command
+    arriving over A2A reaches the same management doors the page does, so it is
+    held to the same promise. Reads and conversation commands pass; every verb
+    that changes the host, its config or every conversation's model is answered
+    here. An unknown command needs no gate: it changes nothing.
+    """
+    low = cmdr_strip(str(text or "")).strip().lower()
+    if not low.startswith("/"):
+        return ""
+    words = low[1:].split()
+    verb = words[0] if words else ""
+    if verb in ("update", "restart", "clean", "config", "approvals"):
+        return ("REFUSED: this box answers A2A peers read-only (web.a2a_policy), "
+                "and `/%s` changes it. Its own page still has every command." % verb)
+    if verb == "model" and "--global" in words:
+        return ("REFUSED: this box answers A2A peers read-only (web.a2a_policy), "
+                "and `--global` changes the model for every conversation. Drop "
+                "`--global` to switch this conversation only.")
+    return ""
+
+
 def resolve_approval(name, args, ctx):
     """The per-tool authority decision, before any handler runs. None = proceed.
 
@@ -13435,10 +13459,29 @@ def a2a_run(text, context_id, task_id=None):
     `task_id` (which SendMessage always has) opens a FRAME: the same uid-keyed lines
     the web page draws, kept per task, so a peering tinycmdr can watch the work
     through `tinycmdr/GetRunLines` instead of waiting out the blocking reply.
+
+    A message is first read by the SAME command door this box's own page uses, so a
+    slash command typed on a hub's cohort tab is answered here exactly as it is on
+    this box's page - `/new`, `/stop`, `/status`, `/help`, `/tinycmdr <verb>`. Before
+    this, every slash text reached drive_run as prose and the model acted on it
+    (measured 2026-10-19). Only a `task` answer goes to the model.
     """
+    key = "a2a-" + str(context_id or _a2a_id("ctx"))
+    refusal = _a2a_command_refusal(text) if _a2a_policy() == "read_only" else ""
+    if refusal:
+        kind, payload = "reply", refusal
+    else:
+        kind, payload = _web_command(str(text or ""), key)
+    if kind == "reply":
+        answer = str(payload or "")
+        if task_id:
+            frame = _a2a_frame_new(task_id, key)
+            reporter = RunReporter(A2ARunDestination(frame), key)
+            _a2a_frame_finish(frame, reporter, answer, False)
+        return answer, False
+    text = payload
     if _A2A_RUN_HOOK is not None:
         return _A2A_RUN_HOOK(text, context_id)
-    key = "a2a-" + str(context_id or _a2a_id("ctx"))
     frame = _a2a_frame_new(task_id, key) if task_id else None
     dest = A2ARunDestination(frame) if frame is not None else NowhereDestination()
     reporter = RunReporter(dest, key)
@@ -30930,7 +30973,7 @@ def _legion_poll_task(url, token, task_id, deadline, run=None):
             noticed = True
             interval = LEGION_SLOW_POLL_SECONDS
             try:
-                run.add("system", "📡 COHORS %s is not answering - the order may "
+                run.add("system", "📡 Cohort %s is not answering - the order may "
                                   "still be running over there. Watching its task "
                                   "store; nothing will be re-sent." % run.remote)
             except Exception:                                    # noqa: BLE001
@@ -31444,6 +31487,42 @@ def legion_update_remote(name, url, token):
             "card": {"name": card.get("name"), "version": card.get("version")}}, 200
 
 
+def _legion_is_stop(text):
+    """True for the stop word both the page's composer and a slash command use."""
+    return cmdr_strip(str(text or "")).strip().lower() in ("/stop", "stop")
+
+
+def _legion_stop(name):
+    """Ask a cohort to stop the order this hub started, over its own A2A door.
+
+    Fire-and-forget: the order's blocking reply is what carries the stopped answer
+    back into the run's transcript, so this only has to make the cancel land over
+    there. The context id is the one the order was sent with - that is what makes
+    the cohort's /stop read the same drive_run control.
+    """
+    url, token, err = a2a_remote_target(name)
+    if err:
+        return err
+    context_id = str(legion_record(name).get("context_id") or "")
+    if not context_id:
+        return "the cohort has no conversation of its own to stop"
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+               "params": {"message": {"messageId": _a2a_id("msg"),
+                                      "role": "ROLE_USER",
+                                      "taskId": _a2a_id("task"),
+                                      "contextId": context_id,
+                                      "parts": [{"text": "/stop"}]}}}
+
+    def send():
+        try:
+            a2a_post(url, token, payload, timeout=(5.0, 15.0))
+        except Exception as e:                                   # noqa: BLE001
+            log.info("legion: %s did not take the stop (%s)", name, e)
+
+    threading.Thread(target=send, daemon=True, name="legion-stop-%s" % name).start()
+    return ""
+
+
 def legion_send(name, text, client=""):
     """(run_id, error, status): register one order. It is ON THE WIRE before return."""
     if name not in legion_cohorts():
@@ -31451,6 +31530,16 @@ def legion_send(name, text, client=""):
     text = str(text or "").strip()
     if not text:
         return None, "an order needs words", 400
+    # /stop is the one command that must move while an order is in flight. It is
+    # not a second order: it reaches the cohort's own cancel, and the order's
+    # blocked reply still carries the stopped answer into this run.
+    live = _web_active_run(legion_key(name))
+    if live is not None and _legion_is_stop(text):
+        err = _legion_stop(name)
+        if err:
+            return None, err, 502
+        live.add("system", "🛑 stop requested over there")
+        return live.id, None, 200
     rec = legion_record(name)
     context_id = str(rec.get("context_id") or "") or _a2a_id("ctx")
     run, busy = _web_claim_run(
@@ -31556,7 +31645,7 @@ def legion_overview(client):
     """
     rows = [(_legion_row(name), name) for name in legion_cohorts()]
     for i, (row, _name) in enumerate(rows):
-        row["numeral"] = i + 2            # the hub itself is COHORS I
+        row["numeral"] = i + 2            # the hub itself is Cohort I
     return {"cohorts": [row for row, _n in rows],
             "tabs": legion_tabs(client),
             "broadcast": _legion_state().get("broadcast") or {},
@@ -32089,7 +32178,7 @@ WEB_PAGE = """
         <div class="mascot-scene">
           <div class="mascot-aura"></div>
           <img id=emptymark class="mascot" src="{{EMPTY_ART}}" alt="Chibi tinycmdr, the Roman commander">
-          <div class="mascot-pedestal"><span></span><strong>COHORS I</strong><span></span></div>
+          <div class="mascot-pedestal"><span></span><strong>Cohort I</strong><span></span></div>
         </div>
       </section>
     </div>
@@ -32583,6 +32672,7 @@ function age(ts){
 const TERMINAL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>';
 const X_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 const PENCIL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>';
+const EXTERNAL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
 function renderRail(){
  sessEl.textContent='';
  for(const s of sessions){
@@ -32674,13 +32764,20 @@ function renderLegion(){
   const m=document.createElement('small');
   m.appendChild(dotFor(c.state));
   const meta=document.createElement('span');
-  meta.textContent='COHORS '+(NUMERALS[(c.numeral||2)-1]||c.numeral)
+  meta.textContent='Cohort '+(NUMERALS[(c.numeral||2)-1]||c.numeral)
    +(local?' \u00b7 this host':' \u00b7 '+(c.host||''))+(c.version?' \u00b7 v'+c.version:'');
   m.appendChild(meta);
   tx.appendChild(m);row.appendChild(tx);
   if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
   else if(c.task&&c.task.state==='working')row.title='on campaign (task '+c.task.id+')';
   if(!local){
+   const open=document.createElement('button');
+   open.type='button';open.className='campaign-open';open.id='cohort-open-'+c.name;
+   open.title="open this cohort's own page in a new tab";
+   open.setAttribute('aria-label','Open '+c.name+' page');
+   open.innerHTML=EXTERNAL_ICON;
+   open.onclick=function(ev){openCohortPage(c.name,ev);};
+   row.appendChild(open);
    const edit=document.createElement('button');
    edit.type='button';edit.className='campaign-edit';edit.id='cohort-edit-'+c.name;
    edit.title='reconfigure this cohort (address or page token)';
@@ -32831,6 +32928,21 @@ function openAddCohort(existing){
  legion.dialog=ov;
  name.focus();
 }
+function openCohortPage(name,ev){
+ if(ev&&ev.stopPropagation)ev.stopPropagation();
+ // The parity door: the cohort's own page, in its own tab, with the token in the
+ // fragment. The window opens on the CLICK - a popup blocker refuses one made
+ // after an await - and the hub's answer then points it at the address.
+ const w=window.open('','_blank');
+ if(!w){note('the browser blocked the new tab - allow popups for this page');return;}
+ try{w.opener=null;}catch(e){}
+ post('/api/legion',{op:'open',remote:name}).then(function(res){
+  const code=res&&res.status,j=(res&&res.j)||{};
+  if(code!==200||j.error){try{w.close();}catch(e){}
+   note(j.error||('the hub answered '+code));return;}
+  w.location=j.url;
+ });
+}
 function removeCohort(name,ev){
  if(ev&&ev.stopPropagation)ev.stopPropagation();
  // The × on a cohort row: one confirm, then the hub's own config write. The
@@ -32965,7 +33077,7 @@ function paintBroadcast(){
  if(b.summary)lines.push({uid:'bc-last',kind:'say',text:'last fan-out: '+b.summary,i:1});
  legion.cohorts.forEach(function(c,i){
   lines.push({uid:'bc-'+c.name,kind:c.state==='working'?'tool':'system',
-   text:'COHORS '+(NUMERALS[(c.numeral||2)-1]||c.numeral)+' '+c.name+' \u00b7 '
+   text:'Cohort '+(NUMERALS[(c.numeral||2)-1]||c.numeral)+' '+c.name+' \u00b7 '
         +cohortStateText(c),i:2+i});
  });
  reconcile('allcohorts',lines);
@@ -34295,11 +34407,18 @@ def _web_command(text, key="web"):
         # The page's Stop button only works while that tab still knows its run
         # id; after a reload (or from a second tab) there was no way to stop a
         # live run at all. /stop cancels whatever is running in this session.
+        # An A2A order is not in WEB_RUNS: drive_run owns its cancel event in
+        # RUNS, and a peer's /stop arrives on its own handler thread while the
+        # order's SendMessage is still blocked - so both registries are read.
         run = _web_active_run(key)
-        if run is None:
+        ctrl = RUNS.control(key)
+        if run is None and ctrl is None:
             return ("reply", "Nothing is running.")
-        run.cancel.set()
-        run.add("system", "stop requested")
+        if run is not None:
+            run.cancel.set()
+            run.add("system", "stop requested")
+        if ctrl is not None:
+            ctrl.cancel_event.set()
         return ("reply", "🛑 Stop requested — the current step finishes first.")
     if low == "/help":
         lines = ["Commands:"]
@@ -35931,6 +36050,28 @@ def run_webui():
                     self._json({"tabs": legion_tab_set(client, name,
                                                        op == "tab-open")})
                     return
+                if op == "open":
+                    # The parity door: the cohort's OWN page, at its own address,
+                    # exactly as if this browser opened that box by hand. The token
+                    # rides the fragment - never the query - so it reaches neither
+                    # that box's log nor a Referer, and its page scrubs it from
+                    # history after the HttpOnly-cookie handover. Only an
+                    # authenticated page of this hub can ask for it.
+                    if name not in legion_cohorts():
+                        self._json({"error": "no such cohort"}, 404)
+                        return
+                    url, cohort_token, err = a2a_remote_target(name)
+                    if err:
+                        self._json({"error": err}, 404)
+                        return
+                    if not cohort_token:
+                        self._json({"error": "no token value is present for %s - "
+                                             "check its token_env" % name}, 500)
+                        return
+                    self._json({"name": name,
+                                "url": url + "/#token="
+                                       + urllib.parse.quote(cohort_token, safe="")})
+                    return
                 if op == "add-remote":
                     added, code = legion_add_remote(name, body.get("url"),
                                                     body.get("token"))
@@ -35975,7 +36116,7 @@ def run_webui():
                     self._json(out)
                     return
                 self._json({"error": "unknown op (send, send-all, tab-open, "
-                                     "tab-close, add-remote, update-remote, "
+                                     "tab-close, open, add-remote, update-remote, "
                                      "remove-remote)"}, 400)
                 return
             if not self.path.startswith("/api/chat"):

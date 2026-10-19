@@ -522,6 +522,15 @@ def main():
           "the sessions reply (the page's own clock) counts it", _sess.get("legion"))
     check(_CTOK not in req("GET", "/api/legion", TOK)[1].decode("utf-8", "replace"),
           "the legion overview never echoes the token")
+    code, j = _add({"op": "open", "remote": "storage"})
+    _url = j.get("url") or ""
+    check(code == 200 and _url.startswith(cohort_url + "/#token=")
+          and _CTOK not in _url.split("#", 1)[0]
+          and urllib.parse.unquote(_url.split("#token=", 1)[-1]) == _CTOK,
+          "OPEN COHORT answers its own page, token in the fragment only", (code, j))
+    code, j = _add({"op": "open", "remote": "ghost"})
+    check(code == 404 and j.get("error"),
+          "OPEN COHORT for a name this hub does not have: 404", (code, j))
 
     # every refusal keeps the disk as it was: a name, the hub's own channel, a dupe,
     # a non-http address, a missing token, and a box nothing answers at

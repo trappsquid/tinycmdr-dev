@@ -66,6 +66,12 @@ streams that box's work line by line, exactly like a local run:
 "web": {"a2a_policy": "read_only"}
 ```
 
+Each cohort row's **open** control opens that box's own page in a new tab, with its page token in
+the URL fragment — the full page, every feature, exactly as if you had navigated to that address
+yourself. The relayed channel is the hub's view of the same box (orders, live lines, fan-out), and
+it runs the same slash commands (`/new`, `/stop`, `/status`, `/help`, `/tinycmdr <verb>`) on that
+box.
+
 The hub relays server-to-server over the agent-to-agent protocol; `token_env` names a variable in
 the hub's `.env` holding that cohort's page token — copy the cohort's `TINYCMDR_WEB_TOKEN` value
 into the hub's `.env` under the name you chose (never into `config.json`), and orders and channels
