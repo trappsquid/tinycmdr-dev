@@ -589,6 +589,68 @@ def main():
                     b'"token":"y"}')[0] == 401,
           "an add-remote POST without a token: 401")
 
+    # ---- REMOVE COHORT: ADD COHORT's other half -------------------------------
+    # A cohort with a live order is refused - its frame and dispatch thread belong to
+    # that entry - and one at rest leaves config.json, .env and the legion store in
+    # one authenticated op, with no restart. A hand-written token_env may be SHARED
+    # (the box's own page token is the obvious one), so only the name ADD COHORT
+    # minted is unlinked.
+    _live, _busy = fb._web_claim_run(
+        fb.legion_key("storage"), "",
+        make=lambda rid: fb.LegionRun(rid, "storage", "ctx-remove"))
+    check(_live is not None and _busy is None,
+          "the suite holds a live order on storage", _busy)
+    code, j = _add({"op": "remove-remote", "remote": "storage"})
+    check(code == 409 and "on campaign" in (j.get("error") or ""),
+          "a cohort with an order in flight is not removable",
+          (code, j.get("error")))
+    _live.finish()
+    _saved_web = dict(fb.CONFIG["web"])
+    code, j = _add({"op": "remove-remote", "remote": "storage"})
+    fb.CONFIG["web"] = _saved_web
+    check(code == 200 and j.get("removed", {}).get("ok") is True
+          and j.get("removed", {}).get("name") == "storage"
+          and j.get("removed", {}).get("token_removed") is True,
+          "REMOVE COHORT takes the entry and the token ADD COHORT minted",
+          (code, j.get("removed")))
+    check((fb.CONFIG.get("agent") or {}).get("a2a_remotes", {}).get("storage") is None,
+          "the running config no longer knows it, with no restart")
+    _cfg = json.loads((STAGE / "config.json").read_text(encoding="utf-8"))
+    check("storage" not in ((_cfg.get("agent") or {}).get("a2a_remotes") or {}),
+          "config.json on disk no longer carries it")
+    _env = fb.ENV_FILE.read_text(encoding="utf-8") if fb.ENV_FILE.exists() else ""
+    check(("%s=" % _CNAME) not in _env and _CNAME not in os.environ,
+          "the minted token line left .env and the running process")
+    check(j.get("cohorts") == [] and j.get("removed", {}).get("token_env") == _CNAME,
+          "the overview it answers with reads like a hub with no cohorts")
+    check("storage" not in (fb._legion_state().get("cohorts") or {}),
+          "the legion store pruned its record (and every tab pointing at it)")
+    code, j = _add({"op": "remove-remote", "remote": "storage"})
+    check(code == 404 and j.get("error"),
+          "removing it twice: 404, not a false success", (code, j))
+    code, j = _add({"op": "remove-remote", "remote": "ghost"})
+    check(code == 404, "a cohort this hub never had: 404", (code, j))
+    check(req("POST", "/api/legion", None,
+              b'{"op":"remove-remote","remote":"storage"}')[0] == 401,
+          "a remove-remote POST without a token: 401")
+
+    # ...and a hand-written token_env is not the page's line to unlink: the box's own
+    # TINYCMDR_WEB_TOKEN is the shared name this guards.
+    _raw, _err = fb._config_raw()
+    _raw["agent"]["a2a_remotes"]["manual"] = {"url": cohort_url,
+                                              "token_env": "TINYCMDR_WEB_TOKEN"}
+    fb._config_write_raw(_raw)
+    fb._config_take_effect()
+    fb.CONFIG["web"] = _saved_web
+    code, j = _add({"op": "remove-remote", "remote": "manual"})
+    fb.CONFIG["web"] = _saved_web
+    check(code == 200 and j.get("removed", {}).get("token_removed") is False,
+          "a hand-written token_env is left in place", (code, j.get("removed")))
+    check("TINYCMDR_WEB_TOKEN" in os.environ
+          and (not fb.ENV_FILE.exists()
+               or "TINYCMDR_WEB_TOKEN=" in fb.ENV_FILE.read_text(encoding="utf-8")),
+          "...the box's own token line survives the removal")
+
     # ---- the browser's one handover: header in, HttpOnly cookie out ----------
     # The token arrives in the URL fragment once; the page POSTs it here and forgets it,
     # so no URL, no history entry and no localStorage keeps it afterwards (

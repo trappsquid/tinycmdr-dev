@@ -71,7 +71,10 @@ the hub's `.env` holding that cohort's page token — copy the cohort's `TINYCMD
 into the hub's `.env` under the name you chose (never into `config.json`), and orders and channels
 only ever name a configured cohort. The rail's **ADD COHORT** does that setup for you — a name, the
 cohort's URL and its page token, probed before anything is written — and the `config.json` block
-above is the same thing by hand. Keep one token per box, so a lost or retired one rotates alone
+above is the same thing by hand. Each cohort row's **×** is the reverse: **REMOVE COHORT** takes the
+entry and the minted `TINYCMDR_COHORT_<NAME>_TOKEN` line out, closes the cohort's tabs and keeps its
+transcript; a hand-written `token_env` is left alone, and a cohort with an order in flight is refused
+until it reports. Keep one token per box, so a lost or retired one rotates alone
 (`tinycmdr token set TINYCMDR_WEB_TOKEN` on that box, then the hub's `.env`). `a2a_policy:
 "read_only"` lets a cohort answer with reads while refusing every write and command that arrives
 over A2A; its own page keeps full tools. Address cohorts on a private network (the LAN, or a

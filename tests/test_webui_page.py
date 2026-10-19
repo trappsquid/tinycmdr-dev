@@ -988,6 +988,64 @@ def main():
           .get("active") == "praetorium",
           f"...and no cohort row, no channel switch ({names})")
 
+    # ...and the × on a cohort row is the other half: one confirm, the hub's own
+    # remove-remote, the row and its tab gone, every other row and the praetorium kept
+    _remove_steps = [{"kind": "polls", "n": 3},
+                     {"kind": "click", "id": "cohort-del-storage", "polls": 2},
+                     {"kind": "click", "id": "noteact", "polls": 8}]
+    res = run_page({"runs": [], "legion_cohorts": cohorts,
+                    "legion_tabs": ["storage"], "steps": _remove_steps}, script)
+    check(not res["errors"], f"the REMOVE COHORT page runs clean ({res['errors'][:1]})")
+    check(res.get("legionRemovals") == [{"name": "storage"}],
+          f"the × asks the hub to remove exactly that cohort "
+          f"({res.get('legionRemovals')})")
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 3 and "PRAETORIUM" in names[0] and "office" in names[1]
+          and "ADD COHORT" in names[2],
+          f"the removed cohort leaves the rail, the rest stay ({names})")
+    check([t["text"] for t in (res.get("campTabs") or [])] == ["PRAETORIUM"],
+          f"...and its open tab closes with it ({res.get('campTabs')})")
+    check(((res.get("state") or {}).get("legion") or {}).get("active") == "praetorium",
+          f"...the stage stays on the praetorium ({res.get('state')})")
+    check("cohort storage removed" in ((res.get("note") or {}).get("text") or ""),
+          f"...and the note says so ({res.get('note')!r})")
+    _rows = res.get("cohorts") or []
+    check(not _rows[0].get("del") and _rows[1].get("del")
+          and not any(r.get("del") for r in _rows[2:]),
+          f"only a cohort row carries the remove control, never the praetorium or "
+          f"the rail's own actions ({[r.get('del') for r in _rows]})")
+
+    # ...removing the cohort whose channel is OPEN falls back to the praetorium
+    res = run_page({"runs": [], "legion_cohorts": cohorts,
+                    "legion_tabs": ["storage"],
+                    "steps": [{"kind": "polls", "n": 3},
+                              {"kind": "clickrow", "id": "cohorts",
+                               "text": "storage", "polls": 4},
+                              {"kind": "click", "id": "cohort-del-storage", "polls": 2},
+                              {"kind": "click", "id": "noteact", "polls": 8}]},
+                   script)
+    check(not res["errors"], f"the remove-active page runs clean ({res['errors'][:1]})")
+    check(res.get("chan") == "COMMAND CHANNEL"
+          and ((res.get("state") or {}).get("legion") or {}).get("active") == "praetorium",
+          f"removing the open cohort's entry returns the stage to the praetorium "
+          f"({res.get('chan')!r}, {(res.get('state') or {}).get('legion')})")
+
+    # ...a refused removal keeps the row and shows the hub's words (the cohort has an
+    # order in flight, so its entry is not the page's to delete yet)
+    res = run_page({"runs": [], "legion_cohorts": cohorts,
+                    "legion_tabs": ["storage"],
+                    "legion_remove_error": "this cohort is on campaign (task L42) - "
+                    "wait for its report or stop it before removing it",
+                    "steps": _remove_steps}, script)
+    check(not res["errors"], f"the refused removal page runs clean ({res['errors'][:1]})")
+    check("on campaign" in ((res.get("note") or {}).get("text") or ""),
+          f"a refused removal shows the hub's words ({res.get('note')!r})")
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    _tabs = [t["text"] for t in (res.get("campTabs") or [])]
+    check("storage" in (names[1] or "") and len(_tabs) == 2
+          and _tabs[0] == "PRAETORIUM" and _tabs[1].startswith("storage"),
+          f"...and the row and its tab stay put ({names}, {res.get('campTabs')})")
+
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0
 

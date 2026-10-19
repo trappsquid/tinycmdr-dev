@@ -31279,6 +31279,72 @@ def legion_add_remote(name, url, token):
             "card": {"name": card.get("name"), "version": card.get("version")}}, 200
 
 
+def legion_remove_remote(name):
+    """(payload, status) for REMOVE COHORT: take a configured box out of this hub.
+
+    The counterpart of ADD COHORT and the same write: agent.a2a_remotes loses the
+    entry, the running hub re-reads the file (no restart), and the legion store
+    prunes the cohort plus every browser's tab for it. The token line goes too only
+    when ADD COHORT minted its name - a hand-written token_env may be shared (a box's
+    own TINYCMDR_WEB_TOKEN is the obvious one), so it is left alone. A cohort with a
+    live order is refused: its run frame and dispatch thread belong to that entry,
+    and the order is likely still running over there.
+    """
+    name = str(name or "").strip()
+    entry = legion_cohorts().get(name)
+    if not isinstance(entry, dict):
+        return {"error": "no cohort named %r on this hub (agent.a2a_remotes)"
+                         % name}, 404
+    live = _web_active_run(legion_key(name))
+    if live is not None:
+        return {"error": "this cohort is on campaign (task %s) - wait for its report "
+                         "or stop it before removing it" % live.id}, 409
+    token_env = str(entry.get("token_env") or "")
+    raw, err = _config_raw()
+    if err:
+        return {"error": err}, 500
+    if not isinstance(raw, dict):
+        return {"error": "config.json holds something that is not an object"}, 500
+    agent = raw.get("agent")
+    remotes = agent.get("a2a_remotes") if isinstance(agent, dict) else None
+    if isinstance(remotes, dict) and name in remotes:
+        remotes.pop(name)
+        err = _config_write_raw(raw)
+        if err:
+            return {"error": err}, 500
+    # The read-back is the proof: after this the running hub no longer has the entry.
+    err = _config_take_effect()
+    if err:
+        return {"error": err}, 500
+    # Caches keyed by the name would otherwise answer for a cohort that is gone (the
+    # census only refreshes names still configured, so a stale entry would be forever).
+    _LEGION_CARDS.pop(name, None)
+    _LEGION_LINES_OFF.pop(name, None)
+    _LEGION_LINES_UNSUPPORTED.discard(name)
+    _LEGION_EGRESS_WARNED.discard(name)
+    _LEGION_REATTACH_AT.pop(name, None)
+    # One write prunes the record and the tab lists, so the page's next poll sees the
+    # removal even if nobody's browser has touched a tab since.
+    _legion_state(lambda st: None)
+    minted = "TINYCMDR_COHORT_%s_TOKEN" % name.upper()
+    shared = any(str((e or {}).get("token_env") or "") == token_env
+                 for e in a2a_remotes_map().values() if isinstance(e, dict))
+    token_removed = False
+    if token_env and token_env == minted and not shared:
+        try:
+            token_removed = _env_unset(token_env)
+        except Exception as e:                                   # noqa: BLE001
+            # The entry is gone, so the token is inert; a failed unlink must not turn
+            # a completed removal into an error the page would show as a failure.
+            log.error("legion: removed %s but could not unlink %s: %s",
+                      name, token_env, e)
+    log.info("legion: REMOVE COHORT took agent.a2a_remotes.%s out of %s%s",
+             name, CONFIG_PATH.name,
+             (" and unlinked " + token_env) if token_removed else "")
+    return {"ok": True, "name": name, "token_env": token_env,
+            "token_removed": token_removed}, 200
+
+
 def legion_send(name, text, client=""):
     """(run_id, error, status): register one order. It is ON THE WIRE before return."""
     if name not in legion_cohorts():
@@ -32464,11 +32530,11 @@ function renderRail(){
 // ------------------------------------------------------------------- the legion
 // The hub's view of the other boxes. An order or a tab only ever names a cohort the
 // hub was CONFIGURED with (never a URL), so a channel cannot aim the relay anywhere
-// on its own - and ADD COHORT is the operator's own write into that config, from
-// the authenticated page: one box they run, by URL + token. A cohort channel's
-// lines come from /api/legion/lines - the same reconcile() the local transcript
-// uses, so a cohort run draws exactly like a local one, tool lines included when
-// that box speaks the run-lines extension.
+// on its own - and ADD COHORT / REMOVE COHORT are the operator's own writes into that
+// config, from the authenticated page: one box they run, by URL + token, or the same
+// entry taken out again. A cohort channel's lines come from /api/legion/lines - the
+// same reconcile() the local transcript uses, so a cohort run draws exactly like a
+// local one, tool lines included when that box speaks the run-lines extension.
 const NUMERALS=['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 const SHIELD_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>';
 function legionOf(name){return legion.cohorts.filter(function(c){return c.name===name;})[0]||null;}
@@ -32513,6 +32579,14 @@ function renderLegion(){
   tx.appendChild(m);row.appendChild(tx);
   if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
   else if(c.task&&c.task.state==='working')row.title='on campaign (task '+c.task.id+')';
+  if(!local){
+   const del=document.createElement('button');
+   del.type='button';del.className='campaign-del';del.id='cohort-del-'+c.name;
+   del.title='remove this cohort';del.setAttribute('aria-label','Remove '+c.name);
+   del.innerHTML=X_ICON;
+   del.onclick=function(ev){removeCohort(c.name,ev);};
+   row.appendChild(del);
+  }
   row.onclick=function(){openChannel(c.name);};
   cohortsEl.appendChild(row);
  }
@@ -32630,6 +32704,25 @@ function openAddCohort(){
  document.body.appendChild(ov);
  legion.dialog=ov;
  name.focus();
+}
+function removeCohort(name,ev){
+ if(ev&&ev.stopPropagation)ev.stopPropagation();
+ // The × on a cohort row: one confirm, then the hub's own config write. The
+ // transcript stays - this takes the CONNECTION out, not what the box said.
+ note('remove cohort "'+name+'" from this hub? Its channel closes; its transcript stays.',
+  ['Remove',async function(){
+   const {status:code,j}=await post('/api/legion',{op:'remove-remote',remote:name});
+   if(code!==200||j.error){note(j.error||('the hub answered '+code));return;}
+   const wasActive=(legion.active===name);
+   legion.cohorts=j.cohorts||[];legion.tabs=j.tabs||[];
+   legion.broadcast=j.broadcast||legion.broadcast;
+   legion.on=legion.cohorts.length>0;
+   if(wasActive||!legion.on)legion.active='praetorium';
+   renderLegion();
+   if(legion.active==='praetorium')await openSession(sessionKey||'web',true);
+   else if(legion.active==='allcohorts')paintBroadcast();
+   note('cohort '+name+' removed');
+  }]);
 }
 async function refreshLegion(){
  try{
@@ -35687,13 +35780,13 @@ def run_webui():
                 return
             if self.path.startswith("/api/legion"):
                 # One POST family - {"op": "send" | "tab-open" | "tab-close" |
-                # "add-remote"} - see the legion block. An order and the tab ops
-                # name a CONFIGURED cohort and never a URL, so the relay cannot be
-                # aimed anywhere the operator did not write into agent.a2a_remotes;
-                # the tokens stay in this box's .env. add-remote is the
-                # authenticated page's own config write: it writes a box the
-                # operator runs into that same map, by URL + token - the values
-                # they would otherwise edit in by hand.
+                # "add-remote" | "remove-remote"} - see the legion block. An order and
+                # the tab ops name a CONFIGURED cohort and never a URL, so the relay
+                # cannot be aimed anywhere the operator did not write into
+                # agent.a2a_remotes; the tokens stay in this box's .env. add-remote
+                # and remove-remote are the authenticated page's own config writes:
+                # they write a box the operator runs into that same map, or take it
+                # out again - the values they would otherwise edit in by hand.
                 if not self._auth_ok():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
@@ -35721,6 +35814,15 @@ def run_webui():
                     out["added"] = added
                     self._json(out)
                     return
+                if op == "remove-remote":
+                    removed, code = legion_remove_remote(name)
+                    if code != 200:
+                        self._json(removed, code)
+                        return
+                    out = legion_overview(client)
+                    out["removed"] = removed
+                    self._json(out)
+                    return
                 if op == "send":
                     run_id, err, code = legion_send(name, body.get("message"), client)
                     if err:
@@ -35736,7 +35838,7 @@ def run_webui():
                     self._json(out)
                     return
                 self._json({"error": "unknown op (send, send-all, tab-open, "
-                                     "tab-close, add-remote)"}, 400)
+                                     "tab-close, add-remote, remove-remote)"}, 400)
                 return
             if not self.path.startswith("/api/chat"):
                 self._drain()
@@ -47967,6 +48069,28 @@ def _env_set(name, value):
         os.chmod(ENV_FILE, 0o600)
     except OSError:
         pass
+
+
+def _env_unset(name):
+    """Drop NAME=value from .env atomically, mode 600; True if a line was removed.
+
+    The counterpart of _env_set, for a secret this build minted and is now retiring
+    (REMOVE COHORT). Only called once the entry that read it is gone, so a failed
+    unlink leaves an inert token rather than a configured cohort with no token.
+    """
+    removed = False
+    if ENV_FILE.exists():
+        lines = ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+        out = [line for line in lines if not line.strip().startswith(name + "=")]
+        removed = len(out) != len(lines)
+        if removed:
+            atomic_write_text(ENV_FILE, "\n".join(out) + ("\n" if out else ""))
+            try:
+                os.chmod(ENV_FILE, 0o600)
+            except OSError:
+                pass
+    os.environ.pop(name, None)
+    return removed
 
 
 def _mm_base_url(mm):

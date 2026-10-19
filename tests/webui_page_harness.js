@@ -146,10 +146,24 @@ function findById(n, id) {
   return null;
 }
 
+function findInDocument(id) {
+  // Every static id is a root of its own subtree in this shim (a real page has them
+  // all under <body>), and the page also creates nodes under body. Search both, or a
+  // control the page DRAWS into a static section (a cohort row's ×) is invisible to
+  // the click step.
+  const inBody = findById(globalThis.document.body, id);
+  if (inBody) { return inBody; }
+  for (const root of Object.values(byId)) {
+    const hit = findById(root, id);
+    if (hit) { return hit; }
+  }
+  return null;
+}
+
 globalThis.document = {
   addEventListener: () => {},
   title: '',
-  getElementById: (id) => byId[id] || findById(globalThis.document.body, id),
+  getElementById: (id) => byId[id] || findInDocument(id),
   createElement: (tag) => new El(tag),
   createTextNode: (t) => { const e = new El('#text'); e._text = String(t); return e; },
   body: new El('body'),
@@ -193,6 +207,7 @@ const uploads = [];
 let healthFetches = 0;
 let legionFetches = 0;
 const legionAdds = [];                 // every add-remote POST body the page sent
+const legionRemovals = [];             // every remove-remote POST body the page sent
 const legionBroadcasts = [];           // every send-all POST and the reply it got
 const modelPosts = [];                 // every model switch the header control sent
 let modelCurrent = null;               // what /api/models calls current (the POST moves it)
@@ -480,6 +495,25 @@ function fetchShim(url, opts) {
                       praetorium: { host: 'harness', version: 'harness' },
                       added: { ok: true, name: body.remote, lines: true,
                                card: { name: 'tinycmdr', version: '9.9.9' } } });
+      }
+      if (body.op === 'remove-remote') {
+        legionRemovals.push({ name: body.remote });
+        if (scenario.legion_remove_error) {
+          // the hub refused it (a live order): the page must keep the row and show
+          // the hub's words, exactly like a refused add
+          return Promise.resolve({ ok: false, status: 409, json: () => Promise.resolve(
+            { error: scenario.legion_remove_error }) });
+        }
+        scenario.legion_cohorts = (scenario.legion_cohorts || [])
+          .filter((c) => c.name !== body.remote);
+        scenario.legion_tabs = (scenario.legion_tabs || [])
+          .filter((n) => n !== body.remote);
+        return jres({ cohorts: scenario.legion_cohorts,
+                      tabs: scenario.legion_tabs || [],
+                      broadcast: scenario.legion_broadcast || {},
+                      praetorium: { host: 'harness', version: 'harness' },
+                      removed: { ok: true, name: body.remote,
+                                 token_removed: true } });
       }
       if (body.op === 'send-all') {
         const names = (scenario.legion_cohorts || []).map((c) => c.name);
@@ -781,13 +815,14 @@ async function main() {
     legionStat: byId.legionstat ? byId.legionstat.textContent : '',
     legionFetches: legionFetches,
     legionAdds: legionAdds,
+    legionRemovals: legionRemovals,
     legionBroadcasts: legionBroadcasts,
     addcohort: (globalThis.document.body.children || [])
       .filter((c) => c.id === 'addcohort').map((c) => c.textContent),
     cohorts: (byId.cohorts ? byId.cohorts.children : []).map((c) => ({
       cls: c.className, text: c.textContent, title: c.title || '',
       dot: deepHas(c, 'dot'), work: deepHas(c, 'work'), bad: deepHas(c, 'bad'),
-      active: deepHas(c, 'active') })),
+      active: deepHas(c, 'active'), del: deepHas(c, 'campaign-del') })),
     campTabs: (byId.campaigns ? byId.campaigns.children : []).map((c) => ({
       cls: c.className, text: c.textContent, title: c.title || '',
       badge: deepHas(c, 'tabdot'), on: deepHas(c, 'on'),
