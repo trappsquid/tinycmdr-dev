@@ -3637,10 +3637,10 @@
     {
       "id": "windows-console-window-flash",
       "title": "a shell command no longer flashes a console window",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1587316",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The bot runs under pythonw with no console, so every console program it started without CREATE_NO_WINDOW got a new, visible window - the job wrapper every shell command is auto-background probed through (the reported PowerShell flash), the computer-use PowerShell helper, the toolsmith probe and the clipboard tool - and all four now ask for a hidden console, with a Windows check that a child spawned through the wrapper reports no console window.",
       "gate": "tests/test_console_window.py grades the wrapper's spawn kwargs on every platform and, on Windows, that a console child spawned through it has GetConsoleWindow() 0"
