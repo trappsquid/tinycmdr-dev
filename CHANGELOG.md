@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.29] - 2026-10-18
+
+### Changed
+- **Web:** the Rome photo fills the chat window from the top instead of a band at the bottom, the dark strip above it and the fill behind the chat bar are gone, and a conversation dims the photo to 28% behind the transcript with the palette and panels unchanged (tests/test_webui_page.py).
+
 ## [1.1.28] - 2026-10-18
 
 ### Fixed
