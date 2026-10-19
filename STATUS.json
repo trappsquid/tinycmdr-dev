@@ -3653,7 +3653,7 @@
         "commit": "e4ecb9d",
         "expect": "untagged"
       },
-      "detail": "The photo was a band anchored at the bottom of the stage, so a third of the chat window above it stayed dark and the photo's top edge crossed the chibi's helmet; the photo now fills the stage from top to bottom, the chat bar's fill is gone, and a conversation dims the photo to 28% behind the transcript while the palette and panels are unchanged.",
+      "detail": "The photo was a band anchored at the bottom of the stage, so a third of the chat window above it stayed dark and the photo's top edge crossed the chibi's helmet; the photo now fills the stage from top to bottom, the chat bar's fill is gone, the welcome copy carries a shadow and ivory ink so it stays readable over the photo, and a conversation dims the photo to 28% behind the transcript while the palette and panels are unchanged.",
       "gate": "tests/test_webui_page.py grades the page's stylesheet and assets"
     }
   ]

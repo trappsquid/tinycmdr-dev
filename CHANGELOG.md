@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.29] - 2026-10-18
 
 ### Changed
-- **Web:** the Rome photo fills the chat window from the top instead of a band at the bottom, the dark strip above it and the fill behind the chat bar are gone, and a conversation dims the photo to 28% behind the transcript with the palette and panels unchanged (tests/test_webui_page.py).
+- **Web:** the Rome photo fills the chat window from the top instead of a band at the bottom, the dark strip above it and the fill behind the chat bar are gone, the welcome copy keeps its contrast over the photo, and a conversation dims the photo to 28% behind the transcript with the palette and panels unchanged (tests/test_webui_page.py).
 
 ## [1.1.28] - 2026-10-18
 
