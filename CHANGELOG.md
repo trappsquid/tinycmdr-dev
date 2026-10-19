@@ -5,6 +5,15 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.31] - 2026-10-19
+
+### Changed
+- **The legion links pages:** each configured box is its own webui page opened in a new tab with its token in the URL fragment, and the server-to-server relay, cohort channels, tabs and fan-out are gone (tests/test_legion.py, tests/test_webui.py, tests/test_webui_page.py).
+
+### Fixed
+- **An A2A slash command uses the page's command door:** an inbound `/new`, `/stop`, `/status`, `/help` or `/tinycmdr <verb>` is answered on that box instead of reaching the model as prose, and `read_only` refuses the host-changing verbs (tests/test_a2_surface.py).
+- **The hero keeps its sunbeam and its contrast:** one gold slice rotates behind the chibi again, the resume action is readable over the photo, and the pedestal and rail labels say Cohort (tests/test_webui_page.py).
+
 ## [1.1.30] - 2026-10-18
 
 ### Added

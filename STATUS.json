@@ -46,7 +46,7 @@
         "commit": "a028482",
         "expect": "untagged"
       },
-      "detail": "The rotating aura was 440px behind a 430px chibi, so the beam was hidden and the lightened backdrop finished it off; it is now a wider, stronger ray ring sized to stay outside the art on small screens, the secondary action has a dark plate and brighter label over the photo, and the pedestal and rail labels say Cohort.",
+      "detail": "The rotating aura was washed out behind the chibi by the lightened backdrop; it is now one brighter gold slice turning behind the art, the secondary action has a dark plate and brighter label over the photo, and the pedestal and rail labels say Cohort.",
       "gate": "tests/test_webui_page.py pins the rail's Cohort label; the served page and its stylesheet are graded by tests/test_webui.py."
     },
     {
