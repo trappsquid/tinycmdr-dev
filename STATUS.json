@@ -17,6 +17,28 @@
   ],
   "items": [
     {
+      "id": "cohort-tabs-run-the-page-commands",
+      "title": "a cohort tab runs the cohort's own slash commands",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "a028482",
+        "expect": "untagged"
+      },
+      "detail": "A slash command typed on a cohort tab reached the model as prose because the A2A run never read the page's command door; an inbound message now runs `_web_command` for that context (so /new, /stop, /status, /help and /tinycmdr verbs answer on the cohort), read_only refuses the host-changing verbs, /stop reaches an in-flight A2A run's cancel and a busy cohort accepts it instead of 409, and each cohort row's open control opens that box's own page with its token in the fragment for full parity.",
+      "gate": "tests/test_legion.py's test_cohort_commands and test_hub_stop_while_busy cover the command door, read_only, the cancel and the busy stop; tests/test_webui.py's OPEN COHORT block covers the fragment URL and the unknown name."
+    },
+    {
+      "id": "hero-sunbeam-and-contrast",
+      "title": "the hero keeps its sunbeam and a readable resume action",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "a028482",
+        "expect": "untagged"
+      },
+      "detail": "The rotating aura was 440px behind a 430px chibi, so the beam was hidden and the lightened backdrop finished it off; it is now a wider, stronger ray ring sized to stay outside the art on small screens, the secondary action has a dark plate and brighter label over the photo, and the pedestal and rail labels say Cohort.",
+      "gate": "tests/test_webui_page.py pins the rail's Cohort label; the served page and its stylesheet are graded by tests/test_webui.py."
+    },
+    {
       "id": "one-word-for-a-campaign",
       "title": "the page names a session a campaign, once",
       "state": "shipped",
