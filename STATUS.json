@@ -17,15 +17,26 @@
   ],
   "items": [
     {
-      "id": "cohort-tabs-run-the-page-commands",
-      "title": "a cohort tab runs the cohort's own slash commands",
+      "id": "legion-links-pages",
+      "title": "a cohort is another box's page, opened in its own tab",
       "state": "unreleased",
       "anchor": {
-        "commit": "a028482",
+        "commit": "2bd227a",
         "expect": "untagged"
       },
-      "detail": "A slash command typed on a cohort tab reached the model as prose because the A2A run never read the page's command door; an inbound message now runs `_web_command` for that context (so /new, /stop, /status, /help and /tinycmdr verbs answer on the cohort), read_only refuses the host-changing verbs, /stop reaches an in-flight A2A run's cancel and a busy cohort accepts it instead of 409, and each cohort row's open control opens that box's own page with its token in the fragment for full parity.",
-      "gate": "tests/test_legion.py's test_cohort_commands and test_hub_stop_while_busy cover the command door, read_only, the cancel and the busy stop; tests/test_webui.py's OPEN COHORT block covers the fragment URL and the unknown name."
+      "detail": "The legion relayed orders over A2A and re-implemented a subset of the other page, so it could not carry the page's own commands or features; the rail now lists the configured boxes and opens each one's own page in a new tab with its token in the URL fragment, the relay and its cohort channels, tabs, fan-out, transcript mirroring and restart repair are gone, and every box configured with the same list shows the same rail.",
+      "gate": "tests/test_legion.py covers the list, the card probe, the egress warning and the local-only overview; tests/test_webui.py's OPEN COHORT block covers the fragment URL; tests/test_webui_page.py drives the rows, the link and the dialogs."
+    },
+    {
+      "id": "a2a-commands-use-the-page-door",
+      "title": "an inbound A2A command uses the page's command door",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "2bd227a",
+        "expect": "untagged"
+      },
+      "detail": "An A2A message used to reach the model as prose even when it was a slash command; it now runs `_web_command` first, so /new, /stop, /status, /help and /tinycmdr verbs answer on that box, read_only refuses update/restart/clean/config/approvals and model --global, and /stop reaches an in-flight run's cancel.",
+      "gate": "tests/test_a2_surface.py's test_a_slash_command_uses_the_page_door covers the door, the unknown command, ordinary words and the read_only refusal."
     },
     {
       "id": "hero-sunbeam-and-contrast",
