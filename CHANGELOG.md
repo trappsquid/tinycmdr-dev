@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **A cohort can be reconfigured or removed from the rail:** the pencil re-probes the box and rewrites its address or rotated page token in the hub's `config.json` and `.env` with no restart, the x takes the entry and its minted token out, both close the cohort's tabs and keep its transcript, and a cohort with an order in flight is refused until it reports (tests/test_webui.py, tests/test_webui_page.py).
 
+### Changed
+- **The page speaks one word for a session:** the hero's actions no longer gloss campaign with "(new conversation)", and the load-error card, host toggle, rename/delete notes and empty-session title say campaign too (tests/test_webui.py, tests/test_webui_page.py).
+
 ## [1.1.29] - 2026-10-18
 
 ### Changed

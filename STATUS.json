@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "one-word-for-a-campaign",
+      "title": "the page names a session a campaign, once",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "8b9ac8e",
+        "expect": "untagged"
+      },
+      "detail": "The hero's actions were the one place the page said its word twice - \"Start a new campaign (new conversation)\" and \"Resume the last campaign (last conversation)\" - so the parentheticals are gone and the load-error card, host toggle, rename and delete notes, clear note, search count and empty-session title use campaign too, while conversation stays in the code and the API's internals.",
+      "gate": "tests/test_webui.py pins both hero actions and the absence of the glosses; tests/test_webui_page.py pins the error card's words."
+    },
+    {
       "id": "remove-a-cohort-from-the-page",
       "title": "the legion rail removes a connected cohort",
       "state": "unreleased",
