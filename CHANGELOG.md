@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.30] - 2026-10-18
+
+### Added
+- **A cohort can be reconfigured or removed from the rail:** the pencil re-probes the box and rewrites its address or rotated page token in the hub's `config.json` and `.env` with no restart, the x takes the entry and its minted token out, both close the cohort's tabs and keep its transcript, and a cohort with an order in flight is refused until it reports (tests/test_webui.py, tests/test_webui_page.py).
+
 ## [1.1.29] - 2026-10-18
 
 ### Changed

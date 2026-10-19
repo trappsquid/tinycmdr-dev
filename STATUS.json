@@ -17,6 +17,28 @@
   ],
   "items": [
     {
+      "id": "remove-a-cohort-from-the-page",
+      "title": "the legion rail removes a connected cohort",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4b40a4d",
+        "expect": "untagged"
+      },
+      "detail": "The rail could connect a cohort and never remove one, so a retired box stayed in agent.a2a_remotes until a hand edit and a restart; each cohort row's x posts remove-remote, which takes the entry out with no restart, prunes the legion store and every browser's tab list, unlinks the minted TINYCMDR_COHORT_<NAME>_TOKEN line (a hand-written token_env is left alone), refuses a cohort with a live order until it reports, and keeps the transcript.",
+      "gate": "tests/test_webui.py's REMOVE COHORT block covers the 409, the config/disk/env/store state, double removal and a shared token_env; tests/test_webui_page.py drives the control, the confirm, the tab close and the praetorium fallback."
+    },
+    {
+      "id": "reconfigure-a-cohort-from-the-page",
+      "title": "a connected cohort's token or address is editable from the rail",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "a63eb43",
+        "expect": "untagged"
+      },
+      "detail": "A cohort's page token could be rotated on the other box while the hub kept the stale one, and ADD COHORT refused the existing name, so the only path back was a hand edit or remove-and-re-add; the row's pencil opens the same dialog in edit mode, update-remote probes the card with the typed values before anything is written, a typed token rewrites the cohort's own token_env and resolves with no restart, a blank token keeps the stored one, the hub's own TINYCMDR_WEB_TOKEN and a shared token_env are refused, an entry missing token_env is repaired with the minted name, and a cohort with a live order is refused until it reports.",
+      "gate": "tests/test_webui.py's RECONFIGURE COHORT block covers probe-before-write, the 409, the rotated token, the blank token, the missing token_env and the shared/own refusals; tests/test_webui_page.py drives the pencil, the prefilled dialog, SAVE, an address-only edit and a refused edit."
+    },
+    {
       "id": "chat-model-wizard",
       "title": "the chat add asks its questions in the conversation",
       "state": "shipped",
