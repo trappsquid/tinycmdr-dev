@@ -1368,20 +1368,17 @@ box-shadow:0 .9rem 2.4rem var(--shadow);text-align:center}
    legion section joined the rail above the archive and moved the count. */
 .sidebar-archive{display:flex;min-height:0;flex:1 1 auto;flex-direction:column}
 .campaign-item{position:relative}
-.campaign-del,.campaign-edit,.campaign-open{position:absolute;top:6px;display:grid;width:22px;height:22px;
+.campaign-del,.campaign-edit{position:absolute;top:6px;display:grid;width:22px;height:22px;
 place-items:center;border:1px solid var(--line-soft);border-radius:3px;
 background:var(--panel-strong);color:var(--muted);cursor:pointer;opacity:.32;transition:opacity .12s}
 .campaign-del{right:6px}
 .campaign-edit{right:34px}
-.campaign-open{right:62px}
 .campaign-item:hover .campaign-del,.campaign-del:focus,
-.campaign-item:hover .campaign-edit,.campaign-edit:focus,
-.campaign-item:hover .campaign-open,.campaign-open:focus{opacity:1}
+.campaign-item:hover .campaign-edit,.campaign-edit:focus{opacity:1}
 .campaign-del:hover{color:var(--error);border-color:color-mix(in srgb,var(--error) 45%,transparent)}
 .campaign-edit:hover{color:var(--gold-bright);border-color:rgba(215,169,74,.42)}
-.campaign-open:hover{color:var(--gold-bright);border-color:rgba(215,169,74,.42)}
-.campaign-del svg,.campaign-edit svg,.campaign-open svg{width:13px;height:13px}
-@media (hover:none){.campaign-del,.campaign-edit,.campaign-open{opacity:.7}}
+.campaign-del svg,.campaign-edit svg{width:13px;height:13px}
+@media (hover:none){.campaign-del,.campaign-edit{opacity:.7}}
 .campaign-item small{display:flex;align-items:center;gap:7px}
 .campaign-item.other strong{color:var(--muted)}
 .campaign-item .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
@@ -1506,13 +1503,7 @@ svg.lucide{width:18px;height:18px;flex:0 0 auto}
 .addcohort-acts button:hover{border-color:rgba(215,169,74,.4)}
 #addcohort-go{border-color:rgba(215,169,74,.42);background:color-mix(in srgb,var(--gold) 14%,rgba(255,255,255,.03))}
 #addcohort-go:disabled{opacity:.55;cursor:default}
-.campaign-tabs{position:relative;z-index:2;display:flex;flex:0 0 auto;gap:.3rem;padding:.42rem 1rem 0;border-bottom:1px solid var(--line-soft);overflow-x:auto;background:rgba(12,14,17,.22)}
-.campaign-tab{display:flex;align-items:center;gap:.4rem;padding:.34rem .7rem;border:1px solid transparent;border-bottom:0;border-radius:.45rem .45rem 0 0;color:var(--muted);cursor:pointer;font-family:'Cinzel',Georgia,serif;font-size:.68rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}
-.campaign-tab:hover{color:var(--ivory);border-color:var(--line-soft)}
-.campaign-tab.on{color:var(--gold);border-color:var(--line);background:color-mix(in srgb,var(--gold) 9%,transparent)}
-.campaign-tab .tabdot{width:6px;height:6px;flex:0 0 auto;border-radius:50%;background:var(--gold);box-shadow:0 0 10px color-mix(in srgb,var(--gold) 70%,transparent)}
-.campaign-tab-x{border:0;background:transparent;color:var(--muted-2);cursor:pointer;font-size:.72rem;line-height:1;padding:0 .12rem}
-.campaign-tab-x:hover{color:var(--error)}
+
 
 #lanewarn:not(.show),
 #configwarn:not(.show){display:none}

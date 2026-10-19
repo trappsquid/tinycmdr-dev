@@ -445,34 +445,20 @@ envelope and caps, and the page suite's shim the renderer.
   task ring) so a peering tinycmdr can WATCH a message work instead of waiting out the
   blocking reply. A frame writes nothing to disk (`A2ARunFrame.persist = False`) and
   refuses `send_file` (a peer has no `/api/download`).
-- **The legion** (one page, several boxes): with `agent.a2a_remotes` set, this box's page
-  relays orders to those cohorts server-to-server - `/api/legion` (overview) plus exact
-  paths `session`/`lines` and one POST op family (`send`, `send-all`, `tab-open`,
-  `tab-close`, `open`, `add-remote`, `update-remote`, `remove-remote`). `open` is OPEN
-  COHORT: the cohort's own page address with its token in the URL fragment (never the
-  query), so a browser gets the full page at that box's origin; the relayed channel is
-  the hub's view, and an inbound command runs the same `_web_command` door this box's
-  page uses before its text can reach the model. An order or a tab names a
-  CONFIGURED cohort and never a URL, so the relay cannot be aimed anywhere the operator
-  did not write down; cohort tokens stay in this box's `.env` via `token_env`. `add-remote`
-  is ADD COHORT: the authenticated page's own write into that config - a box the operator
-  runs, by URL + its page token (the card is probed before anything lands, the token is
-  saved under a swept `_TOKEN` name, and the running hub resolves it with no restart).
-  `update-remote` is RECONFIGURE COHORT: a new address or a rotated page token for an
-  existing entry, probed with the typed values before anything is written (a blank token
-  keeps the stored one; the hub's own `TINYCMDR_WEB_TOKEN` and a token_env another cohort
-  shares are refused), applied with no restart. `remove-remote` is REMOVE COHORT: the
-  entry leaves the same file with no restart, the store and every browser's tab list prune
-  it, and the token line goes only when ADD COHORT minted its name - a hand-written
-  `token_env` may be shared and is left alone. A cohort with a live order is refused by
-  both, until it reports. Orders dispatch off-thread (the POST returns at once), fall back
-  to `GetTask` when the socket dies (the store answers; the order is never re-sent), and a
-  hub restart is repaired from the cohort's own store (`_legion_reattach`), also without
-  re-sending. `web.a2a_policy: "read_only"` on a cohort refuses every write/exec tool for
-  runs that arrived over `/a2a` while its own page keeps them; an off-LAN remote URL warns
-  once at startup; every inbound `SendMessage` and every hub dispatch is one log line.
-  Tests: `tests/test_legion.py`, the page shim's legion scenario, and
-  `tests/test_webui.py`'s ADD/UPDATE/REMOVE COHORT block.
+- **The legion** (linked boxes): with `agent.a2a_remotes` set, this box's page shows a
+  rail row per configured box, and `/api/legion` answers `{cohorts, praetorium}` from
+  LOCAL state. `open` is OPEN COHORT: the configured URL with its token in the URL
+  fragment (never the query), which the browser navigates to - the other box's own page,
+  every feature, with no relay. `add-remote` / `update-remote` / `remove-remote` are the
+  authenticated page's own writes into that config: a box the operator runs, by URL + its
+  page token (the card is probed before anything lands, the token is saved under a swept
+  `_TOKEN` name, and the running hub resolves it with no restart), a rotated token or
+  moved address probed with the typed values before anything is written (a blank token
+  keeps the stored one; the hub's own `TINYCMDR_WEB_TOKEN` and a token_env another entry
+  shares are refused), and an unlink that leaves a hand-written `token_env` alone. A
+  census thread refreshes each card for the row's version and liveness; an off-LAN URL
+  warns once at startup. Tests: `tests/test_legion.py`, the page shim's legion scenario,
+  and `tests/test_webui.py`'s ADD/UPDATE/REMOVE/OPEN COHORT block.
 
 Verify by hand: restart, then
 `curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with

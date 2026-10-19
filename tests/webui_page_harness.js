@@ -118,9 +118,8 @@ const IDS = ['log', 'in', 'send', 'stop', 'ver',
              // the stage header's state
              'filter', 'hits', 'hostver', 'stage-state', 'logwrap',
              'stat-session', 'stat-context', 'stat-model',
-             // the legion: the rail's cohort section and rows, the channel tab
-             // strip, the header's channel label and the cohort tally
-             'legion', 'cohorts', 'campaigns', 'chan', 'legionstat'];
+             // the legion: the linked boxes and the header's channel label
+             'legion', 'cohorts', 'chan', 'legionstat'];
 const byId = {};
 function freshDom() {
   for (const id of IDS) { byId[id] = new El(id === 'in' ? 'textarea' : 'div'); }
@@ -129,10 +128,9 @@ function freshDom() {
   // parser, so put the two attributes the driver reads back
   byId.emptymark.setAttribute('src', '/mark.png');
   byId.lanedetail.hidden = true;
-  // the legion section and the channel tabs start hidden in the markup (they are
-  // shown only when the hub reports cohorts), so the shim says so too
+  // the legion section starts hidden in the markup (it is shown when the rail
+  // draws), so the shim says so too
   byId.legion.hidden = true;
-  byId.campaigns.hidden = true;
   globalThis.document.body = new El('body');
 }
 
@@ -178,7 +176,13 @@ let reloads = 0;
 let promptCalls = 0;
 let promptMsg = '';
 globalThis.prompt = (msg) => { promptCalls++; promptMsg = String(msg); return 'test-token'; };
-globalThis.window = { addEventListener() {} };
+const openedPages = [];
+globalThis.window = { addEventListener() {},
+  open() {
+    const w = { location: '', closed: false, close() { this.closed = true; } };
+    openedPages.push(w);
+    return w;
+  } };
 globalThis.setInterval = () => 0;
 // The page takes its token from the link (?token=...) first and strips it from
 // the address bar again, so it reads location.search at load and calls
@@ -209,7 +213,7 @@ let legionFetches = 0;
 const legionAdds = [];                 // every add-remote POST body the page sent
 const legionUpdates = [];              // every update-remote POST body the page sent
 const legionRemovals = [];             // every remove-remote POST body the page sent
-const legionBroadcasts = [];           // every send-all POST and the reply it got
+const legionOpens = [];                // every open POST body the page sent
 const modelPosts = [];                 // every model switch the header control sent
 let modelCurrent = null;               // what /api/models calls current (the POST moves it)
 const ROSTER_MAIN = { name: 'main', url: 'http://127.0.0.1:1/v1', local: true,
@@ -307,22 +311,6 @@ const sessions = [{ key: 'web', title: 'the shared conversation', created: 0,
                     owner: 'shared', live: null }];
 
 // ---------------------------------------------------------------- the legion
-// The fake hub's cohorts: one run per order, its lines the same shape the real
-// hub's LegionRun composes (a hub prefix line, then the cohort frame's lines).
-let legionSeq = 0;
-const legionRuns = [];
-function legionOpen(remote, orderText) {
-  const r = { id: 'L' + (++legionSeq), remote: remote, lines: [], spec: [], done: false,
-              cursor: 0 };
-  r.spec = (scenario.legion_spec || [["tool", "uname -a"], ["final", "it answered"]]).slice();
-  if (r.spec.length && r.spec[r.spec.length - 1][0] !== 'final') {
-    r.spec.push(['final', 'done']);
-  }
-  r.lines.push({ i: 0, uid: r.id + 'p0', kind: 'you', text: orderText, t: 0, r: 1 });
-  legionRuns.push(r);
-  return r;
-}
-
 function fetchShim(url, opts) {
   const body = (opts && typeof opts.body === 'string') ? JSON.parse(opts.body) : {};
   const hdrs = (opts && opts.headers) || {};
@@ -449,34 +437,14 @@ function fetchShim(url, opts) {
   }
   if (url.indexOf('/api/legion') === 0) {
     legionFetches++;
-    // the legion mesh: the hub's cohorts and tabs, one cohort's transcript, and the
-    // live lines of an order. Mirrors the hub's own shapes - a cohort's runs carry
-    // the hub prefix line plus the cohort frame's uid-keyed lines. One branch for
-    // the family, dispatched on the EXACT path inside: a nested indexOf prefix
-    // would shadow a later one (the server's route-order rule, graded by
-    // tests/test_contracts.py on this file too).
-    const sub = url.split('?')[0];
-    const query = {};
-    (url.split('?')[1] || '').split('&').forEach((p) => {
-      const kv = p.split('='); if (kv[0]) { query[kv[0]] = decodeURIComponent(kv[1] || ''); }
-    });
+    // The linked boxes: the rail reads the overview, the page POSTs one of the
+    // config ops, and OPEN answers the other box's own URL with the token in the
+    // fragment. Nothing is relayed and there are no runs or tabs.
     if (opts && opts.method === 'POST') {
-      if (body.op === 'send') {
-        if (scenario.legion_busy) {
-          return Promise.resolve({ ok: false, status: 409, json: () => Promise.resolve(
-            { error: 'this cohort is already on campaign (task L42) - wait for its report' }) });
-        }
-        const r = legionOpen(body.remote, body.message);
-        return jres({ run_id: r.id, remote: body.remote });
-      }
-      if (body.op === 'tab-open') {
-        scenario.legion_tabs = scenario.legion_tabs || [];
-        if (scenario.legion_tabs.indexOf(body.remote) < 0) { scenario.legion_tabs.push(body.remote); }
-        return jres({ tabs: scenario.legion_tabs.slice() });
-      }
-      if (body.op === 'tab-close') {
-        scenario.legion_tabs = (scenario.legion_tabs || []).filter((n) => n !== body.remote);
-        return jres({ tabs: scenario.legion_tabs.slice() });
+      if (body.op === 'open') {
+        legionOpens.push({ name: body.remote });
+        return jres({ name: body.remote,
+                      url: 'http://' + body.remote + ':8790/#token=tok-' + body.remote });
       }
       if (body.op === 'add-remote') {
         legionAdds.push({ name: body.remote, url: body.url, token: body.token });
@@ -488,13 +456,11 @@ function fetchShim(url, opts) {
         const row = { name: body.remote,
                       numeral: (scenario.legion_cohorts || []).length + 2,
                       host: String(body.url || '').replace(/^https?:\/\//, ''),
-                      state: 'ready', error: '', version: '9.9.9', lines: true,
-                      task: null };
+                      state: 'ready', error: '', version: '9.9.9' };
         scenario.legion_cohorts = (scenario.legion_cohorts || []).concat([row]);
         return jres({ cohorts: scenario.legion_cohorts,
-                      tabs: scenario.legion_tabs || [],
                       praetorium: { host: 'harness', version: 'harness' },
-                      added: { ok: true, name: body.remote, lines: true,
+                      added: { ok: true, name: body.remote,
                                card: { name: 'tinycmdr', version: '9.9.9' } } });
       }
       if (body.op === 'update-remote') {
@@ -509,82 +475,28 @@ function fetchShim(url, opts) {
           row.host = String(body.url || '').replace(/^https?:\/\//, '');
         }
         return jres({ cohorts: scenario.legion_cohorts,
-                      tabs: scenario.legion_tabs || [],
-                      broadcast: scenario.legion_broadcast || {},
                       praetorium: { host: 'harness', version: 'harness' },
                       updated: { ok: true, name: body.remote, url: body.url,
-                                 token_updated: !!body.token, lines: true,
+                                 token_updated: !!body.token,
                                  card: { name: 'tinycmdr', version: '9.9.9' } } });
       }
       if (body.op === 'remove-remote') {
         legionRemovals.push({ name: body.remote });
         if (scenario.legion_remove_error) {
-          // the hub refused it (a live order): the page must keep the row and show
-          // the hub's words, exactly like a refused add
+          // the hub refused it: the page must keep the row and show its words
           return Promise.resolve({ ok: false, status: 409, json: () => Promise.resolve(
             { error: scenario.legion_remove_error }) });
         }
         scenario.legion_cohorts = (scenario.legion_cohorts || [])
           .filter((c) => c.name !== body.remote);
-        scenario.legion_tabs = (scenario.legion_tabs || [])
-          .filter((n) => n !== body.remote);
         return jres({ cohorts: scenario.legion_cohorts,
-                      tabs: scenario.legion_tabs || [],
-                      broadcast: scenario.legion_broadcast || {},
                       praetorium: { host: 'harness', version: 'harness' },
                       removed: { ok: true, name: body.remote,
                                  token_removed: true } });
       }
-      if (body.op === 'send-all') {
-        const names = (scenario.legion_cohorts || []).map((c) => c.name);
-        const sent = [], refused = [];
-        for (const name of names) {
-          // scenario.legion_busy refuses the FIRST cohort, so a mixed fan-out is
-          // gradeable: one already on campaign, the rest ordered.
-          if (scenario.legion_busy && name === names[0]) {
-            refused.push({ name: name,
-              reason: 'this cohort is already on campaign (task L42) - wait for its report' });
-            continue;
-          }
-          legionOpen(name, body.message);
-          sent.push(name);
-        }
-        const summary = 'order sent to ' + sent.length + ' of ' + names.length
-          + ' cohort' + (names.length === 1 ? '' : 's')
-          + (refused.length ? '; refused: '
-             + refused.map((r) => r.name + ' (already on campaign)').join(', ') : '');
-        const reply = { ok: true, sent: sent, refused: refused, failed: [],
-                        summary: summary, at: 1, text: body.message };
-        scenario.legion_broadcast = reply;
-        legionBroadcasts.push({ op: body.op, message: body.message,
-                                sent: sent, summary: summary });
-        return jres(reply);
-      }
       return jres({ error: 'unknown op' });
     }
-    if (sub === '/api/legion/session') {
-      const name = query.remote || '';
-      const mine = legionRuns.filter((r) => r.remote === name);
-      const row = (scenario.legion_cohorts || []).find((c) => c.name === name) || null;
-      return jres({ remote: name, cohort: row,
-                    runs: mine.map((r) => ({ run_id: r.id, lines: r.lines, live: !r.done })) });
-    }
-    if (sub === '/api/legion/lines') {
-      const name = query.remote || '';
-      const r = legionRuns.filter((x) => x.remote === name && !x.done).slice(-1)[0];
-      if (!r) { return jres({ remote: name, lines: [], done: true, no_run: true }); }
-      if (r.cursor < r.spec.length) {
-        const [k, t] = r.spec[r.cursor++];
-        r.lines.push({ i: r.lines.length, uid: r.id + '#' + r.lines.length, kind: k,
-                       text: t, r: r.cursor, t: r.cursor });
-      }
-      r.done = r.cursor >= r.spec.length;
-      return jres({ remote: name, run_id: r.id, lines: r.lines, done: r.done,
-                    status: r.done ? 'done' : 'working', steps: r.cursor, elapsed: 1.0 });
-    }
     return jres({ cohorts: scenario.legion_cohorts || [],
-                  tabs: scenario.legion_tabs || [],
-                  broadcast: scenario.legion_broadcast || {},
                   praetorium: { host: 'harness', version: 'harness' } });
   }
   if (url.indexOf('/api/events') === 0) {
@@ -650,11 +562,11 @@ async function tick() {
 // page source itself is untouched: this appended line is the whole difference.
 const EXPORTS = "\n;globalThis.__page={send:send,stop:stop,"
   + "newConversation:newConversation,openSession:openSession,fetchFile:fetchFile,"
-  + "uploadFiles:uploadFiles,versionCheck:versionCheck,openChannel:openChannel,"
-  + "closeChannel:closeChannel,switchModel:switchModel,loadModels:loadModels,"
+  + "uploadFiles:uploadFiles,versionCheck:versionCheck,"
+  + "switchModel:switchModel,loadModels:loadModels,"
   + "renameSession:renameSession,state:function(){return {sessionKey:sessionKey,"
-  + "sessions:sessions,legion:{active:legion.active,on:legion.on,"
-  + "cohorts:legion.cohorts,tabs:legion.tabs,seen:legion.seen}};}};";
+  + "sessions:sessions,legion:{on:legion.on,cohorts:legion.cohorts,"
+  + "praetorium:legion.praetorium}};}};";
 
 function loadPage() {
   pages++;
@@ -828,8 +740,8 @@ async function main() {
     config: { cls: byId.configwarn.className, text: byId.configtext.textContent },
     empty: { hidden: !!byId.empty.hidden, text: byId.empty.textContent,
              img: byId.emptymark.getAttribute('src') },
-    // the legion surfaces: what the rail's cohort section, the tab strip and the
-    // stage header actually show (the transcript itself is in `rendered`)
+    // the legion surfaces: what the rail's linked-box section and the stage
+    // header actually show, and the page each row opened
     chan: byId.chan ? byId.chan.textContent : null,
     legionHidden: !!(byId.legion || {}).hidden,
     legionStat: byId.legionstat ? byId.legionstat.textContent : '',
@@ -837,7 +749,8 @@ async function main() {
     legionAdds: legionAdds,
     legionUpdates: legionUpdates,
     legionRemovals: legionRemovals,
-    legionBroadcasts: legionBroadcasts,
+    legionOpens: legionOpens,
+    opened: openedPages.map((w) => w.location),
     addcohort: (globalThis.document.body.children || [])
       .filter((c) => c.id === 'addcohort').map((c) => c.textContent),
     addcohortFields: (() => {
@@ -851,13 +764,8 @@ async function main() {
     })(),
     cohorts: (byId.cohorts ? byId.cohorts.children : []).map((c) => ({
       cls: c.className, text: c.textContent, title: c.title || '',
-      dot: deepHas(c, 'dot'), work: deepHas(c, 'work'), bad: deepHas(c, 'bad'),
-      active: deepHas(c, 'active'), del: deepHas(c, 'campaign-del'),
-      edit: deepHas(c, 'campaign-edit') })),
-    campTabs: (byId.campaigns ? byId.campaigns.children : []).map((c) => ({
-      cls: c.className, text: c.textContent, title: c.title || '',
-      badge: deepHas(c, 'tabdot'), on: deepHas(c, 'on'),
-      x: deepHas(c, 'campaign-tab-x') })),
+      dot: deepHas(c, 'dot'), bad: deepHas(c, 'bad'),
+      del: deepHas(c, 'campaign-del'), edit: deepHas(c, 'campaign-edit') })),
     retryLabel: byId.laneretry.textContent,
     healthFetches: healthFetches,
     reloads: reloads,

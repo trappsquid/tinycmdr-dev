@@ -378,6 +378,57 @@ registers no tool at all.
             OFF.AGENT.last_usage.update(saved_usage)
 
 
+    def test_a_slash_command_uses_the_page_door():
+        """An inbound A2A message reads this box's own command door first.
+
+        A slash command is answered here exactly as it is on this box's page; only
+        ordinary words reach the model. `web.a2a_policy: read_only` still refuses a
+        command that would change the host.
+        """
+        calls = []
+        saved_hook = OFF._A2A_RUN_HOOK
+        saved_restart = OFF.perform_restart
+        saved_policy = (OFF.CONFIG.get("web") or {}).get("a2a_policy")
+        OFF._A2A_RUN_HOOK = lambda text, ctx: (calls.append(text) or "model ran", False)
+        OFF.perform_restart = lambda *a, **k: None
+        OFF.CONFIG.setdefault("web", {})["a2a_policy"] = "full"
+        try:
+            def send(text, task_id):
+                task, err = OFF.a2a_handle("SendMessage", {"message": {
+                    "messageId": "msg-" + task_id, "role": "ROLE_USER",
+                    "parts": [{"text": text}], "contextId": "ctx-cmd",
+                    "taskId": task_id}})
+                answer = (((task or {}).get("status") or {}).get("message") or {}) \
+                    .get("parts", [{}])[0].get("text", "")
+                return err, answer
+
+            err, answer = send("/status", "task-cmd-status")
+            check("/status is answered by the page's command door",
+                  err is None and "tinycmdr v" in answer and not calls,
+                  (err, answer[:80], calls))
+            err, answer = send("/nope", "task-cmd-unknown")
+            check("an unknown slash command is refused by name, never sent on",
+                  err is None and answer.startswith("Unknown command.") and not calls,
+                  (err, answer[:80], calls))
+            err, answer = send("plain words", "task-cmd-plain")
+            check("ordinary words still reach the model", calls == ["plain words"], calls)
+            OFF.CONFIG["web"]["a2a_policy"] = "read_only"
+            err, answer = send("/restart", "task-cmd-ro")
+            check("read_only refuses a host-changing command over A2A",
+                  err is None and "REFUSED" in answer and "read-only" in answer,
+                  (err, answer[:80]))
+            err, answer = send("/status", "task-cmd-ro-read")
+            check("...while reads still answer", err is None and "tinycmdr v" in answer,
+                  (err, answer[:80]))
+        finally:
+            OFF._A2A_RUN_HOOK = saved_hook
+            OFF.perform_restart = saved_restart
+            if saved_policy is None:
+                OFF.CONFIG.get("web", {}).pop("a2a_policy", None)
+            else:
+                OFF.CONFIG["web"]["a2a_policy"] = saved_policy
+
+
     def test_a_bad_page_size_is_the_params_error():
         """pageSize was the one peer field ListTasks converted without a guard: a string
     ("ten"), a list or a map raised out of a2a_handle - and out of a2a_rpc, so the HTTP

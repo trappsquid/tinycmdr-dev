@@ -37,21 +37,23 @@ Runs **on the machine it manages**: you send a task, it uses real tools (`shell`
 
 | Door | For |
 | :--- | :--- |
-| **Page** (default) | live cards, file upload/download, conversation rail, tasks/jobs/log/inventory, and a channel per cohort below — browser, phone on your LAN |
+| **Page** (default) | live cards, file upload/download, conversation rail, tasks/jobs/log/inventory, and a rail of linked boxes below — browser, phone on your LAN |
 | Terminal (`--app`, `--cli`) | ops on the box |
 | Chat (Mattermost / Telegram) | steering from anywhere; uploads both ways |
 | `--once "…"` | scripts |
 
 One process serves whichever are configured; same sessions, notes, skills, model switches.
 
-## One page, several boxes
+## Several linked boxes
 
-The page can command more than the box it runs on. Give it *cohorts* — other tinycmdr boxes —
-and it grows a rail section (one row per cohort), a tab per engaged cohort, and a channel that
-streams that box's work line by line, exactly like a local run:
+The page lists other tinycmdr boxes as a **legion**. A cohort is another box's own page: the rail
+grows one row per linked box, shows its version and whether it answers, and clicking the row opens
+that box's page in a new tab with its token in the URL fragment — the full page, every feature,
+exactly as if you had navigated there yourself. Every one of those pages carries the same rail, so
+a fleet of boxes is one click apart.
 
 ```json
-// the hub: config.json
+// each box: config.json — the same list everywhere
 "agent": {
   "a2a_remotes": {
     "storage":  {"url": "http://storage.lan:8790", "token_env": "COHORT_STORAGE_TOKEN"},
@@ -60,35 +62,18 @@ streams that box's work line by line, exactly like a local run:
 }
 ```
 
-```json
-// each cohort: config.json   (its own page needs nothing else; the mesh door rides
-// the page - no enable switch on current builds)
-"web": {"a2a_policy": "read_only"}
-```
-
-Each cohort row's **open** control opens that box's own page in a new tab, with its page token in
-the URL fragment — the full page, every feature, exactly as if you had navigated to that address
-yourself. The relayed channel is the hub's view of the same box (orders, live lines, fan-out), and
-it runs the same slash commands (`/new`, `/stop`, `/status`, `/help`, `/tinycmdr <verb>`) on that
-box.
-
-The hub relays server-to-server over the agent-to-agent protocol; `token_env` names a variable in
-the hub's `.env` holding that cohort's page token — copy the cohort's `TINYCMDR_WEB_TOKEN` value
-into the hub's `.env` under the name you chose (never into `config.json`), and orders and channels
-only ever name a configured cohort. The rail's **ADD COHORT** does that setup for you — a name, the
-cohort's URL and its page token, probed before anything is written — and the `config.json` block
-above is the same thing by hand. Each cohort row's **pencil** reconfigures it: the card is probed
-with the values you type before anything is written, a new address or rotated page token lands in the
-same config and `.env` with no restart, and a blank token keeps the current one. The row's **×** is
-the reverse: **REMOVE COHORT** takes the entry and the minted `TINYCMDR_COHORT_<NAME>_TOKEN` line
-out, closes the cohort's tabs and keeps its transcript; a hand-written `token_env` is left alone, and
-a cohort with an order in flight is refused until it reports. Keep one token per box, so a lost or
-retired one rotates alone (`tinycmdr token set TINYCMDR_WEB_TOKEN` on that box, then the hub's
-`.env`). `a2a_policy:
-"read_only"` lets a cohort answer with reads while refusing every write and command that arrives
-over A2A; its own page keeps full tools. Address cohorts on a private network (the LAN, or a
-Tailscale/WireGuard overlay) — this one link is plain HTTP with a bearer token, and a public
-address is warned about at startup.
+`token_env` names a variable in that box's `.env` holding the other box's page token — copy its
+`TINYCMDR_WEB_TOKEN` value into `.env` under the name you chose (never into `config.json`). The
+rail's **ADD COHORT** does that setup for you — a name, the box's URL and its page token, probed
+before anything is written — and the block above is the same thing by hand. Each row's **pencil**
+reconfigures it: the card is probed with the values you type before anything is written, a new
+address or rotated page token lands in the same config and `.env` with no restart, and a blank token
+keeps the current one. The row's **×** unlinks it: the entry and the minted
+`TINYCMDR_COHORT_<NAME>_TOKEN` line go; a hand-written `token_env` is left alone. Keep one token per
+box, so a lost or retired one rotates alone (`tinycmdr token set TINYCMDR_WEB_TOKEN` on that box,
+then the other boxes' `.env`). Address boxes on a private network (the LAN, or a
+Tailscale/WireGuard overlay) — the link is plain HTTP with a bearer token, and a public address is
+warned about at startup.
 
 ## Install
 

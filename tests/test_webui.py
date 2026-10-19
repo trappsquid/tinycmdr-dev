@@ -427,16 +427,14 @@ def main():
           "the legion route without a token: 401")
     _lg = req("GET", "/api/legion", TOK)
     _lgj = json.loads(_lg[1]) if _lg[0] == 200 else {}
-    check(_lg[0] == 200 and _lgj.get("cohorts") == [] and _lgj.get("tabs") == []
+    check(_lg[0] == 200 and _lgj.get("cohorts") == [] and "tabs" not in _lgj
+          and "broadcast" not in _lgj
           and _lgj.get("praetorium", {}).get("version"),
-          "a hub with no cohorts answers an empty legion (and its own version)",
+          "a hub with no cohorts answers an empty rail (and its own version)",
           (_lg[0], (_lg[1] or b"")[:140]))
-    check(req("GET", "/api/legion/lines?remote=ghost", TOK)[0] == 404
-          and req("GET", "/api/legion/session?remote=ghost", TOK)[0] == 404,
-          "session/lines for a cohort this hub does not have: 404")
-    check(req("POST", "/api/legion", TOK, b'{"op":"send","remote":"ghost","message":"x"}')[0] == 404,
-          "an order to a cohort this hub does not have: 404 (an order names a "
-          "CONFIGURED remote, never an address)")
+    check(req("POST", "/api/legion",
+              TOK, b'{"op":"send","remote":"ghost","message":"x"}')[0] == 400,
+          "the relay ops are gone: no send, no send-all, no tabs")
     check(req("POST", "/api/legion", TOK, b'{"op":"zzz"}')[0] == 400,
           "an unknown legion op: 400")
     check(req("POST", "/api/legion", None, b'{"op":"send"}')[0] == 401,
@@ -494,12 +492,11 @@ def main():
                                           # web block must survive (the reload itself
                                           # is the product's normal path)
     check(code == 200 and j.get("added", {}).get("ok") is True
-          and j.get("added", {}).get("lines") is True
           and j.get("added", {}).get("card", {}).get("version") == "9.9.9",
           "ADD COHORT probes the card and reports what it found",
           (code, json.dumps(j.get("added"))[:180]))
     _names = [(c or {}).get("name") for c in (j.get("cohorts") or [])]
-    check(_names == ["storage"] and j["cohorts"][0].get("lines") is True
+    check(_names == ["storage"]
           and "127.0.0.1" in (j["cohorts"][0].get("host") or ""),
           "the overview it answers with carries the new cohort", _names)
     check((fb.CONFIG.get("agent") or {}).get("a2a_remotes", {}).get("storage")
@@ -602,7 +599,7 @@ def main():
     # The case this exists for: the cohort's page token was rotated, the hub's copy
     # is stale, and there was no way back short of removing and re-adding the box.
     # The card is probed with the typed values BEFORE anything is written; a blank
-    # token keeps the stored one; a live order refuses the edit.
+    # token keeps the stored one.
     _CTOK2 = "tok-cohort-rotated-0123456789"
     _cfg_before = (STAGE / "config.json").read_text(encoding="utf-8")
     _env_before = fb.ENV_FILE.read_text(encoding="utf-8")
@@ -613,15 +610,6 @@ def main():
     check((STAGE / "config.json").read_text(encoding="utf-8") == _cfg_before
           and fb.ENV_FILE.read_text(encoding="utf-8") == _env_before,
           "...and a failed probe changes neither config.json nor .env")
-    _live, _busy = fb._web_claim_run(
-        fb.legion_key("storage"), "",
-        make=lambda rid: fb.LegionRun(rid, "storage", "ctx-update"))
-    code, j = _add({"op": "update-remote", "remote": "storage",
-                    "url": cohort_url, "token": _CTOK2})
-    check(code == 409 and "on campaign" in (j.get("error") or ""),
-          "a cohort with an order in flight cannot be reconfigured",
-          (code, j.get("error")))
-    _live.finish()
     _saved_web = dict(fb.CONFIG["web"])
     code, j = _add({"op": "update-remote", "remote": "storage",
                     "url": cohort_url, "token": _CTOK2})
@@ -684,21 +672,9 @@ def main():
           "...and the repaired entry removes cleanly", (code, j.get("removed")))
 
     # ---- REMOVE COHORT: ADD COHORT's other half -------------------------------
-    # A cohort with a live order is refused - its frame and dispatch thread belong to
-    # that entry - and one at rest leaves config.json, .env and the legion store in
-    # one authenticated op, with no restart. A hand-written token_env may be SHARED
-    # (the box's own page token is the obvious one), so only the name ADD COHORT
-    # minted is unlinked.
-    _live, _busy = fb._web_claim_run(
-        fb.legion_key("storage"), "",
-        make=lambda rid: fb.LegionRun(rid, "storage", "ctx-remove"))
-    check(_live is not None and _busy is None,
-          "the suite holds a live order on storage", _busy)
-    code, j = _add({"op": "remove-remote", "remote": "storage"})
-    check(code == 409 and "on campaign" in (j.get("error") or ""),
-          "a cohort with an order in flight is not removable",
-          (code, j.get("error")))
-    _live.finish()
+    # One at rest leaves config.json and .env in one authenticated op, with no
+    # restart. A hand-written token_env may be SHARED (the box's own page token is
+    # the obvious one), so only the name ADD COHORT minted is unlinked.
     _saved_web = dict(fb.CONFIG["web"])
     code, j = _add({"op": "remove-remote", "remote": "storage"})
     fb.CONFIG["web"] = _saved_web
@@ -717,8 +693,6 @@ def main():
           "the minted token line left .env and the running process")
     check(j.get("cohorts") == [] and j.get("removed", {}).get("token_env") == _CNAME,
           "the overview it answers with reads like a hub with no cohorts")
-    check("storage" not in (fb._legion_state().get("cohorts") or {}),
-          "the legion store pruned its record (and every tab pointing at it)")
     code, j = _add({"op": "remove-remote", "remote": "storage"})
     check(code == 404 and j.get("error"),
           "removing it twice: 404, not a false success", (code, j))
@@ -1310,7 +1284,6 @@ def main():
                            ("GET", "/api/commands", TOK, None),
                            ("GET", "/api/session?key=web-none", TOK, None),
                            ("GET", "/api/legion", TOK, None),
-                           ("GET", "/api/legion/lines?remote=ghost", TOK, None),  # 404
                            ("POST", "/api/legion", TOK, b'{"op":"zzz"}'),       # 400
                            ("GET", "/api/download?run=x&uid=y", TOK, None),   # 404
                            ("GET", "/api/login", TOK, None),

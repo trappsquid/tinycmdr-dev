@@ -30315,12 +30315,6 @@ def _web_stall_tick(warn_m=None, kill_m=None, now=None):
         if run.done:
             _WEB_STALL_SEEN.pop(run_id, None)
             continue
-        if str(getattr(run, "session_key", "")).startswith(LEGION_KEY_PREFIX):
-            # A legion frame is not a web run: its progress arrives from another box
-            # on its own clock, its cancel event means nothing over A2A, and the
-            # cohort's own watchdog is what abandons a wedged run over there. The
-            # dispatch thread carries this side's bound (LEGION_TASK_MAX_SECONDS).
-            continue
         live.add(run_id)
         seen = _WEB_STALL_SEEN.get(run_id)
         rev = run.rev
@@ -30392,7 +30386,7 @@ def _web_new_run(session_key="web", client=""):
     return run
 
 
-def _web_claim_run(session_key="web", client="", make=None):
+def _web_claim_run(session_key="web", client=""):
     """Start a run in a conversation, or hand back the one already going.
 
     Returns (run, None) when this caller got the conversation, and (None, busy) when
@@ -30401,27 +30395,19 @@ def _web_claim_run(session_key="web", client="", make=None):
     registered, so two callers arriving together both saw "no run" and both started
     one - the very rule ("one run per conversation") the check existed to keep, and
     the measured shape of A-228 (three simultaneous POSTs to one conversation).
-
-    `make(rid)` builds a different run object for lanes whose frame is not a WebRun
-    (the Legion relay); the default is the browser's own.
     """
     with WEB_RUNS_LOCK:
         for r in WEB_RUNS.values():
             if r.session_key == session_key and not r.done:
                 return None, r
-        if not str(session_key).startswith(LEGION_KEY_PREFIX) \
-                and sum(1 for r in WEB_RUNS.values() if not r.done) >= WEB_RUN_LIVE_MAX:
+        if sum(1 for r in WEB_RUNS.values() if not r.done) >= WEB_RUN_LIVE_MAX:
             # The bound this table never had: one run per conversation is not a bound
             # when the key space is open, so N keys meant N agent threads against the
             # LLM endpoint, and with 40+ live runs every finished run was evicted
             # before its page made the final poll (A-2026-10-08-117). A scheduled
             # job's report (web_new_scheduled_run) is not a claim and keeps its door.
-            # A legion claim skips the bound on purpose: one frame per CONFIGURED
-            # cohort (the per-key check above refuses a second), so an ALL COHORTS
-            # fan-out can neither be capped out by the page's bound nor inflate it.
             return None, "cap"
-        run = (make or (lambda rid: WebRun(rid, session_key, client)))(
-            os.urandom(6).hex())
+        run = WebRun(os.urandom(6).hex(), session_key, client)
         _web_register_run(run)
         return run, None
 
@@ -30666,134 +30652,27 @@ def _web_drive(run, text, scripted=False):
     return reply
 
 # ------------------------------------------------------------------- the LEGION
-# One page, several boxes. The page is token-gated, single-origin and deliberately
-# plain HTTP, so a browser cannot safely hold N cohorts' tokens or iframe N LAN
-# origins. The hub-and-spoke shape avoids all of it: the browser talks to THIS box
-# exactly as it does today, and this box relays to the others over the A2A client
-# (agent.a2a_remotes), server to server, with every cohort's token staying in this
-# box's .env. The page gains one rail section (the legion), a tab per cohort, and a
-# transcript per tab fed by `tinycmdr/GetRunLines` when the cohort speaks it - every
-# build with this feature does; an older one degrades to the final answer alone.
-# The browser names a CONFIGURED remote and nothing else, so this relay can never be
-# aimed at an address the operator did not write down.
-LEGION_KEY_PREFIX = "legion."          # the hub-side key one cohort's transcript lives under
-LEGION_TABS_MAX = 8                    # open cohort tabs kept per browser
-LEGION_TASK_MAX_SECONDS = 3600         # one order's whole wait on this side, either transport
-LEGION_POLL_SECONDS = 2.5              # GetTask fallback cadence after a transport failure
-LEGION_SLOW_POLL_SECONDS = 15.0        # ...once the cohort looks unreachable
-LEGION_LINES_TIMEOUT = 3.0             # one run-lines read (the page's own poll pays it)
-LEGION_LINES_BACKOFF = 5.0             # ...and how long one failure is remembered
+# One page, several boxes. A cohort is a tinycmdr page on another LAN box: this
+# rail lists the configured ones (agent.a2a_remotes), reports whether each answers,
+# and opens its OWN page in a new tab with its token in the URL fragment - exactly
+# as if the browser had navigated there. Nothing is relayed: every feature of that
+# box (slash commands, uploads, its conversation rail, its own model picker) is the
+# page itself. The card read is public metadata; it carries no order.
 LEGION_CARD_TTL = 60.0                 # a cohort's card is re-read this often
 LEGION_CENSUS_SECONDS = 15.0           # the probe thread's tick
-LEGION_STATE_FILE = BASE_DIR / "legion.json"
-LEGION_LOCK = threading.Lock()         # guards the state file's read-modify-write
-_LEGION_CARDS = {}                     # name -> {"ok", "card", "error", "at", "lines"}
-_LEGION_LINES_OFF = {}                 # name -> monotonic time a failed read may retry at
-_LEGION_LINES_UNSUPPORTED = set()      # cohorts that answered the extension back
+_LEGION_CARDS = {}                     # name -> {"ok", "card", "error", "at"}
 _LEGION_EGRESS_WARNED = set()          # entries the off-LAN warning has been said for
-_LEGION_REATTACH_AT = {}               # name -> monotonic time of the last restart-repair look
 _LEGION_PROBING = False                # one census pass at a time
 _LEGION_NAME_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")  # a cohort name (ADD COHORT)
 
 
 def legion_cohorts():
-    """{name: entry} - the configured remotes, shape-checked, name-sorted."""
+    """{name: entry} - the configured boxes, shape-checked, name-sorted."""
     out = {}
     for name, entry in sorted(a2a_remotes_map().items()):
         if isinstance(entry, dict) and str(entry.get("url") or "").strip():
             out[str(name)] = entry
     return out
-
-
-def legion_key(name):
-    """The hub-side conversation key one cohort's transcript lives under."""
-    return LEGION_KEY_PREFIX + str(name)
-
-
-def _legion_state(mutate=None):
-    """The legion store: {cohorts: {name: record}, tabs: {client: [name, ...]}}.
-
-    Reads and writes both go through here, ONE lock for the whole load-modify-save,
-    the same discipline as the conversation registry (nothing inside a mutate
-    callback may call back into this function). Unknown cohorts and stale tab names
-    are pruned on every read, so removing a remote from agent.a2a_remotes cannot
-    leave the rail pointing at it.
-    """
-    with LEGION_LOCK:
-        st = _load_json_state(LEGION_STATE_FILE, "the legion state")
-        if not isinstance(st, dict):
-            st = {}
-        if not isinstance(st.get("cohorts"), dict):
-            st["cohorts"] = {}
-        if not isinstance(st.get("tabs"), dict):
-            st["tabs"] = {}
-        known = set(legion_cohorts())
-        st["cohorts"] = {k: v for k, v in st["cohorts"].items()
-                         if k in known and isinstance(v, dict)}
-        for client in list(st["tabs"]):
-            names = st["tabs"].get(client)
-            names = [n for n in names if n in known][:LEGION_TABS_MAX] \
-                if isinstance(names, list) else []
-            if names:
-                st["tabs"][client] = names
-            else:
-                st["tabs"].pop(client, None)
-        if mutate is None:
-            return st
-        out = mutate(st)
-        try:
-            atomic_write_text(LEGION_STATE_FILE, json.dumps(st, indent=1))
-        except Exception as e:
-            log.error("could not save %s: %s", LEGION_STATE_FILE.name, e)
-        return out
-
-
-def _legion_record(name, **fields):
-    """Merge fields into one cohort's record and save; returns the new record."""
-    def fn(st):
-        rec = st["cohorts"].get(name)
-        if not isinstance(rec, dict):
-            rec = {}
-        rec.update(fields)
-        rec["last_active"] = time.time()
-        st["cohorts"][name] = rec
-        return dict(rec)
-    return _legion_state(fn)
-
-
-def legion_record(name):
-    return (_legion_state()["cohorts"].get(str(name)) or {})
-
-
-def legion_tabs(client):
-    """The cohort tabs one browser has open, pruned to configured cohorts."""
-    tabs = _legion_state()["tabs"].get(str(client or ""))
-    return list(tabs) if isinstance(tabs, list) else []
-
-
-def legion_tab_set(client, name, open_=True):
-    """Open or close one cohort tab; returns the browser's new list.
-
-    The LIST is the only thing the server keeps about a browser's tabs - which tab
-    is ACTIVE is view state and stays in the page.
-    """
-    key = str(client or "")
-
-    def fn(st):
-        names = st["tabs"].get(key)
-        names = list(names) if isinstance(names, list) else []
-        if open_:
-            if name not in names:
-                names.append(name)
-            names = names[-LEGION_TABS_MAX:]
-        else:
-            names = [n for n in names if n != name]
-        if names:
-            st["tabs"][key] = names
-        else:
-            st["tabs"].pop(key, None)
-        return list(names)
-    return _legion_state(fn)
 
 
 def _legion_host(url):
@@ -30834,30 +30713,20 @@ def _legion_egress_check(name, url):
         return
     _LEGION_EGRESS_WARNED.add(name)
     log.warning("legion: agent.a2a_remotes.%s points at %s, which does not resolve "
-                "to this LAN - orders and its token would travel cleartext "
+                "to this LAN - the link and its token would travel cleartext "
                 "off-network. Put that box on a private address (an overlay), not a "
                 "public one.", name, url)
 
 
 def _legion_probe_values(url, token):
-    """(card, error, lines) for one cohort address - the ONE card read the census
-    probe and ADD COHORT both pay. True = the card declares the run-lines extension,
-    False = it was read and does not, None = it could not be read (unknown; a lines
-    read is still tried)."""
+    """(card, error) for one cohort address - the ONE card read the census probe
+    and ADD COHORT both pay. A dict means the box answers at that address."""
     try:
         timeout = min(float((CONFIG.get("agent") or {}).get("a2a_timeout") or 120),
                       5.0)
     except (TypeError, ValueError):
         timeout = 5.0
-    card, cerr = a2a_fetch_card(url, token, max(1.0, timeout))
-    lines_ok = None
-    if isinstance(card, dict):
-        lines_ok = False
-        for ext in ((card.get("capabilities") or {}).get("extensions") or []):
-            if isinstance(ext, dict) and ext.get("uri") == A2A_RUN_LINES_URI:
-                lines_ok = True
-                break
-    return card, cerr, lines_ok
+    return a2a_fetch_card(url, token, max(1.0, timeout))
 
 
 def _legion_probe_card(name):
@@ -30865,297 +30734,20 @@ def _legion_probe_card(name):
     url, token, err = a2a_remote_target(name)
     now = now_mono()
     if err:
-        entry = {"ok": False, "card": None, "error": err, "at": now, "lines": False}
+        entry = {"ok": False, "card": None, "error": err, "at": now}
     else:
         _legion_egress_check(name, url)
-        card, cerr, lines_ok = _legion_probe_values(url, token)
-        entry = {"ok": isinstance(card, dict), "card": card, "error": cerr,
-                 "at": now, "lines": lines_ok}
+        card, cerr = _legion_probe_values(url, token)
+        entry = {"ok": isinstance(card, dict), "card": card, "error": cerr, "at": now}
     _LEGION_CARDS[name] = entry
     return entry
 
 
-def _legion_lines_supported(name):
-    """True / False / None (unknown) for one cohort's run-lines extension."""
-    if name in _LEGION_LINES_UNSUPPORTED:
-        return False
-    card = _LEGION_CARDS.get(name) or {}
-    return card.get("lines")
-
-
-def _legion_task_answer(task):
-    """(answer, failed) from a stored A2A Task - the one reading both paths use."""
-    state = _a2a_state_of(task) or ""
-    parts = ((task.get("status") or {}).get("message") or {}).get("parts") or []
-    answer = "\n".join(str(p.get("text") or "") for p in parts if "text" in p)
-    return answer or "(the cohort sent no answer text)", state == "TASK_STATE_FAILED"
-
-
-def _legion_merge_lines(name, run):
-    """One GetRunLines read, mirrored into the run's frame. Never raises.
-
-    The page's own poll usually does this, and the dispatch's finish does it once
-    more so the last lines land even for a page that polled rarely. A cohort whose
-    card does not declare the extension - or that answered the method with an
-    UnsupportedOperationError - is not asked again.
-    """
-    if _legion_lines_supported(name) is False:
-        return False
-    now = now_mono()
-    if now < _LEGION_LINES_OFF.get(name, 0.0):
-        return False
-    url, token, err = a2a_remote_target(name)
-    if err:
-        return False
-    body = {"jsonrpc": "2.0", "id": 1, "method": "tinycmdr/GetRunLines",
-            "params": {"taskId": run.id}}
-    try:
-        status, data = a2a_post(url, token, body, timeout=LEGION_LINES_TIMEOUT)
-    except Exception:                                            # noqa: BLE001
-        _LEGION_LINES_OFF[name] = now + LEGION_LINES_BACKOFF
-        return False
-    if status != 200 or not isinstance(data, dict):
-        _LEGION_LINES_OFF[name] = now + LEGION_LINES_BACKOFF
-        return False
-    err_obj = data.get("error") or {}
-    if err_obj:
-        if err_obj.get("code") == -32004 and name not in _LEGION_LINES_UNSUPPORTED:
-            _LEGION_LINES_UNSUPPORTED.add(name)
-            log.info("legion: %s does not speak the run-lines extension - its tab "
-                     "will show the answer when it lands", name)
-        return False
-    view = data.get("result")
-    if not isinstance(view, dict):
-        return False
-    run.merge_remote(view)
-    return True
-
-
-def _legion_poll_task(url, token, task_id, deadline, run=None):
-    """Read a task back from the cohort's store until it is finished. None on give-up.
-
-    GetTask, never a re-sent message: a task the cohort still knows answers with its
-    live state, and one it does NOT know is reported by the caller instead of being
-    run a second time - a blind re-send of a side-effecting order is the one thing a
-    mesh must never do quietly. A cohort that stays unreachable past a few tries gets
-    ONE notice in the transcript and a slower cadence, not silence and not a guess.
-    """
-    body = {"jsonrpc": "2.0", "id": 1, "method": "GetTask", "params": {"id": task_id}}
-    misses = 0
-    interval = LEGION_POLL_SECONDS
-    noticed = False
-    while time.time() < deadline:
-        time.sleep(interval)
-        try:
-            status, data = a2a_post(url, token, body, timeout=LEGION_LINES_TIMEOUT)
-        except Exception:                                        # noqa: BLE001
-            status, data = None, None
-        if status == 200 and isinstance(data, dict):
-            err = data.get("error") or {}
-            task = data.get("result")
-            if isinstance(task, dict):
-                if _a2a_state_of(task) != "TASK_STATE_WORKING":
-                    return task
-                if misses >= 3 and not noticed and run is not None:
-                    # It answered: whatever failed before, the task is really there.
-                    misses = 0
-                    interval = LEGION_POLL_SECONDS
-                continue
-            if err.get("code") == -32001 and misses < 3:
-                # A just-accepted task can take a moment to appear; three misses is
-                # the line between "not yet" and "not there".
-                misses += 1
-                continue
-            if err.get("code") == -32001:
-                return None
-        misses += 1
-        if misses == 3 and run is not None and not noticed:
-            noticed = True
-            interval = LEGION_SLOW_POLL_SECONDS
-            try:
-                run.add("system", "📡 Cohort %s is not answering - the order may "
-                                  "still be running over there. Watching its task "
-                                  "store; nothing will be re-sent." % run.remote)
-            except Exception:                                    # noqa: BLE001
-                log.debug("legion: could not draw the unreachable note", exc_info=True)
-    return None
-
-
-def _legion_dispatch(run, name, text):
-    """The order's own thread: blocking SendMessage, then the task store, then Done.
-
-    Nothing here runs on a hub handler thread: the page's POST returns as soon as
-    the order is registered, so a cohort that takes an hour (or never answers) costs
-    one dedicated daemon thread, bounded by WEB_RUN_LIVE_MAX like every other live
-    run, and a hub restart leaves the cohort's own task store as the record.
-    """
-    url, token, err = a2a_remote_target(name)
-    answer, failed, task = "", False, None
-    if err:
-        answer, failed = "⚠️ %s" % err, True
-    else:
-        body = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
-                "params": {"message": {"messageId": _a2a_id("msg"),
-                                       "role": "ROLE_USER",
-                                       "taskId": run.id,
-                                       "contextId": run.context_id,
-                                       "parts": [{"text": text}]}}}
-        try:
-            # Blocking is the spec's default and this thread is dedicated to the one
-            # order. The READ timeout is the configured a2a_timeout: a reply that
-            # takes longer than that (a long order, which is normal) falls into the
-            # GetTask loop below, whose own deadline is LEGION_TASK_MAX_SECONDS -
-            # the two must not be the same number, or a timeout would leave the
-            # store-read no time at all.
-            try:
-                read_timeout = float((CONFIG.get("agent") or {}).get("a2a_timeout") or 120)
-            except (TypeError, ValueError):
-                read_timeout = 120.0
-            status, data = a2a_post(url, token, body,
-                                    timeout=(5.0, max(5.0, read_timeout)))
-            if status == 401:
-                answer = ("⚠️ the cohort refused the order (401) - its token is its "
-                          "page token; point this remote's token_env at it.")
-                failed = True
-            elif status != 200 or not isinstance(data, dict):
-                answer, failed = "⚠️ the cohort answered HTTP %s" % status, True
-            elif data.get("error"):
-                answer = ("⚠️ the cohort refused the order: %s"
-                          % (data.get("error") or {}).get("message"))
-                failed = True
-            else:
-                task = data.get("result")
-        except Exception as e:                                   # noqa: BLE001
-            # The transport failed while the message may be RUNNING over there: the
-            # task id was minted before the send, so the cohort's own store answers
-            # for it - the retry handle the A2A spec asks clients to keep.
-            log.info("legion: %s did not answer the send (%s) - reading its task "
-                     "store for %s", name, e, run.id)
-            task = _legion_poll_task(url, token, run.id,
-                                     deadline=run.started + LEGION_TASK_MAX_SECONDS,
-                                     run=run)
-            if task is None:
-                answer = ("⚠️ the cohort never reported on task %s, and its task store "
-                          "does not know it - nothing was re-sent. Check that box; "
-                          "re-issue the order if you want it run again." % run.id)
-                failed = True
-    if task is not None:
-        answer, failed = _legion_task_answer(task)
-    if not failed:
-        # One last read of the frame so the final answer and Done line land even if
-        # the page polled rarely; a cohort without the extension simply has none.
-        _legion_merge_lines(name, run)
-    _legion_finish_run(run, answer, failed)
-    _legion_record(name, last_state=("failed" if failed else "done"),
-                   finished=time.time())
-    log.info("legion: %s reported on task %s (%s)", name, run.id,
-             "failed" if failed else "done")
-
-
-def _legion_finish_run(run, answer, failed):
-    """Close a legion run the way the web lane closes one.
-
-    _finish_web_run is the shared ending (the Done line, the on-disk record); this
-    only decides what the final line says when the cohort's own frame has none.
-    """
-    with run.lock:
-        seen_final = any(l.get("kind") == "final" for l in run.lines)
-    if answer and not seen_final:
-        run.answer_i = run.add("error" if failed else "final", answer)
-    _finish_web_run(run, _QuietReporter(), "", failed=failed)
-    if failed:
-        with run.lock:
-            run.status = "failed"
-
-
-def _legion_append_repair(name, task_id, answer, failed):
-    """Close a restarted-away task in the transcript: the answer ONCE, then the state.
-
-    The lines come from whatever checkpoints the killed run wrote (web_runlog keeps
-    the LAST record per run id), so the repair appends to the record instead of
-    guessing at it - and appending a record with the same run id is exactly how a
-    later state supersedes the earlier one.
-    """
-    key = legion_key(name)
-    lines, started = [], time.time() - 1
-    for rec in web_runlog(key):
-        if rec.get("run_id") == task_id:
-            lines = [l for l in (rec.get("lines") or []) if isinstance(l, dict)]
-            started = rec.get("started") or started
-    if not any(l.get("kind") == "final" for l in lines):
-        i = len(lines)
-        lines.append({"i": i, "uid": "%sr%d" % (task_id, i), "kind": "final",
-                      "text": answer, "t": None, "r": 0})
-    web_runlog_append(key, task_id, started, lines)
-    _legion_record(name, last_state=("failed" if failed else "done"),
-                   finished=time.time())
-    log.info("legion: re-attached %s's task %s from its store (%s)", name, task_id,
-             "failed" if failed else "done")
-
-
-def _legion_reattach(name):
-    """Finish what a hub restart cut off, from the cohort's own task store.
-
-    Only ever does something for a task this hub recorded as working with no live
-    run: the normal path owns its task and this leaves it alone. Nothing is ever
-    re-sent - GetTask is the spec's read, so a task the cohort lost is REPORTED.
-    """
-    rec = legion_record(name)
-    task_id = str(rec.get("last_task_id") or "")
-    if not task_id or rec.get("last_state") != "working":
-        return
-    if _web_active_run(legion_key(name)) is not None:
-        return
-    now = now_mono()
-    if now - _LEGION_REATTACH_AT.get(name, 0.0) < LEGION_CENSUS_SECONDS:
-        return
-    _LEGION_REATTACH_AT[name] = now
-    try:
-        started = float(rec.get("started") or 0)
-    except (TypeError, ValueError):
-        started = 0.0
-    if started and (time.time() - started) > LEGION_TASK_MAX_SECONDS:
-        _legion_append_repair(name, task_id,
-                              ("⚠️ the cohort never reported within %d min - check "
-                               "that box; its log says what it did."
-                               % (LEGION_TASK_MAX_SECONDS // 60)), failed=True)
-        return
-    url, token, err = a2a_remote_target(name)
-    if err:
-        return
-    body = {"jsonrpc": "2.0", "id": 1, "method": "GetTask", "params": {"id": task_id}}
-    try:
-        status, data = a2a_post(url, token, body, timeout=max(5.0, LEGION_LINES_TIMEOUT))
-    except Exception:                                            # noqa: BLE001
-        return                       # unreachable right now: the card probe says so too
-    if status != 200 or not isinstance(data, dict):
-        return
-    err_obj = data.get("error") or {}
-    if err_obj.get("code") == -32001:
-        # The cohort does not know this task: either the message never fully arrived
-        # or that box restarted and lost its store. Either way NOTHING is re-run
-        # here - a blind re-send could double a side-effecting order - the operator
-        # is told and decides.
-        _legion_append_repair(name, task_id,
-                              ("⚠️ the cohort has no record of this task any more "
-                               "(that box restarted?) - nothing was re-run. "
-                               "Re-issue the order if you want it again."),
-                              failed=True)
-        return
-    task = data.get("result")
-    if not isinstance(task, dict) or _a2a_state_of(task) == "TASK_STATE_WORKING":
-        return                       # still running over there; the next pass looks again
-    answer, failed = _legion_task_answer(task)
-    _legion_append_repair(name, task_id, answer, failed)
-
-
 def _legion_census_pass():
-    """One pass: card probes, the off-LAN warning, and the restart repair.
+    """One pass: card probes and the off-LAN warning.
 
     Runs on its own thread on a slow clock - never on a request - so a hung cohort
-    can hold neither a page's poll nor a hub handler thread, and it is also the one
-    place a hub restart is repaired: a task this hub had sent and never saw finish
-    is read back from the cohort's own store and closed in the transcript once.
+    can hold neither a page's poll nor a hub handler thread.
     """
     global _LEGION_PROBING
     if not legion_cohorts() or _LEGION_PROBING:
@@ -31170,10 +30762,6 @@ def _legion_census_pass():
                     _legion_probe_card(name)
                 except Exception:                                # noqa: BLE001
                     log.debug("legion: card probe for %s failed", name, exc_info=True)
-            try:
-                _legion_reattach(name)
-            except Exception:                                    # noqa: BLE001
-                log.debug("legion: re-attach for %s failed", name, exc_info=True)
     finally:
         _LEGION_PROBING = False
 
@@ -31186,73 +30774,6 @@ def _legion_census_loop():
         except Exception:                                        # noqa: BLE001
             log.exception("legion census tick failed")
         time.sleep(LEGION_CENSUS_SECONDS)
-
-
-class LegionRun:
-    """One order sent to a cohort, in the shape the web lane reads a run by.
-
-    web_transcript, _finish_web_run and the page's own renderer read a run through
-    these attributes, so this carries exactly them and nothing else: the lines the
-    page reconciles (the hub's own lines first, then the cohort's mirrored frame),
-    the done/rev/status/steps the header shows, and the lock everything crosses.
-    """
-
-    def __init__(self, run_id, remote, context_id):
-        self.id = run_id                  # the A2A taskId, minted BEFORE the send
-        self.remote = remote
-        self.context_id = context_id
-        self.session_key = legion_key(remote)
-        self.client = ""
-        self.lock = threading.Lock()
-        self.done = False
-        self.rev = 0
-        self.status = "working"
-        self.steps = 0
-        self.started = time.time()
-        self.cancel = threading.Event()   # never set: A2A has no cancel order
-        self.answer_i = None
-        self.reporter = None
-        self._prefix = []
-        self._remote_lines = []
-        self.lines = []
-
-    def add(self, kind, text, **extra):
-        with self.lock:
-            i = len(self._prefix)
-            line = {"i": i, "uid": "%sp%d" % (self.id, i), "kind": kind,
-                    "text": text, "t": round(time.time() - self.started, 1), "r": 0}
-            line.update(extra)
-            self._prefix.append(line)
-            self._compose()
-            self.rev += 1
-        web_runlog_checkpoint(self)
-        return i
-
-    def _compose(self):
-        """Recompose (under the lock): the hub's lines first, the cohort's after."""
-        self.lines = list(self._prefix) + list(self._remote_lines)
-
-    def merge_remote(self, view):
-        """Mirror the cohort's frame view - a FULL snapshot, because the peer owns
-        those lines: one it drops must disappear here too (the draft that became the
-        answer), and the page's reconciler already removes nodes whose uid is gone.
-        """
-        lines = [l for l in (view.get("lines") or [])
-                 if isinstance(l, dict) and l.get("uid")]
-        with self.lock:
-            self._remote_lines = lines
-            self._compose()
-            try:
-                self.steps = max(self.steps, int(view.get("steps") or 0))
-            except (TypeError, ValueError):
-                pass
-        web_runlog_checkpoint(self)
-
-    def finish(self):
-        """The web lane's ending (called by _finish_web_run): done, and no more."""
-        with self.lock:
-            self.done = True
-            self.status = "done"
 
 
 def legion_add_remote(name, url, token):
@@ -31283,12 +30804,12 @@ def legion_add_remote(name, url, token):
         token, _note = secret_check(token_env, token)
     except ValueError as problem:
         return {"error": str(problem)}, 400
-    card, cerr, lines = _legion_probe_values(url, token)
+    card, cerr = _legion_probe_values(url, token)
     if not isinstance(card, dict):
         return {"error": "no AgentCard at %s (%s)" % (url, cerr or "no answer")}, 502
     # .env first, config second: a token with no entry is inert, while an entry
-    # with no token is a cohort the rail shows and every order fails on. The name
-    # ends in _TOKEN on purpose: _SECRET_NAME_RX sweeps it, so the value is masked
+    # with no token is a rail row whose link cannot sign in. The name ends in
+    # _TOKEN on purpose: _SECRET_NAME_RX sweeps it, so the value is masked
     # anywhere it could be echoed.
     try:
         _env_set(token_env, token)
@@ -31313,12 +30834,11 @@ def legion_add_remote(name, url, token):
     err = _config_take_effect()
     if err:
         return {"error": err}, 500
-    _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "",
-                           "at": now_mono(), "lines": lines}
+    _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "", "at": now_mono()}
     _legion_egress_check(name, url)
     log.info("legion: ADD COHORT wrote agent.a2a_remotes.%s -> %s (its token in %s)",
              name, url, ENV_FILE.name)
-    return {"ok": True, "name": name, "lines": lines,
+    return {"ok": True, "name": name,
             "card": {"name": card.get("name"), "version": card.get("version")}}, 200
 
 
@@ -31326,22 +30846,15 @@ def legion_remove_remote(name):
     """(payload, status) for REMOVE COHORT: take a configured box out of this hub.
 
     The counterpart of ADD COHORT and the same write: agent.a2a_remotes loses the
-    entry, the running hub re-reads the file (no restart), and the legion store
-    prunes the cohort plus every browser's tab for it. The token line goes too only
-    when ADD COHORT minted its name - a hand-written token_env may be shared (a box's
-    own TINYCMDR_WEB_TOKEN is the obvious one), so it is left alone. A cohort with a
-    live order is refused: its run frame and dispatch thread belong to that entry,
-    and the order is likely still running over there.
+    entry and the running hub re-reads the file with no restart. The token line goes
+    too only when ADD COHORT minted its name - a hand-written token_env may be shared
+    (a box's own TINYCMDR_WEB_TOKEN is the obvious one), so it is left alone.
     """
     name = str(name or "").strip()
     entry = legion_cohorts().get(name)
     if not isinstance(entry, dict):
         return {"error": "no cohort named %r on this hub (agent.a2a_remotes)"
                          % name}, 404
-    live = _web_active_run(legion_key(name))
-    if live is not None:
-        return {"error": "this cohort is on campaign (task %s) - wait for its report "
-                         "or stop it before removing it" % live.id}, 409
     token_env = str(entry.get("token_env") or "")
     raw, err = _config_raw()
     if err:
@@ -31362,13 +30875,7 @@ def legion_remove_remote(name):
     # Caches keyed by the name would otherwise answer for a cohort that is gone (the
     # census only refreshes names still configured, so a stale entry would be forever).
     _LEGION_CARDS.pop(name, None)
-    _LEGION_LINES_OFF.pop(name, None)
-    _LEGION_LINES_UNSUPPORTED.discard(name)
     _LEGION_EGRESS_WARNED.discard(name)
-    _LEGION_REATTACH_AT.pop(name, None)
-    # One write prunes the record and the tab lists, so the page's next poll sees the
-    # removal even if nobody's browser has touched a tab since.
-    _legion_state(lambda st: None)
     minted = "TINYCMDR_COHORT_%s_TOKEN" % name.upper()
     shared = any(str((e or {}).get("token_env") or "") == token_env
                  for e in a2a_remotes_map().values() if isinstance(e, dict))
@@ -31397,18 +30904,13 @@ def legion_update_remote(name, url, token):
     is, a blank token keeps the stored value, and the running hub re-reads config.json
     with no restart. The token line is written only when it belongs to this cohort -
     the hub's own TINYCMDR_WEB_TOKEN and a token_env another cohort names are refused,
-    because writing there would change a second door. A cohort with a live order is
-    refused, as REMOVE COHORT is: the run belongs to the entry as it was.
+    because writing there would change a second door.
     """
     name = str(name or "").strip()
     entry = legion_cohorts().get(name)
     if not isinstance(entry, dict):
         return {"error": "no cohort named %r on this hub (agent.a2a_remotes)"
                          % name}, 404
-    live = _web_active_run(legion_key(name))
-    if live is not None:
-        return {"error": "this cohort is on campaign (task %s) - wait for its report "
-                         "or stop it before changing it" % live.id}, 409
     url = str(url or "").strip().rstrip("/")
     if not url.startswith(("http://", "https://")) \
             or not urllib.parse.urlsplit(url).netloc:
@@ -31446,12 +30948,12 @@ def legion_update_remote(name, url, token):
                          "token" % token_env}, 400
     # The read-back is the proof, before anything is written: a rotated token that
     # is still wrong changes nothing.
-    card, cerr, lines = _legion_probe_values(url, resolved)
+    card, cerr = _legion_probe_values(url, resolved)
     if not isinstance(card, dict):
         return {"error": "no AgentCard at %s (%s)" % (url, cerr or "no answer")}, 502
     if supplied:
         # .env first, config second - the ADD COHORT rule: a token with no entry is
-        # inert, while an entry with no token is a cohort every order fails on.
+        # inert, while an entry with no token is a rail row whose link cannot sign in.
         try:
             _env_set(token_env, supplied)
         except Exception as e:                                   # noqa: BLE001
@@ -31474,171 +30976,30 @@ def legion_update_remote(name, url, token):
     err = _config_take_effect()
     if err:
         return {"error": err}, 500
-    _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "", "at": now_mono(),
-                           "lines": lines}
-    _LEGION_LINES_OFF.pop(name, None)
-    _LEGION_LINES_UNSUPPORTED.discard(name)
+    _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "", "at": now_mono()}
     _LEGION_EGRESS_WARNED.discard(name)      # a new address gets its own warning
     _legion_egress_check(name, url)
     log.info("legion: RECONFIGURE COHORT set agent.a2a_remotes.%s -> %s%s",
              name, url, (" and rewrote " + token_env) if supplied else "")
     return {"ok": True, "name": name, "url": url, "token_env": token_env,
-            "token_updated": bool(supplied), "lines": lines,
+            "token_updated": bool(supplied),
             "card": {"name": card.get("name"), "version": card.get("version")}}, 200
 
 
-def _legion_is_stop(text):
-    """True for the stop word both the page's composer and a slash command use."""
-    return cmdr_strip(str(text or "")).strip().lower() in ("/stop", "stop")
-
-
-def _legion_stop(name):
-    """Ask a cohort to stop the order this hub started, over its own A2A door.
-
-    Fire-and-forget: the order's blocking reply is what carries the stopped answer
-    back into the run's transcript, so this only has to make the cancel land over
-    there. The context id is the one the order was sent with - that is what makes
-    the cohort's /stop read the same drive_run control.
-    """
-    url, token, err = a2a_remote_target(name)
-    if err:
-        return err
-    context_id = str(legion_record(name).get("context_id") or "")
-    if not context_id:
-        return "the cohort has no conversation of its own to stop"
-    payload = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
-               "params": {"message": {"messageId": _a2a_id("msg"),
-                                      "role": "ROLE_USER",
-                                      "taskId": _a2a_id("task"),
-                                      "contextId": context_id,
-                                      "parts": [{"text": "/stop"}]}}}
-
-    def send():
-        try:
-            a2a_post(url, token, payload, timeout=(5.0, 15.0))
-        except Exception as e:                                   # noqa: BLE001
-            log.info("legion: %s did not take the stop (%s)", name, e)
-
-    threading.Thread(target=send, daemon=True, name="legion-stop-%s" % name).start()
-    return ""
-
-
-def legion_send(name, text, client=""):
-    """(run_id, error, status): register one order. It is ON THE WIRE before return."""
-    if name not in legion_cohorts():
-        return None, ("no cohort named %r on this hub (agent.a2a_remotes)" % name), 404
-    text = str(text or "").strip()
-    if not text:
-        return None, "an order needs words", 400
-    # /stop is the one command that must move while an order is in flight. It is
-    # not a second order: it reaches the cohort's own cancel, and the order's
-    # blocked reply still carries the stopped answer into this run.
-    live = _web_active_run(legion_key(name))
-    if live is not None and _legion_is_stop(text):
-        err = _legion_stop(name)
-        if err:
-            return None, err, 502
-        live.add("system", "🛑 stop requested over there")
-        return live.id, None, 200
-    rec = legion_record(name)
-    context_id = str(rec.get("context_id") or "") or _a2a_id("ctx")
-    run, busy = _web_claim_run(
-        legion_key(name), "",
-        make=lambda rid: LegionRun(rid, name, context_id))
-    if busy == "cap":
-        return None, ("too many runs are going on this host - wait for one to "
-                      "finish, or stop it"), 429
-    if busy is not None:
-        return None, ("this cohort is already on campaign (task %s) - wait for its "
-                      "report before the next order" % busy.id), 409
-    run.add("you", text)                  # the order line, persisted immediately
-    # The record is written BEFORE the thread starts: a hub that dies mid-order
-    # still knows what it sent and where the answer will be waiting.
-    _legion_record(name, context_id=context_id, last_task_id=run.id,
-                   last_state="working", started=run.started, finished=None)
-    threading.Thread(target=_legion_dispatch, args=(run, name, text), daemon=True,
-                     name="legion-%s" % run.id).start()
-    log.info("legion: order to %s (task %s): %s", name, run.id,
-             scrub(" ".join(text.split())[:120]))
-    return run.id, None, 200
-
-
-def legion_send_all(text, client=""):
-    """(payload, status) for the ALL COHORTS fan-out: one order, every configured cohort.
-
-    Each cohort receives the SAME order through legion_send - registered in that
-    cohort's own tab (its run), refused per cohort when it is already on campaign,
-    never re-sent - so every answer lands where a single order's always did and the
-    fan-out adds no second delivery path. The fan-out's bound is the cohorts
-    themselves: one task each (legion_send's own claim), which is why legion frames
-    are exempt from the page's WEB_RUN_LIVE_MAX (see _web_claim_run). The summary is
-    kept at the top of the legion store, where the page's ALL COHORTS view reads it
-    back."""
-    text = str(text or "").strip()
-    if not text:
-        return {"error": "an order needs words"}, 400
-    sent, refused, failed = [], [], []
-    total = 0
-    for name in legion_cohorts():
-        total += 1
-        run_id, err, code = legion_send(name, text, client)
-        if run_id:
-            sent.append(name)
-        elif code == 409:
-            refused.append({"name": name, "reason": err})
-        else:
-            failed.append({"name": name, "error": err, "status": code})
-    parts = ["order sent to %d of %d cohort%s"
-             % (len(sent), total, "" if total == 1 else "s")]
-    if refused:
-        parts.append("refused: " + ", ".join(
-            "%s (already on campaign)" % r["name"] for r in refused))
-    if failed:
-        parts.append("failed: " + ", ".join(
-            "%s (%s)" % (f["name"], f["error"] or f["status"]) for f in failed))
-    out = {"ok": True, "sent": sent, "refused": refused, "failed": failed,
-           "summary": "; ".join(parts), "at": time.time(),
-           "text": scrub(" ".join(text.split())[:160])}
-
-    def fn(st):
-        st["broadcast"] = {k: out[k] for k in ("at", "text", "sent", "refused",
-                                               "failed", "summary")}
-        return None
-
-    try:
-        _legion_state(fn)
-    except Exception:                                            # noqa: BLE001
-        log.debug("legion: could not record the broadcast summary", exc_info=True)
-    log.info("legion: fan-out to %d cohort(s): %d sent, %d refused, %d failed",
-             total, len(sent), len(refused), len(failed))
-    return out, 200
-
-
 def _legion_row(name):
-    """One cohort as the rail and the tab strip read it: LOCAL state only."""
-    rec = legion_record(name)
-    live = _web_active_run(legion_key(name))
+    """One cohort as the rail reads it: LOCAL state only."""
     card = _LEGION_CARDS.get(name) or {}
     err = str(card.get("error") or "")
-    working = live is not None or rec.get("last_state") == "working"
-    state = "working" if working else ("silent" if (err and not card.get("ok"))
-                                       else "ready")
-    task = None
-    if rec.get("last_task_id"):
-        task = {"id": rec.get("last_task_id"),
-                "state": rec.get("last_state") or "",
-                "started": rec.get("started"), "finished": rec.get("finished"),
-                "failed": rec.get("last_state") == "failed"}
+    state = "silent" if (err and not card.get("ok")) else "ready"
     entry = legion_cohorts().get(name) or {}
     return {"name": name, "host": _legion_host(entry.get("url") or ""),
             "url": str(entry.get("url") or ""),
             "state": state, "error": err,
-            "version": str((card.get("card") or {}).get("version") or ""),
-            "lines": _legion_lines_supported(name), "task": task}
+            "version": str((card.get("card") or {}).get("version") or "")}
 
 
-def legion_overview(client):
-    """Everything the rail and the tab strip need, from LOCAL state only.
+def legion_overview():
+    """What the rail needs, from LOCAL state only.
 
     No cohort is contacted on this path (the census thread pays those calls on its
     own clock), so a hung box cannot stall the page's refresh.
@@ -31647,34 +31008,7 @@ def legion_overview(client):
     for i, (row, _name) in enumerate(rows):
         row["numeral"] = i + 2            # the hub itself is Cohort I
     return {"cohorts": [row for row, _n in rows],
-            "tabs": legion_tabs(client),
-            "broadcast": _legion_state().get("broadcast") or {},
             "praetorium": {"host": socket.gethostname(), "version": VERSION}}
-
-
-def legion_session(name):
-    """One cohort's whole transcript, plus its row: what a tab repaints from."""
-    out = web_transcript(legion_key(name))
-    return {"remote": name, "cohort": _legion_row(name),
-            "runs": out.get("runs") or []}
-
-
-def legion_lines(name):
-    """The live view of a cohort's running task - what the page polls while it works.
-
-    The merge against the cohort's frame happens HERE, once per poll, so the page's
-    loop stays the same reconstruct-from-zero read it already uses locally.
-    """
-    run = _web_active_run(legion_key(name))
-    if run is None:
-        rec = legion_record(name)
-        return {"remote": name, "lines": [], "done": True, "no_run": True,
-                "task_state": rec.get("last_state") or ""}
-    _legion_merge_lines(name, run)
-    with run.lock:
-        return {"remote": name, "run_id": run.id, "lines": list(run.lines),
-                "done": run.done, "status": run.status, "steps": run.steps,
-                "elapsed": round(time.time() - run.started, 1)}
 
 # -- the page's panels: what this host already keeps, read only -------------
 # Everything here is per host and already on disk (the ledger, the scheduler's
@@ -32158,7 +31492,6 @@ WEB_PAGE = """
       <div><small id=chan>COMMAND CHANNEL</small><strong id=title title="click to rename">No active campaign</strong></div>
       <div class="stage-status" id=stage-status data-s=ready title="idle, and the server is answering"><span class="status-dot"></span><span id=stage-state>ready</span></div>
     </div>
-    <nav id=campaigns class="campaign-tabs" hidden aria-label="channels"></nav>
     <div id=logwrap><div id=brandmark><img src="/mark.png?v={{VERSION}}" alt=""><span>tinycmdr</span></div><div id=log></div>
       <section id=empty class="empty-stage">
         <div class="hero-copy">
@@ -32249,9 +31582,9 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       allEl=document.getElementById('allclients'),menuBtn=document.getElementById('menu'),
       toolsBtn=document.getElementById('tools'),newBtn=document.getElementById('newchat'),
       tabsEl=document.getElementById('tabs'),closePanelBtn=document.getElementById('panelclose'),
-      // the legion: the cohort rail rows, the channel tab strip and the header label
+      // the legion: the linked boxes and the header label
       legionEl=document.getElementById('legion'),cohortsEl=document.getElementById('cohorts'),
-      campaignsEl=document.getElementById('campaigns'),chanEl=document.getElementById('chan'),
+      chanEl=document.getElementById('chan'),
       legionStatEl=document.getElementById('legionstat');
 // ONE status, in the stage header: ready (idle, the server answering), working (a run in
 // flight), stopping (cancel asked), trouble (the server stopped answering). Every writer
@@ -32371,15 +31704,8 @@ globalThis.fetch=(function(orig){
 let runId=null, gen=0, timer=null, fails=0, localSeq=0, sessionKey=null,
     sessions=[], budget=0, panelWhich=null, commands=[], palAt=-1, hist=[], histAt=-1,
     lastRail=0, legionCount=0;
-// The legion's own state: which channel is on screen ('praetorium' = this box), the
-// cohorts and tabs the hub last reported, and what this browser has SEEN of each
-// cohort's last task (the tab badge clears when its channel is opened).
-let legion={on:false,cohorts:[],tabs:[],praetorium:{},broadcast:{},seen:{},timer:null,
-            dialog:null,active:'praetorium'};
-try{
- legion.active=localStorage.fb_legion_active||'praetorium';
- legion.seen=JSON.parse(localStorage.fb_legion_seen||'{}')||{};
-}catch(e){}
+// The legion's own state: the boxes this host was configured with, and the dialog.
+let legion={on:false,cohorts:[],praetorium:{},dialog:null};
 const runs=new Map();          // run id -> {el, nodes:Map(uid->node), txt:Map(uid->string), data:[]}
 
 function note(text,action){
@@ -32672,7 +31998,6 @@ function age(ts){
 const TERMINAL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>';
 const X_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 const PENCIL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>';
-const EXTERNAL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
 function renderRail(){
  sessEl.textContent='';
  for(const s of sessions){
@@ -32703,9 +32028,7 @@ function renderRail(){
   sessEl.appendChild(row);
  }
  const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
- // On a cohort channel the stage header names the COHORT: the local conversation's
- // title must not overwrite it (the rail and the tabs already say which channel is on).
- titleEl.textContent=(legion.active==='praetorium')?(cur?cur.title:''):legion.active;
+ titleEl.textContent=cur?cur.title:'';
  const used=cur?cur.tokens:0;
  meterFill.style.width=(budget?Math.min(100,Math.round(100*used/budget)):0)+'%';
  statContext.textContent=(budget?Math.round(100*used/budget)+'%':'\u2014');
@@ -32719,43 +32042,34 @@ function renderRail(){
  emptyLast.hidden=!(sessions||[]).some(function(s){return s.exchanges;});
 }
 // ------------------------------------------------------------------- the legion
-// The hub's view of the other boxes. An order or a tab only ever names a cohort the
-// hub was CONFIGURED with (never a URL), so a channel cannot aim the relay anywhere
-// on its own - and ADD COHORT / REMOVE COHORT are the operator's own writes into that
-// config, from the authenticated page: one box they run, by URL + token, or the same
-// entry taken out again. A cohort channel's lines come from /api/legion/lines - the
-// same reconcile() the local transcript uses, so a cohort run draws exactly like a
-// local one, tool lines included when that box speaks the run-lines extension.
+// The linked boxes. A cohort is another tinycmdr page on the LAN: this rail lists
+// the ones this host was configured with, and clicking one opens that box's OWN
+// page in a new tab with its token in the URL fragment - the same page a browser
+// would get by navigating there, with every feature. Nothing is relayed. ADD COHORT
+// and the pencil are the operator's own writes into agent.a2a_remotes from the
+// authenticated page; the x takes an entry out again.
 const NUMERALS=['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 const SHIELD_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>';
 function legionOf(name){return legion.cohorts.filter(function(c){return c.name===name;})[0]||null;}
-function legionSaveSeen(){try{localStorage.fb_legion_seen=JSON.stringify(legion.seen);}catch(e){}}
-function legionSeen(name){const c=legionOf(name);if(!c||!c.task)return true;
- return legion.seen[name]===c.task.id;}
-function legionMarkSeen(name){const c=legionOf(name);if(c&&c.task){legion.seen[name]=c.task.id;legionSaveSeen();}}
 function dotFor(state){
  const d=document.createElement('span');
- d.className='dot'+(state==='working'?' work':(state==='silent'?' bad':''));
+ d.className='dot'+(state==='silent'?' bad':'');
  return d;
 }
 function renderLegion(){
  // The rail is ALWAYS drawn: with no cohorts it holds the praetorium row and the
- // ADD COHORT invitation - the one place a cohort is connected from - and only the
- // channel tab strip hides until there is a cohort to switch to.
- campaignsEl.hidden=!legion.on;legionEl.hidden=false;
+ // ADD COHORT invitation - the one place a box is linked from.
+ legionEl.hidden=false;
  const n=legion.cohorts.length;
- const onCampaign=legion.cohorts.filter(function(c){return c.state==='working';}).length;
- legionStatEl.textContent=n
-  ?n+(n===1?' cohort':' cohorts')+(onCampaign?' \u00b7 '+onCampaign+' on campaign':'')
-  :'none yet';
+ legionStatEl.textContent=n?n+(n===1?' linked box':' linked boxes'):'none yet';
  cohortsEl.textContent='';
  const rows=[{name:'praetorium',host:(legion.praetorium.host||'this host'),
    state:'ready',numeral:1,version:(legion.praetorium.version||''),
-   task:null,error:''}].concat(legion.cohorts);
+   error:''}].concat(legion.cohorts);
  for(const c of rows){
   const local=c.name==='praetorium';
   const row=document.createElement('div');
-  row.className='campaign-item cohort '+(local?'local ':'')+(legion.active===c.name?'active':'');
+  row.className='campaign-item cohort '+(local?'local ':'');
   row.dataset.key=c.name;
   const ic=document.createElement('span');ic.className='campaign-icon';ic.innerHTML=SHIELD_ICON;
   row.appendChild(ic);
@@ -32768,16 +32082,8 @@ function renderLegion(){
    +(local?' \u00b7 this host':' \u00b7 '+(c.host||''))+(c.version?' \u00b7 v'+c.version:'');
   m.appendChild(meta);
   tx.appendChild(m);row.appendChild(tx);
-  if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
-  else if(c.task&&c.task.state==='working')row.title='on campaign (task '+c.task.id+')';
   if(!local){
-   const open=document.createElement('button');
-   open.type='button';open.className='campaign-open';open.id='cohort-open-'+c.name;
-   open.title="open this cohort's own page in a new tab";
-   open.setAttribute('aria-label','Open '+c.name+' page');
-   open.innerHTML=EXTERNAL_ICON;
-   open.onclick=function(ev){openCohortPage(c.name,ev);};
-   row.appendChild(open);
+   row.title="open "+c.name+"'s page in a new tab";
    const edit=document.createElement('button');
    edit.type='button';edit.className='campaign-edit';edit.id='cohort-edit-'+c.name;
    edit.title='reconfigure this cohort (address or page token)';
@@ -32792,32 +32098,14 @@ function renderLegion(){
    del.innerHTML=X_ICON;
    del.onclick=function(ev){removeCohort(c.name,ev);};
    row.appendChild(del);
+   row.onclick=function(){openCohortPage(c.name);};
+   if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
   }
-  row.onclick=function(){openChannel(c.name);};
   cohortsEl.appendChild(row);
- }
- if(n>=2){
-  // ALL COHORTS: one order, every cohort. A fan-out of one is just a send, so the
-  // row appears once there is something to fan to.
-  const all=document.createElement('div');
-  all.className='campaign-item cohort allcohorts'+(legion.active==='allcohorts'?' active':'');
-  all.title='one order, every cohort at once';
-  const aic=document.createElement('span');aic.className='campaign-icon';aic.innerHTML=SHIELD_ICON;
-  all.appendChild(aic);
-  const atx=document.createElement('span');
-  const att=document.createElement('strong');att.textContent='ALL COHORTS';atx.appendChild(att);
-  const am=document.createElement('small');
-  am.appendChild(dotFor(onCampaign?'working':'ready'));
-  const amt=document.createElement('span');
-  amt.textContent=n+' \u00b7 one order fans out';
-  am.appendChild(amt);atx.appendChild(am);
-  all.appendChild(atx);
-  all.onclick=function(){openAllCohorts();};
-  cohortsEl.appendChild(all);
  }
  const add=document.createElement('div');
  add.className='campaign-item cohort addcohort';
- add.title='connect a box that already serves its page';
+ add.title='link a box that already serves its page';
  const aic=document.createElement('span');aic.className='campaign-icon';aic.textContent='+';
  add.appendChild(aic);
  const atx=document.createElement('span');
@@ -32826,29 +32114,6 @@ function renderLegion(){
  add.appendChild(atx);
  add.onclick=function(){openAddCohort();};
  cohortsEl.appendChild(add);
- renderTabs();
-}
-function renderTabs(){
- campaignsEl.textContent='';
- if(!legion.on)return;
- const tab=function(label,which,closable){
-  const b=document.createElement('div');
-  const unseen=closable&&!legionSeen(which);
-  b.className='campaign-tab'+(legion.active===which?' on':'');
-  const s=document.createElement('span');s.textContent=label;b.appendChild(s);
-  if(unseen){const d=document.createElement('span');d.className='tabdot';b.appendChild(d);}
-  b.title=unseen?'new activity in this cohort':'show this channel';
-  b.onclick=function(){openChannel(which);};
-  if(closable){
-   const x=document.createElement('button');x.type='button';x.className='campaign-tab-x';
-   x.title='close this cohort tab';x.textContent='\u00d7';
-   x.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();closeChannel(which);};
-   b.appendChild(x);
-  }
-  campaignsEl.appendChild(b);
- };
- tab('PRAETORIUM','praetorium',false);
- for(const name of legion.tabs)tab(name,name,true);
 }
 function openAddCohort(existing){
  if(legion.dialog)return;         // one dialog at a time: the overlay covers the rail
@@ -32862,9 +32127,8 @@ function openAddCohort(existing){
   ?"Change this cohort's address, or paste its new page token. The card is probed "
    +'with the values you type before anything is written; leave the token blank to '
    +'keep the current one.'
-  :'Connect a box that already serves its page: its URL and the '
-   +'TINYCMDR_WEB_TOKEN in its .env. Its mesh door must answer there - newer builds '
-   +'publish it with the page; older ones need `web.a2a: true` and a restart.';
+  :'Link a box that already serves its page: its URL and the '
+   +'TINYCMDR_WEB_TOKEN in its .env. Clicking the row opens its page in a new tab.';
  panel.appendChild(head);panel.appendChild(hint);
  const field=function(id,label,ph,type){
   const lab=document.createElement('label');lab.className='addcohort-field';
@@ -32909,20 +32173,12 @@ function openAddCohort(existing){
   }
   close();
   legion.praetorium=j.praetorium||legion.praetorium;
-  legion.cohorts=j.cohorts||[];legion.tabs=j.tabs||[];
+  legion.cohorts=j.cohorts||[];
   legion.on=legion.cohorts.length>0;
   renderLegion();
   const info=j.added||j.updated||{};
-  const linesNote=info.lines===false
-   ?' \u00b7 no run-lines there: its tab shows the answer when it lands':'';
-  if(editing){
-   note('cohort '+cname+' updated'+(info.token_updated?' \u00b7 new token':'')
-    +linesNote);
-   if(legion.active===cname)openChannel(cname);
-   return;
-  }
-  note('cohort '+cname+' added'+linesNote);
-  openChannel(cname);
+  note(editing?('cohort '+cname+' updated'+(info.token_updated?' \u00b7 new token':''))
+              :('cohort '+cname+' linked'));
  };
  document.body.appendChild(ov);
  legion.dialog=ov;
@@ -32945,21 +32201,16 @@ function openCohortPage(name,ev){
 }
 function removeCohort(name,ev){
  if(ev&&ev.stopPropagation)ev.stopPropagation();
- // The × on a cohort row: one confirm, then the hub's own config write. The
- // transcript stays - this takes the CONNECTION out, not what the box said.
- note('remove cohort "'+name+'" from this hub? Its channel closes; its transcript stays.',
-  ['Remove',async function(){
+ // The × on a cohort row: one confirm, then this box's own config write. The
+ // other box is only unlinked; nothing on it changes.
+ note('unlink cohort "'+name+'" from this hub?',
+  ['Unlink',async function(){
    const {status:code,j}=await post('/api/legion',{op:'remove-remote',remote:name});
    if(code!==200||j.error){note(j.error||('the hub answered '+code));return;}
-   const wasActive=(legion.active===name);
-   legion.cohorts=j.cohorts||[];legion.tabs=j.tabs||[];
-   legion.broadcast=j.broadcast||legion.broadcast;
+   legion.cohorts=j.cohorts||[];
    legion.on=legion.cohorts.length>0;
-   if(wasActive||!legion.on)legion.active='praetorium';
    renderLegion();
-   if(legion.active==='praetorium')await openSession(sessionKey||'web',true);
-   else if(legion.active==='allcohorts')paintBroadcast();
-   note('cohort '+name+' removed');
+   note('cohort '+name+' unlinked');
   }]);
 }
 async function refreshLegion(){
@@ -32969,164 +32220,9 @@ async function refreshLegion(){
   const j=await r.json();
   legion.praetorium=j.praetorium||{};
   legion.cohorts=j.cohorts||[];
-  legion.tabs=j.tabs||[];
-  legion.broadcast=j.broadcast||{};
   legion.on=legion.cohorts.length>0;
-  if(!legion.on){
-   legion.tabs=[];
-   if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
-   renderLegion();
-   if(legion.active!=='praetorium')return openSession(sessionKey||'web',true);
-   return;
-  }
-  if(legion.active!=='praetorium'&&legion.active!=='allcohorts'
-     &&!legionOf(legion.active))legion.active='praetorium';
   renderLegion();
-  const c=legion.active!=='praetorium'?legionOf(legion.active):null;
-  if(c&&c.state==='working'&&!legion.timer)startLegionPoll(legion.active);
  }catch(e){}
-}
-async function legionTab(op,remote){
- const {status:code,j}=await post('/api/legion',{op:op,remote:remote});
- if(j&&j.tabs){legion.tabs=j.tabs;renderTabs();}
- else if(code!==200&&j&&j.error)note(j.error);
-}
-async function closeChannel(name){
- await legionTab('tab-close',name);
- if(legion.active===name)return openChannel('praetorium');
- renderTabs();
-}
-async function loadCohortRuns(which){
- const my=gen;
- try{
-  const r=await fetch('/api/legion/session?remote='+encodeURIComponent(which),{headers:H()});
-  if(my!==gen||legion.active!==which)return;
-  if(r.ok){const j=await r.json();
-   if(my!==gen||legion.active!==which)return;
-   for(const run of (j.runs||[]))reconcile(run.run_id,run.lines||[]);
-  }
- }catch(e){}
-}
-async function openChannel(which){
- if(which==='praetorium'){return openSession(sessionKey||'web',true);}
- if(which==='allcohorts'){return openAllCohorts();}
- if(!legionOf(which))return;
- if(legion.active===which&&legion.timer)return;   // already there, already live
- if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
- legion.active=which;
- try{localStorage.fb_legion_active=which;}catch(e){}
- runId=null;busy(false);gen++;
- clearLog();
- chanEl.textContent='COMMAND CHANNEL \u00b7 COHORT';
- titleEl.textContent=which;
- inp.placeholder='Order '+which+' to\u2026';
- legionMarkSeen(which);
- renderLegion();
- setStage('ready','awaiting orders');
- if(legion.tabs.indexOf(which)<0)await legionTab('tab-open',which);else renderTabs();
- await loadCohortRuns(which);
- await refreshLegion();
-}
-function startLegionPoll(remote){
- if(legion.timer)clearTimeout(legion.timer);
- const my=gen;
- legion.timer='pending';
- (async function loop(){
-  if(my!==gen||legion.active!==remote){legion.timer=null;return;}
-  try{
-   const r=await fetch('/api/legion/lines?remote='+encodeURIComponent(remote),{headers:H()});
-   if(my!==gen||legion.active!==remote){legion.timer=null;return;}
-   if(r.ok){
-    const j=await r.json();fails=0;
-    if(j.no_run){
-     legion.timer=null;
-     return cohortRepaint(remote,my);
-    }
-    reconcile(j.run_id||('legion-'+remote),j.lines||[]);
-    setStage(j.done?'ready':'working',(j.status||'working')+' \u00b7 '+(j.elapsed||0)+'s, '+(j.steps||0)+' tool calls');
-    if(j.done){legion.timer=null;return cohortRepaint(remote,my);}
-   }else{fails++;setStage('trouble');}
-  }catch(e){fails++;setStage('trouble');}
-  legion.timer=setTimeout(loop,fails?Math.min(5000,700*fails):900);
- })();
-}
-async function cohortRepaint(remote,my){
- setStage('ready');
- if(my!==gen||legion.active!==remote)return;
- await loadCohortRuns(remote);
- await loadSessions();
-}
-async function legionSend(text){
- const remote=legion.active;
- const {status:code,j}=await post('/api/legion',{op:'send',remote:remote,message:text});
- if(code!==200||j.error){note(j.error||('the cohort answered '+code));return;}
- note('');
- legionMarkSeen(remote);
- setStage('working','on campaign \u00b7 0s, 0 tool calls');
- startLegionPoll(remote);
-}
-function cohortStateText(c){
- const map={working:'on campaign',done:'reported',failed:'failed',silent:'unreachable',
-            ready:'ready'};
- return (map[c.state]||c.state||'ready')+(c.task&&c.task.id?' \u00b7 '+c.task.id:'');
-}
-function paintBroadcast(){
- const b=legion.broadcast||{};
- const lines=[{uid:'bc-head',kind:'system',
-   text:"ONE ORDER, EVERY COHORT \u00b7 each answer lands in that cohort's own tab",i:0}];
- if(b.summary)lines.push({uid:'bc-last',kind:'say',text:'last fan-out: '+b.summary,i:1});
- legion.cohorts.forEach(function(c,i){
-  lines.push({uid:'bc-'+c.name,kind:c.state==='working'?'tool':'system',
-   text:'Cohort '+(NUMERALS[(c.numeral||2)-1]||c.numeral)+' '+c.name+' \u00b7 '
-        +cohortStateText(c),i:2+i});
- });
- reconcile('allcohorts',lines);
-}
-async function openAllCohorts(){
- if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
- legion.active='allcohorts';
- try{localStorage.fb_legion_active='allcohorts';}catch(e){}
- runId=null;busy(false);gen++;
- clearLog();
- chanEl.textContent='COMMAND CHANNEL \u00b7 ALL COHORTS';
- titleEl.textContent='ALL COHORTS';
- renderLegion();
- setStage('ready',legion.cohorts.length+' cohorts \u00b7 one order at a time each');
- inp.placeholder='Order every cohort to\u2026';
- paintBroadcast();
- await refreshLegion();
- startAllPoll();
-}
-function startAllPoll(){
- if(legion.timer)clearTimeout(legion.timer);
- const my=gen;
- legion.timer='pending';
- (async function loop(){
-  if(my!==gen||legion.active!=='allcohorts'){legion.timer=null;return;}
-  try{
-   const r=await fetch('/api/legion',{headers:H()});
-   if(my!==gen||legion.active!=='allcohorts'){legion.timer=null;return;}
-   if(r.ok){const j=await r.json();fails=0;
-    legion.cohorts=j.cohorts||[];legion.broadcast=j.broadcast||{};
-    renderLegion();paintBroadcast();
-    const onCampaign=legion.cohorts.filter(function(c){return c.state==='working';}).length;
-    setStage(onCampaign?'working':'ready',
-      onCampaign?onCampaign+' on campaign \u00b7 each reports in its own tab'
-                :'awaiting orders');
-   }else{fails++;setStage('trouble');}
-  }catch(e){fails++;setStage('trouble');}
-  legion.timer=setTimeout(loop,fails?Math.min(5000,700*fails):1800);
- })();
-}
-async function legionSendAll(text){
- const {status:code,j}=await post('/api/legion',{op:'send-all',message:text});
- if(code!==200||j.error){note(j.error||('the hub answered '+code));return;}
- note('');
- legion.broadcast={at:j.at,sent:j.sent||[],refused:j.refused||[],
-                   failed:j.failed||[],summary:j.summary||''};
- paintBroadcast();
- setStage('working','fan-out sent');
- startAllPoll();
 }
 async function loadSessions(){
  const r=await fetch('/api/sessions'+(allEl.checked?'?all=1':''),{headers:H()});
@@ -33135,7 +32231,7 @@ async function loadSessions(){
  sessions=j.sessions||[];budget=j.budget||0;
  hostEl.textContent=(j.host||'');hostVerEl.textContent='tinycmdr \u00b7 v'+(j.version||'');
  // The legion rides this same 5-second clock: the count comes from this reply, and
- // only a hub with cohorts configured pays the /api/legion read behind it. A hub
+ // only a box with cohorts configured pays the /api/legion read behind it. A box
  // with none still draws the rail - praetorium and the ADD COHORT invitation - and
  // fetches nothing extra; this reply already carries the version that row shows.
  const lc=j.legion||0;
@@ -33143,9 +32239,8 @@ async function loadSessions(){
  if(lc>0){
   await refreshLegion();
  }else{
-  legion.on=false;legion.cohorts=[];legion.tabs=[];
+  legion.on=false;legion.cohorts=[];
   legion.praetorium={host:j.host||'',version:j.version||''};
-  if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
   renderLegion();
  }
  if(!sessionKey)sessionKey=j.open||null;
@@ -33156,11 +32251,6 @@ async function loadSessions(){
 }
 async function openSession(key,quiet){
  if(!key)return;
- // Opening a conversation IS the praetorium channel: the local transcript belongs
- // to this box, and a cohort channel must not keep painting under it.
- legion.active='praetorium';
- try{localStorage.fb_legion_active='praetorium';}catch(e){}
- if(legion.timer){clearTimeout(legion.timer);legion.timer=null;}
  chanEl.textContent='COMMAND CHANNEL';
  sessionKey=key;localStorage.fb_session=key;runId=null;busy(false);
  clearLog();renderRail();
@@ -33190,9 +32280,6 @@ async function newConversation(){
  else note('could not start a campaign: '+(j.error||r.status));
 }
 function renameSession(){
- if(legion.active!=='praetorium'){
-  note('a cohort channel has no title to rename - open PRAETORIUM to rename your own campaigns');
-  return;}
  const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
  if(!cur)return;
  const name=prompt('name this campaign:',cur.title);
@@ -33324,9 +32411,6 @@ function palTake(){
  return true;
 }
 async function stop(){
- if(legion.active!=='praetorium'){
-  note('a cohort runs its order to the end - A2A has no cancel order. The tab keeps its report when it lands.');
-  return;}
  if(!runId){note('nothing is running here');return;}
  setStage('stopping');
  try{const r=await fetch('/api/stop',{method:'POST',headers:H(),
@@ -33391,17 +32475,6 @@ async function send(){
  hist.unshift(t);histAt=-1;
  localStorage.fb_draft='';
  if(t==='/clear'){clearLog();note('transcript cleared (the campaign is still on the server)');return;}
- if(legion.active==='allcohorts'){
-  // The fan-out channel: one order, every cohort. Each cohort's answer lands in
-  // its own tab (the hub registers one run per cohort), and the roster here shows
-  // who was sent, who was refused and who has reported.
-  return legionSendAll(t);
- }
- if(legion.active!=='praetorium'){
-  // Everything else typed on a cohort channel is an ORDER: it goes to that box
-  // over A2A, where the local slash-commands mean nothing.
-  return legionSend(t);
- }
  if(t==='/sessions'||t==='/conversations'){railEl.classList.remove('hide');renderRail();note('');return;}
  if(t==='/new chat'||t==='/new'){return newConversation();}
  if(t==='/stop'||t==='stop'){return stop();}
@@ -33601,11 +32674,6 @@ async function fetchFile(uid){
 }
 async function uploadFiles(files){
  if(!files||!files.length)return;
- if(legion.active!=='praetorium'){
-  // An attachment lands on THIS box's disk; the cohort cannot read that path, and
-  // inserting it into the order would hand the other model a phantom file.
-  note('a file attaches to this box only, and a cohort cannot read this box - switch to PRAETORIUM to upload it');
-  return;}
  let failed=0;
  for(const f of files){
   // The server refuses a Content-Length over 50 MiB before reading the body, and on
@@ -33684,7 +32752,6 @@ log.addEventListener('click',function(e){             // tap the answer to copy 
  if(n&&n.className&&n.className.indexOf('final')>=0)clip(boxText(n));
 });
 async function attach(){
- if(legion.active!=='praetorium')return;
  try{
   const r=await fetch('/api/live?session='+encodeURIComponent(sessionKey||''),
     {headers:H()});
@@ -33750,12 +32817,7 @@ emptyLast.onclick=function(){
  await loadSessions();
  const want=localStorage.fb_session;
  const have=sessions.some(function(s){return s.key===want;});
- if(legion.active!=='praetorium'&&legionOf(legion.active)){
-  // The browser was last on a cohort channel: restore it, the same way the local
-  // conversation is restored (the tab list rides the hub's store, the ACTIVE one
-  // is this browser's own view state).
-  await openChannel(legion.active);
- }else if(want&&have){await openSession(want,true);}
+ if(want&&have){await openSession(want,true);}
  else{await openSession(sessionKey||'web',true);}
  await loadModels();
  setInterval(versionCheck,20000);
@@ -35287,27 +34349,13 @@ def run_webui():
                                         q.get("session")))
                 self._json({"run_id": live.id if live else None})
             elif self.path.startswith("/api/legion"):
-                # The LEGION hub (see the legion block): this box's view of the
-                # cohorts it was configured with. One literal for the family and
-                # exact-path dispatch inside, because the route-order contract
-                # forbids an earlier prefix that shadows a later one ("/api/legion"
-                # would shadow "/api/legion/lines"). Every read here is LOCAL state:
-                # cohorts are contacted by the census thread, never by this route.
+                # The LEGION rail (see the legion block): the boxes this host was
+                # configured with. Every read here is LOCAL state - cohorts are
+                # contacted by the census thread, never by this route.
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
                     return
-                _sub = self.path.split("?", 1)[0]
-                _remote = self._query().get("remote") or ""
-                if _sub in ("/api/legion/session", "/api/legion/lines"):
-                    if _remote not in legion_cohorts():
-                        self._json({"error": "no such cohort"}, 404)
-                        return
-                    if _sub == "/api/legion/session":
-                        self._json(legion_session(_remote))
-                    else:
-                        self._json(legion_lines(_remote))
-                    return
-                self._json(legion_overview(_web_client(self.headers)))
+                self._json(legion_overview())
             elif self.path.startswith("/api/commands"):
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
@@ -36024,15 +35072,13 @@ def run_webui():
                 self._json({"stopping": True})
                 return
             if self.path.startswith("/api/legion"):
-                # One POST family - {"op": "send" | "tab-open" | "tab-close" |
-                # "add-remote" | "update-remote" | "remove-remote"} - see the legion
-                # block. An order and the tab ops name a CONFIGURED cohort and never a
-                # URL, so the relay cannot be aimed anywhere the operator did not write
-                # into agent.a2a_remotes; the tokens stay in this box's .env.
-                # add-remote/update-remote/remove-remote are the authenticated page's
-                # own config writes: connect a box the operator runs, correct its
-                # address or rotated token, or take it out again - the values they
-                # would otherwise edit in by hand.
+                # One POST family - {"op": "open" | "add-remote" |
+                # "update-remote" | "remove-remote"} - see the legion block. Every
+                # op names a CONFIGURED cohort and never a URL; the tokens stay in
+                # this box's .env. The add/update/remove ops are the authenticated
+                # page's own config writes: connect a box, correct its address or
+                # rotated token, or take it out again - the values they would
+                # otherwise edit in by hand.
                 if not self._auth_ok():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
@@ -36042,14 +35088,6 @@ def run_webui():
                     return
                 op = str(body.get("op") or "").strip()
                 name = str(body.get("remote") or "").strip()
-                client = _web_client(self.headers)
-                if op in ("tab-open", "tab-close"):
-                    if name not in legion_cohorts():
-                        self._json({"error": "no such cohort"}, 404)
-                        return
-                    self._json({"tabs": legion_tab_set(client, name,
-                                                       op == "tab-open")})
-                    return
                 if op == "open":
                     # The parity door: the cohort's OWN page, at its own address,
                     # exactly as if this browser opened that box by hand. The token
@@ -36078,7 +35116,7 @@ def run_webui():
                     if code != 200:
                         self._json(added, code)
                         return
-                    out = legion_overview(client)
+                    out = legion_overview()
                     out["added"] = added
                     self._json(out)
                     return
@@ -36088,7 +35126,7 @@ def run_webui():
                     if code != 200:
                         self._json(updated, code)
                         return
-                    out = legion_overview(client)
+                    out = legion_overview()
                     out["updated"] = updated
                     self._json(out)
                     return
@@ -36097,26 +35135,11 @@ def run_webui():
                     if code != 200:
                         self._json(removed, code)
                         return
-                    out = legion_overview(client)
+                    out = legion_overview()
                     out["removed"] = removed
                     self._json(out)
                     return
-                if op == "send":
-                    run_id, err, code = legion_send(name, body.get("message"), client)
-                    if err:
-                        self._json({"error": err}, code)
-                        return
-                    self._json({"run_id": run_id, "remote": name})
-                    return
-                if op == "send-all":
-                    out, code = legion_send_all(body.get("message"), client)
-                    if code != 200:
-                        self._json(out, code)
-                        return
-                    self._json(out)
-                    return
-                self._json({"error": "unknown op (send, send-all, tab-open, "
-                                     "tab-close, open, add-remote, update-remote, "
+                self._json({"error": "unknown op (open, add-remote, update-remote, "
                                      "remove-remote)"}, 400)
                 return
             if not self.path.startswith("/api/chat"):
