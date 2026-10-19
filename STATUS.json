@@ -19,10 +19,10 @@
     {
       "id": "legion-links-pages",
       "title": "a cohort is another box's page, opened in its own tab",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "2bd227a",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The legion relayed orders over A2A and re-implemented a subset of the other page, so it could not carry the page's own commands or features; the rail now lists the configured boxes and opens each one's own page in a new tab with its token in the URL fragment, the relay and its cohort channels, tabs, fan-out, transcript mirroring and restart repair are gone, and every box configured with the same list shows the same rail.",
       "gate": "tests/test_legion.py covers the list, the card probe, the egress warning and the local-only overview; tests/test_webui.py's OPEN COHORT block covers the fragment URL; tests/test_webui_page.py drives the rows, the link and the dialogs."
@@ -30,10 +30,10 @@
     {
       "id": "a2a-commands-use-the-page-door",
       "title": "an inbound A2A command uses the page's command door",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "2bd227a",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "An A2A message used to reach the model as prose even when it was a slash command; it now runs `_web_command` first, so /new, /stop, /status, /help and /tinycmdr verbs answer on that box, read_only refuses update/restart/clean/config/approvals and model --global, and /stop reaches an in-flight run's cancel.",
       "gate": "tests/test_a2_surface.py's test_a_slash_command_uses_the_page_door covers the door, the unknown command, ordinary words and the read_only refusal."
@@ -41,10 +41,10 @@
     {
       "id": "hero-sunbeam-and-contrast",
       "title": "the hero keeps its sunbeam and a readable resume action",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "a028482",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The rotating aura was washed out behind the chibi by the lightened backdrop; it is now one brighter gold slice turning behind the art, the secondary action has a dark plate and brighter label over the photo, and the pedestal and rail labels say Cohort.",
       "gate": "tests/test_webui_page.py pins the rail's Cohort label; the served page and its stylesheet are graded by tests/test_webui.py."
