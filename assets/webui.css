@@ -683,10 +683,10 @@ color:var(--fg);padding:.45rem .55rem;font:inherit}
   left: 2vw;
   width: 104%;
   height: min(60vh, 580px);
-  opacity: 0.6;
+  opacity: 0.72;
   pointer-events: none;
   background: url(/temple.jpg?v={{VERSION}}) center bottom / cover no-repeat;
-  filter: saturate(0.95) brightness(1.02);
+  filter: saturate(1.02) brightness(1.06);
   -webkit-mask-image: linear-gradient(180deg, transparent, #000 30%, #000 78%, transparent);
   mask-image: linear-gradient(180deg, transparent, #000 30%, #000 78%, transparent);
 }
@@ -696,9 +696,9 @@ color:var(--fg);padding:.45rem .55rem;font:inherit}
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, rgba(11, 13, 16, 0.78), rgba(11, 13, 16, 0.34) 42%, transparent 68%),
-    linear-gradient(180deg, rgba(11, 13, 16, 0.15), transparent 36%, rgba(11, 13, 16, 0.68)),
-    radial-gradient(circle at 50% 48%, transparent 0, rgba(11, 13, 16, 0.30) 72%);
+    linear-gradient(90deg, rgba(11, 13, 16, 0.70), rgba(11, 13, 16, 0.24) 40%, transparent 56%),
+    linear-gradient(180deg, rgba(11, 13, 16, 0.08), transparent 34%, rgba(11, 13, 16, 0.44)),
+    radial-gradient(circle at 50% 48%, transparent 0, rgba(11, 13, 16, 0.14) 74%);
 }
 
 .stage-header {
