@@ -685,9 +685,9 @@ def main():
     res = run_page({"runs": [], "session_status": 500, "steps": [{"kind": "polls", "n": 4}]},
                    script)
     check(not res.get("errors"), f"the failed-load path runs clean ({res.get('errors')[:1]})")
-    check(has(res, "Could not load this conversation"),
+    check(has(res, "Could not load this campaign"),
           "a failed load is a card, not a blank pane")
-    check(has(res, "Retry") and has(res, "Start a new conversation"),
+    check(has(res, "Retry") and has(res, "Start a new campaign"),
           "with both ways out")
 
     # -- the fragment carry: #token= never reaches the server, the page uses it ---

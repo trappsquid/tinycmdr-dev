@@ -364,7 +364,7 @@ function fetchShim(url, opts) {
     if (opts && opts.method === 'POST') {
       if (body.op === 'new') {
         const k = 'web-new' + (++convSeq);
-        sessions.unshift({ key: k, title: 'a new conversation', created: 0,
+        sessions.unshift({ key: k, title: 'a new campaign', created: 0,
                            last_active: 0, exchanges: 0, tokens: 0, model: 'main',
                            owner: 'mine', live: null });
         return jres({ key: k, sessions: sessions });

@@ -29493,7 +29493,7 @@ def web_title(entry):
     # An empty conversation is named as such: the rail already says when it was
     # last used, and a row titled "2026-09-20 09:18" reads like a task, not a
     # chat you have not said anything in yet.
-    return "new conversation"
+    return "new campaign"
 
 def web_session_brief(entry, client):
     """One row of the rail: the conversation plus what it is doing right now."""
@@ -32017,11 +32017,11 @@ WEB_PAGE = """
 <div class="ambient ambient-gold"></div>
 <header class="app-header">
   <div class="header-left">
-    <button id=menu class="icon-button" aria-label="conversations" title="conversations"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" /> </svg></button>
+    <button id=menu class="icon-button" aria-label="campaigns" title="campaigns"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" /> </svg></button>
     <div class="brand-medallion"><img id=medallionimg src="/mark.png?v={{VERSION}}" alt="tinycmdr badge"></div>
     <div class="brand-copy"><span class="brand-name">tinycmdr</span><a id=ver class="brand-version" href="{{RELEASE_URL}}" target="_blank" rel="noopener" title="release notes"></a></div>
   </div>
-  <div class="header-center"><span class="model-ctl"><select id=model aria-label="model" title="switch the model for every conversation (saved to config.json)"></select></span></div>
+  <div class="header-center"><span class="model-ctl"><select id=model aria-label="model" title="switch the model for every campaign (saved to config.json)"></select></span></div>
   <div class="header-right">
     <button id=tools class="icon-button" aria-label="tasks, jobs, log, inventory"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /> <circle cx="12" cy="12" r="3" /> </svg></button>
     <button id=stop>Stop</button>
@@ -32057,8 +32057,8 @@ WEB_PAGE = """
       <div id=sessions class="campaign-list"></div>
     </div>
     <div class="sidebar-footer">
-      <label class="host-toggle"><input id=allclients type=checkbox checked><span></span> Show every conversation on this host</label>
-      <small class="host-rule">Every browser on this host, not just this one: reading another browser's conversation is allowed here; renaming, deleting or running in it is not.</small>
+      <label class="host-toggle"><input id=allclients type=checkbox checked><span></span> Show every campaign on this host</label>
+      <small class="host-rule">Every browser on this host, not just this one: reading another browser's campaign is allowed here; renaming, deleting or running in it is not.</small>
       <div class="host-card"><div><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 20v2" /> <path d="M12 2v2" /> <path d="M17 20v2" /> <path d="M17 2v2" /> <path d="M2 12h2" /> <path d="M2 17h2" /> <path d="M2 7h2" /> <path d="M20 12h2" /> <path d="M20 17h2" /> <path d="M20 7h2" /> <path d="M7 20v2" /> <path d="M7 2v2" /> <rect x="4" y="4" width="16" height="16" rx="2" /> <rect x="8" y="8" width="8" height="8" rx="1" /> </svg><strong id=host></strong></div><small id=hostver></small></div>
     </div>
   </aside>
@@ -32066,7 +32066,7 @@ WEB_PAGE = """
     {{BACKDROP}}
     <div class="stage-vignette"></div>
     <div class="stage-header">
-      <div><small id=chan>COMMAND CHANNEL</small><strong id=title title="click to rename">No active conversation</strong></div>
+      <div><small id=chan>COMMAND CHANNEL</small><strong id=title title="click to rename">No active campaign</strong></div>
       <div class="stage-status" id=stage-status data-s=ready title="idle, and the server is answering"><span class="status-dot"></span><span id=stage-state>ready</span></div>
     </div>
     <nav id=campaigns class="campaign-tabs" hidden aria-label="channels"></nav>
@@ -32077,8 +32077,8 @@ WEB_PAGE = """
           <h1><span>Greetings,</span> Commander.</h1>
           <p>Your legion is idle. Dispatch a new order, inspect the host, or resume an earlier campaign from the archive.</p>
           <div class="hero-actions">
-            <button id=emptynew class="primary-action">Start a new campaign (new conversation) <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg></button>
-            <button id=emptylast class="secondary-action">Resume the last campaign (last conversation)</button>
+            <button id=emptynew class="primary-action">Start a new campaign <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg></button>
+            <button id=emptylast class="secondary-action">Resume the last campaign</button>
           </div>
           <div class="session-strip" aria-label="Current session statistics">
             <div class="stat-block"><small>SESSION</small><strong id=stat-session>&mdash;</strong></div>
@@ -32605,7 +32605,7 @@ function renderRail(){
   tx.appendChild(m);row.appendChild(tx);
   const del=document.createElement('button');
   del.type='button';del.className='campaign-del';
-  del.title='delete this conversation';del.setAttribute('aria-label','Delete '+s.title);
+  del.title='delete this campaign';del.setAttribute('aria-label','Delete '+s.title);
   del.innerHTML=X_ICON;
   del.onclick=function(ev){deleteRow(s.key,s.title,ev);};
   row.appendChild(del);
@@ -33018,7 +33018,7 @@ async function legionSendAll(text){
 }
 async function loadSessions(){
  const r=await fetch('/api/sessions'+(allEl.checked?'?all=1':''),{headers:H()});
- if(!r.ok){showLoadError('the conversation list answered '+r.status);return null;}
+ if(!r.ok){showLoadError('the campaign list answered '+r.status);return null;}
  const j=await r.json();
  sessions=j.sessions||[];budget=j.budget||0;
  hostEl.textContent=(j.host||'');hostVerEl.textContent='tinycmdr \u00b7 v'+(j.version||'');
@@ -33075,15 +33075,15 @@ async function newConversation(){
   body:JSON.stringify({op:'new'})});
  const j=await r.json().catch(function(){return {};});
  if(j.key){await loadSessions();await openSession(j.key);}
- else note('could not start a conversation: '+(j.error||r.status));
+ else note('could not start a campaign: '+(j.error||r.status));
 }
 function renameSession(){
  if(legion.active!=='praetorium'){
-  note('a cohort channel has no title to rename - open PRAETORIUM to rename your own conversations');
+  note('a cohort channel has no title to rename - open PRAETORIUM to rename your own campaigns');
   return;}
  const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
  if(!cur)return;
- const name=prompt('name this conversation:',cur.title);
+ const name=prompt('name this campaign:',cur.title);
  if(name===null)return;
  fetch('/api/sessions',{method:'POST',headers:H(),
   body:JSON.stringify({op:'rename',key:sessionKey,title:name})})
@@ -33099,7 +33099,7 @@ function deleteRow(key,title,ev){
    .then(function(r){return r.json().then(function(j){return [r.status,j];});})
    .then(function(pair){
     const code=pair[0],j=pair[1];
-    if(code!==200){note(j.error||'could not delete that conversation');return;}
+    if(code!==200){note(j.error||'could not delete that campaign');return;}
     const wasOpen=(key===sessionKey);
     if(wasOpen){sessionKey=null;runId=null;clearLog();busy(false);}
     return loadSessions().then(function(){
@@ -33278,7 +33278,7 @@ async function send(){
  inp.value='';inp.style.height='auto';
  hist.unshift(t);histAt=-1;
  localStorage.fb_draft='';
- if(t==='/clear'){clearLog();note('transcript cleared (the conversation is still on the server)');return;}
+ if(t==='/clear'){clearLog();note('transcript cleared (the campaign is still on the server)');return;}
  if(legion.active==='allcohorts'){
   // The fan-out channel: one order, every cohort. Each cohort's answer lands in
   // its own tab (the hub registers one run per cohort), and the roster here shows
@@ -33412,13 +33412,13 @@ configDismiss.onclick=function(){
 function showLoadError(msg){
  clearLog();
  const card=document.createElement('div');card.className='loadfail';
- const t=document.createElement('div');t.className='title';t.textContent='Could not load this conversation';
+ const t=document.createElement('div');t.className='title';t.textContent='Could not load this campaign';
  const w=document.createElement('div');w.className='why';w.textContent=String(msg||'');
  const acts=document.createElement('div');acts.className='acts';
  const retry=document.createElement('button');retry.className='button-primary';retry.textContent='Retry';
  retry.onclick=function(){if(sessionKey){openSession(sessionKey,true);}else{loadSessions().then(syncEmpty);}};
  const fresh=document.createElement('button');fresh.className='button-secondary';
- fresh.textContent='Start a new conversation';
+ fresh.textContent='Start a new campaign';
  fresh.onclick=function(){newConversation();};
  acts.appendChild(retry);acts.appendChild(fresh);
  card.appendChild(t);card.appendChild(w);card.appendChild(acts);
@@ -33607,8 +33607,8 @@ async function runSearch(){
  const more=(j&&j.more)||0;
  if(!ms.length){hitsEl.hidden=true;return;}
  const head=document.createElement('div');head.className='hit-head';
- head.textContent=ms.length+(ms.length===1?' match inside conversations'
-                                          :' matches inside conversations')
+ head.textContent=ms.length+(ms.length===1?' match inside campaigns'
+                                         :' matches inside campaigns')
                   +(more?' ('+more+' more - narrow the search)':'');
  hitsEl.appendChild(head);
  for(const m of ms){
@@ -35554,7 +35554,7 @@ def run_webui():
                     # A reloaded tab of ANOTHER browser is not a second tab of
                     # yours: its text must not be queued into someone else's run.
                     self._json({"error": "that run belongs to another browser on "
-                                         "this host - start your own conversation "
+                                         "this host - start your own campaign "
                                          "to send it a message"}, 403)
                     return
                 # A tab that reloaded (or a second tab) does not know a run is
@@ -35662,7 +35662,7 @@ def run_webui():
                 # by a different browser. The SHARED conversation (owner "") is
                 # still open to everyone.
                 if web_owned_by_other(key, client):
-                    self._json({"error": "that conversation belongs to another "
+                    self._json({"error": "that campaign belongs to another "
                                          "browser on this host - you may read it in "
                                          "the shared view, not run in it"}, 403)
                     return
@@ -35693,7 +35693,7 @@ def run_webui():
                 client = _web_client(self.headers)
                 key = web_resolve_session(client, body.get("session"))
                 if web_owned_by_other(key, client):
-                    self._json({"error": "that conversation belongs to another "
+                    self._json({"error": "that campaign belongs to another "
                                          "browser on this host - you may read it in "
                                          "the shared view, not change it"}, 403)
                     return
@@ -35770,7 +35770,7 @@ def run_webui():
                     return
                 if op in ("rename", "delete", "open"):
                     if not _web_key_ok(key) or web_entry(key) is None:
-                        self._json({"error": "no such conversation"}, 404)
+                        self._json({"error": "no such campaign"}, 404)
                         return
                     # Only the browser that owns a conversation may change it.
                     # Reading stays open: the rail's shared view shows every
@@ -35778,7 +35778,7 @@ def run_webui():
                     # rename, open and DELETE a first browser's conversation, and
                     # a delete removes its runlog for good).
                     if web_owned_by_other(key, client):
-                        self._json({"error": "that conversation belongs to another "
+                        self._json({"error": "that campaign belongs to another "
                                              "browser on this host - you may read it "
                                              "in the shared view, but not %s it" % op},
                                    403)
@@ -35800,15 +35800,15 @@ def run_webui():
                         verdict = web_delete_session(key)
                         if verdict == "busy":
                             self._json({"error": "a run is still going in that "
-                                                 "conversation - stop it first"}, 409)
+                                                 "campaign - stop it first"}, 409)
                             return
                         if verdict == "scheduled":
                             self._json({"error": "a scheduled job reports into "
-                                                 "that conversation - remove the "
+                                                 "that campaign - remove the "
                                                  "job first"}, 409)
                             return
                         if verdict != "deleted":
-                            self._json({"error": "no such conversation"}, 404)
+                            self._json({"error": "no such campaign"}, 404)
                             return
                         self._json({"deleted": key, "sessions": web_sessions(client)})
                         return

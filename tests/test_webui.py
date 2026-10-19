@@ -1663,8 +1663,10 @@ def main():
     check("id=allclients" in _html and "not just this one" in _html,
           "the rail's toggle spells out that it means every browser on this host, "
           "not just this one")
-    check("Start a new campaign (new conversation)" in _html,
-          "the empty state pairs its campaign metaphor with the plain word once")
+    check("Start a new campaign" in _html and "Resume the last campaign" in _html
+          and "(new conversation)" not in _html
+          and "(last conversation)" not in _html,
+          "the empty state names the campaign once, with no English gloss")
 
     # ---- A-237: the per-client bound takes the pruned runlog with it ---------
     # The registry stopped at WEB_SESSION_MAX conversations per client, but the
