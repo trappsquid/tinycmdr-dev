@@ -1354,13 +1354,17 @@ box-shadow:0 .9rem 2.4rem var(--shadow);text-align:center}
    legion section joined the rail above the archive and moved the count. */
 .sidebar-archive{display:flex;min-height:0;flex:1 1 auto;flex-direction:column}
 .campaign-item{position:relative}
-.campaign-del{position:absolute;top:6px;right:6px;display:grid;width:22px;height:22px;
+.campaign-del,.campaign-edit{position:absolute;top:6px;display:grid;width:22px;height:22px;
 place-items:center;border:1px solid var(--line-soft);border-radius:3px;
 background:var(--panel-strong);color:var(--muted);cursor:pointer;opacity:.32;transition:opacity .12s}
-.campaign-item:hover .campaign-del,.campaign-del:focus{opacity:1}
+.campaign-del{right:6px}
+.campaign-edit{right:34px}
+.campaign-item:hover .campaign-del,.campaign-del:focus,
+.campaign-item:hover .campaign-edit,.campaign-edit:focus{opacity:1}
 .campaign-del:hover{color:var(--error);border-color:color-mix(in srgb,var(--error) 45%,transparent)}
-.campaign-del svg{width:13px;height:13px}
-@media (hover:none){.campaign-del{opacity:.7}}
+.campaign-edit:hover{color:var(--gold-bright);border-color:rgba(215,169,74,.42)}
+.campaign-del svg,.campaign-edit svg{width:13px;height:13px}
+@media (hover:none){.campaign-del,.campaign-edit{opacity:.7}}
 .campaign-item small{display:flex;align-items:center;gap:7px}
 .campaign-item.other strong{color:var(--muted)}
 .campaign-item .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
@@ -1527,8 +1531,10 @@ body.busy #stop{display:inline-flex}
 /* the hero's session value is a real conversation title: keep it on one line */
 .stat-block strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* the rail's delete chip sits in reserved room, so a long title never runs under it */
+/* the rail's delete chip sits in reserved room, so a long title never runs under it;
+   a cohort row carries edit AND remove side by side and reserves both */
 .campaign-item{padding-right:34px}
+.campaign-item.cohort{padding-right:60px}
 
 /* The consultant's shell is min-height:100vh: right for a mock with ONE static banner,
  * wrong for a console. Two notices grew it to 1115px, the body scrolled, and autofocus

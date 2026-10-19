@@ -207,6 +207,7 @@ const uploads = [];
 let healthFetches = 0;
 let legionFetches = 0;
 const legionAdds = [];                 // every add-remote POST body the page sent
+const legionUpdates = [];              // every update-remote POST body the page sent
 const legionRemovals = [];             // every remove-remote POST body the page sent
 const legionBroadcasts = [];           // every send-all POST and the reply it got
 const modelPosts = [];                 // every model switch the header control sent
@@ -495,6 +496,25 @@ function fetchShim(url, opts) {
                       praetorium: { host: 'harness', version: 'harness' },
                       added: { ok: true, name: body.remote, lines: true,
                                card: { name: 'tinycmdr', version: '9.9.9' } } });
+      }
+      if (body.op === 'update-remote') {
+        legionUpdates.push({ name: body.remote, url: body.url, token: body.token });
+        if (scenario.legion_update_error) {
+          return Promise.resolve({ ok: false, status: 409, json: () => Promise.resolve(
+            { error: scenario.legion_update_error }) });
+        }
+        const row = (scenario.legion_cohorts || []).find((c) => c.name === body.remote);
+        if (row) {
+          row.url = body.url;
+          row.host = String(body.url || '').replace(/^https?:\/\//, '');
+        }
+        return jres({ cohorts: scenario.legion_cohorts,
+                      tabs: scenario.legion_tabs || [],
+                      broadcast: scenario.legion_broadcast || {},
+                      praetorium: { host: 'harness', version: 'harness' },
+                      updated: { ok: true, name: body.remote, url: body.url,
+                                 token_updated: !!body.token, lines: true,
+                                 card: { name: 'tinycmdr', version: '9.9.9' } } });
       }
       if (body.op === 'remove-remote') {
         legionRemovals.push({ name: body.remote });
@@ -815,14 +835,25 @@ async function main() {
     legionStat: byId.legionstat ? byId.legionstat.textContent : '',
     legionFetches: legionFetches,
     legionAdds: legionAdds,
+    legionUpdates: legionUpdates,
     legionRemovals: legionRemovals,
     legionBroadcasts: legionBroadcasts,
     addcohort: (globalThis.document.body.children || [])
       .filter((c) => c.id === 'addcohort').map((c) => c.textContent),
+    addcohortFields: (() => {
+      const g = (id) => globalThis.document.getElementById(id);
+      const nm = g('addcohort-name');
+      if (!nm) { return null; }
+      return { name: nm.value, url: (g('addcohort-url') || {}).value || '',
+               token: (g('addcohort-token') || {}).value || '',
+               go: ((g('addcohort-go') || {}).textContent || ''),
+               readOnly: !!nm.readOnly };
+    })(),
     cohorts: (byId.cohorts ? byId.cohorts.children : []).map((c) => ({
       cls: c.className, text: c.textContent, title: c.title || '',
       dot: deepHas(c, 'dot'), work: deepHas(c, 'work'), bad: deepHas(c, 'bad'),
-      active: deepHas(c, 'active'), del: deepHas(c, 'campaign-del') })),
+      active: deepHas(c, 'active'), del: deepHas(c, 'campaign-del'),
+      edit: deepHas(c, 'campaign-edit') })),
     campTabs: (byId.campaigns ? byId.campaigns.children : []).map((c) => ({
       cls: c.className, text: c.textContent, title: c.title || '',
       badge: deepHas(c, 'tabdot'), on: deepHas(c, 'on'),

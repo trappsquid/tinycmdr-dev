@@ -829,11 +829,13 @@ def main():
     # local run uses. With no cohorts configured the rail still shows - praetorium
     # and the ADD COHORT invitation - and nothing extra is fetched.
     cohorts = [
-        {"name": "storage", "numeral": 2, "host": "storage:8790", "state": "ready",
+        {"name": "storage", "numeral": 2, "host": "storage:8790",
+         "url": "http://storage:8790", "state": "ready",
          "error": "", "version": "1.0.88", "lines": True,
          "task": {"id": "T-done", "state": "done", "started": 5, "finished": 6,
                   "failed": False}},
-        {"name": "office", "numeral": 3, "host": "office:8790", "state": "silent",
+        {"name": "office", "numeral": 3, "host": "office:8790",
+         "url": "http://office:8790", "state": "silent",
          "error": "connection refused", "version": "", "lines": None, "task": None},
     ]
     sc = {"runs": [], "legion_cohorts": cohorts, "legion_tabs": [],
@@ -987,6 +989,85 @@ def main():
     check(len(names) == 2 and ((res.get("state") or {}).get("legion") or {})
           .get("active") == "praetorium",
           f"...and no cohort row, no channel switch ({names})")
+
+    # ...and the pencil reconfigures an existing cohort: the dialog opens with the
+    # name locked, the stored URL filled and the token blank (a secret is never
+    # echoed), a typed token posts update-remote, and a blank one keeps the stored
+    # value. The address is what moves in these scenarios.
+    res = run_page({"runs": [], "legion_cohorts": cohorts, "legion_tabs": [],
+                    "steps": [{"kind": "polls", "n": 3},
+                              {"kind": "click", "id": "cohort-edit-storage",
+                               "polls": 3}]}, script)
+    check(not res["errors"], f"the reconfigure dialog runs clean ({res['errors'][:1]})")
+    _f = res.get("addcohortFields") or {}
+    check(_f.get("name") == "storage" and _f.get("url") == "http://storage:8790"
+          and _f.get("token") == "" and _f.get("readOnly") is True
+          and _f.get("go") == "SAVE",
+          f"the pencil opens on the cohort: name locked, URL filled, token blank, "
+          f"SAVE in place ({_f})")
+    _rows = res.get("cohorts") or []
+    check(not _rows[0].get("edit") and _rows[1].get("edit") and _rows[2].get("edit"),
+          f"the reconfigure control rides a cohort row, not the praetorium "
+          f"({[r.get('edit') for r in _rows]})")
+
+    res = run_page({"runs": [], "legion_cohorts": cohorts, "legion_tabs": ["storage"],
+                    "steps": [
+                        {"kind": "polls", "n": 3},
+                        {"kind": "click", "id": "cohort-edit-storage", "polls": 3},
+                        {"kind": "input", "id": "addcohort-url",
+                         "text": "http://storage:8800"},
+                        {"kind": "input", "id": "addcohort-token",
+                         "text": "tok-rotated-0123456789"},
+                        {"kind": "click", "id": "addcohort-go", "polls": 8},
+                    ]}, script)
+    check(not res["errors"], f"the reconfigure page runs clean ({res['errors'][:1]})")
+    check(res.get("legionUpdates") == [{"name": "storage",
+                                        "url": "http://storage:8800",
+                                        "token": "tok-rotated-0123456789"}],
+          f"SAVE posts update-remote with the typed values "
+          f"({res.get('legionUpdates')})")
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check("storage" in names[1] and "storage:8800" in names[1],
+          f"the row shows the new address ({names[1]!r})")
+    check("cohort storage updated" in ((res.get("note") or {}).get("text") or "")
+          and "new token" in ((res.get("note") or {}).get("text") or ""),
+          f"...and the note names the update and the token ({res.get('note')!r})")
+    check(res.get("addcohort") == [],
+          f"...and the dialog closes ({res.get('addcohort')})")
+
+    # ...a blank token keeps the stored one: the address alone moves
+    res = run_page({"runs": [], "legion_cohorts": cohorts, "legion_tabs": [],
+                    "steps": [
+                        {"kind": "polls", "n": 3},
+                        {"kind": "click", "id": "cohort-edit-storage", "polls": 3},
+                        {"kind": "input", "id": "addcohort-url",
+                         "text": "http://storage:8801"},
+                        {"kind": "click", "id": "addcohort-go", "polls": 8},
+                    ]}, script)
+    check(not res["errors"], f"the address-only edit runs clean ({res['errors'][:1]})")
+    check(res.get("legionUpdates") == [{"name": "storage",
+                                        "url": "http://storage:8801", "token": ""}],
+          f"an empty token is sent empty, not invented ({res.get('legionUpdates')})")
+    check("new token" not in ((res.get("note") or {}).get("text") or ""),
+          f"...and the note does not claim one ({res.get('note')!r})")
+
+    # ...a refused reconfigure (the cohort has an order in flight) keeps the dialog
+    # open with the hub's words, exactly like a refused add
+    res = run_page({"runs": [], "legion_cohorts": cohorts, "legion_tabs": [],
+                    "legion_update_error": "this cohort is on campaign (task L42) - "
+                    "wait for its report or stop it before changing it",
+                    "steps": [
+                        {"kind": "polls", "n": 3},
+                        {"kind": "click", "id": "cohort-edit-storage", "polls": 3},
+                        {"kind": "input", "id": "addcohort-token",
+                         "text": "tok-still-wrong-0123456789"},
+                        {"kind": "click", "id": "addcohort-go", "polls": 8},
+                    ]}, script)
+    check(not res["errors"],
+          f"the refused reconfigure page runs clean ({res['errors'][:1]})")
+    _dlg = res.get("addcohort") or []
+    check(len(_dlg) == 1 and "on campaign" in (_dlg[0] or ""),
+          f"a refused reconfigure keeps the dialog open with the hub's words ({_dlg})")
 
     # ...and the × on a cohort row is the other half: one confirm, the hub's own
     # remove-remote, the row and its tab gone, every other row and the praetorium kept

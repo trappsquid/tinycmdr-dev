@@ -589,6 +589,91 @@ def main():
                     b'"token":"y"}')[0] == 401,
           "an add-remote POST without a token: 401")
 
+    # ---- RECONFIGURE COHORT: a rotated page token or a moved address -------------
+    # The case this exists for: the cohort's page token was rotated, the hub's copy
+    # is stale, and there was no way back short of removing and re-adding the box.
+    # The card is probed with the typed values BEFORE anything is written; a blank
+    # token keeps the stored one; a live order refuses the edit.
+    _CTOK2 = "tok-cohort-rotated-0123456789"
+    _cfg_before = (STAGE / "config.json").read_text(encoding="utf-8")
+    _env_before = fb.ENV_FILE.read_text(encoding="utf-8")
+    code, j = _add({"op": "update-remote", "remote": "storage",
+                    "url": "http://127.0.0.1:1", "token": _CTOK2})
+    check(code == 502 and j.get("error"),
+          "a reconfigure is probed before anything is written", (code, j.get("error")))
+    check((STAGE / "config.json").read_text(encoding="utf-8") == _cfg_before
+          and fb.ENV_FILE.read_text(encoding="utf-8") == _env_before,
+          "...and a failed probe changes neither config.json nor .env")
+    _live, _busy = fb._web_claim_run(
+        fb.legion_key("storage"), "",
+        make=lambda rid: fb.LegionRun(rid, "storage", "ctx-update"))
+    code, j = _add({"op": "update-remote", "remote": "storage",
+                    "url": cohort_url, "token": _CTOK2})
+    check(code == 409 and "on campaign" in (j.get("error") or ""),
+          "a cohort with an order in flight cannot be reconfigured",
+          (code, j.get("error")))
+    _live.finish()
+    _saved_web = dict(fb.CONFIG["web"])
+    code, j = _add({"op": "update-remote", "remote": "storage",
+                    "url": cohort_url, "token": _CTOK2})
+    fb.CONFIG["web"] = _saved_web
+    check(code == 200 and j.get("updated", {}).get("ok") is True
+          and j.get("updated", {}).get("token_updated") is True
+          and j.get("updated", {}).get("card", {}).get("version") == "9.9.9",
+          "RECONFIGURE COHORT writes the rotated token", (code, j.get("updated")))
+    _env = fb.ENV_FILE.read_text(encoding="utf-8")
+    check(("%s=%s" % (_CNAME, _CTOK2)) in _env and ("%s=%s" % (_CNAME, _CTOK)) not in _env,
+          "the minted token line now carries the rotated value")
+    check(os.environ.get(_CNAME) == _CTOK2,
+          "the running hub resolves the new token with no restart")
+    _cfg = json.loads((STAGE / "config.json").read_text(encoding="utf-8"))
+    check(((_cfg.get("agent") or {}).get("a2a_remotes") or {}).get("storage")
+          == {"url": cohort_url, "token_env": _CNAME},
+          "config.json keeps the same entry, now with the typed address")
+    # a blank token keeps the stored one and only moves the address
+    code, j = _add({"op": "update-remote", "remote": "storage",
+                    "url": cohort_url + "/", "token": ""})
+    fb.CONFIG["web"] = _saved_web
+    check(code == 200 and j.get("updated", {}).get("token_updated") is False,
+          "a blank token keeps the stored one", (code, j.get("updated")))
+    check(("%s=%s" % (_CNAME, _CTOK2)) in fb.ENV_FILE.read_text(encoding="utf-8"),
+          "...and the .env line is untouched")
+    code, j = _add({"op": "update-remote", "remote": "ghost", "url": cohort_url,
+                    "token": _CTOK2})
+    check(code == 404, "reconfiguring a cohort this hub never had: 404", (code, j))
+    code, j = _add({"op": "update-remote", "remote": "storage",
+                    "url": "ftp://127.0.0.1", "token": _CTOK2})
+    check(code == 400 and "http" in (j.get("error") or ""),
+          "an address that is not http(s) on a reconfigure: 400", (code, j))
+    check(req("POST", "/api/legion", None,
+              b'{"op":"update-remote","remote":"storage"}')[0] == 401,
+          "an update-remote POST without a token: 401")
+
+    # a hand-edited entry with no token_env is repaired by the same edit: paste a
+    # token and the minted name is written back into config.json
+    _raw, _err = fb._config_raw()
+    _raw["agent"]["a2a_remotes"]["noenv"] = {"url": cohort_url}
+    fb._config_write_raw(_raw)
+    fb._config_take_effect()
+    fb.CONFIG["web"] = _saved_web
+    code, j = _add({"op": "update-remote", "remote": "noenv", "url": cohort_url,
+                    "token": ""})
+    check(code == 400 and "token_env" in (j.get("error") or ""),
+          "an entry with no token_env needs a token to repair it",
+          (code, j.get("error")))
+    code, j = _add({"op": "update-remote", "remote": "noenv", "url": cohort_url,
+                    "token": _CTOK2})
+    fb.CONFIG["web"] = _saved_web
+    _cfg = json.loads((STAGE / "config.json").read_text(encoding="utf-8"))
+    check(code == 200 and j.get("updated", {}).get("token_updated") is True
+          and ((_cfg.get("agent") or {}).get("a2a_remotes") or {}).get("noenv")
+          == {"url": cohort_url, "token_env": "TINYCMDR_COHORT_NOENV_TOKEN"},
+          "a missing token_env is minted and written back", (code, j.get("updated")))
+    code, j = _add({"op": "remove-remote", "remote": "noenv"})
+    fb.CONFIG["web"] = _saved_web
+    check(code == 200 and j.get("removed", {}).get("token_removed") is True,
+          "...and the repaired entry removes cleanly", (code, j.get("removed")))
+
     # ---- REMOVE COHORT: ADD COHORT's other half -------------------------------
     # A cohort with a live order is refused - its frame and dispatch thread belong to
     # that entry - and one at rest leaves config.json, .env and the legion store in
@@ -642,6 +727,13 @@ def main():
     fb._config_write_raw(_raw)
     fb._config_take_effect()
     fb.CONFIG["web"] = _saved_web
+    code, j = _add({"op": "update-remote", "remote": "manual", "url": cohort_url,
+                    "token": "tok-manual-new-0123456789"})
+    check(code == 400 and "would change this box's page" in (j.get("error") or ""),
+          "reconfiguring an entry that reads the hub's own token: 400",
+          (code, j.get("error")))
+    check("TINYCMDR_WEB_TOKEN=" in fb.ENV_FILE.read_text(encoding="utf-8"),
+          "...and the box's own token line is untouched")
     code, j = _add({"op": "remove-remote", "remote": "manual"})
     fb.CONFIG["web"] = _saved_web
     check(code == 200 and j.get("removed", {}).get("token_removed") is False,

@@ -31345,6 +31345,105 @@ def legion_remove_remote(name):
             "token_removed": token_removed}, 200
 
 
+def legion_update_remote(name, url, token):
+    """(payload, status) for RECONFIGURE COHORT: change a box's address or token.
+
+    ADD COHORT had no edit path, so a rotated page token on a peer left the hub with
+    a stale one and no way back short of removing and re-adding the cohort. This is
+    that edit: the card is probed with the values about to be written BEFORE anything
+    is, a blank token keeps the stored value, and the running hub re-reads config.json
+    with no restart. The token line is written only when it belongs to this cohort -
+    the hub's own TINYCMDR_WEB_TOKEN and a token_env another cohort names are refused,
+    because writing there would change a second door. A cohort with a live order is
+    refused, as REMOVE COHORT is: the run belongs to the entry as it was.
+    """
+    name = str(name or "").strip()
+    entry = legion_cohorts().get(name)
+    if not isinstance(entry, dict):
+        return {"error": "no cohort named %r on this hub (agent.a2a_remotes)"
+                         % name}, 404
+    live = _web_active_run(legion_key(name))
+    if live is not None:
+        return {"error": "this cohort is on campaign (task %s) - wait for its report "
+                         "or stop it before changing it" % live.id}, 409
+    url = str(url or "").strip().rstrip("/")
+    if not url.startswith(("http://", "https://")) \
+            or not urllib.parse.urlsplit(url).netloc:
+        return {"error": "an http:// or https:// address is required"}, 400
+    supplied = str(token or "")
+    token_env = str(entry.get("token_env") or "")
+    if not token_env and supplied:
+        # A hand-edited entry that lost its token_env gets the same name ADD COHORT
+        # would mint, so the edit repairs the entry instead of asking for a hand edit.
+        token_env = "TINYCMDR_COHORT_%s_TOKEN" % name.upper()
+    if not token_env:
+        return {"error": "this entry has no token_env in config.json - paste its "
+                         "page token once to give it one"}, 400
+    if supplied:
+        if token_env == "TINYCMDR_WEB_TOKEN":
+            return {"error": "this cohort reads the hub's own page token "
+                             "(TINYCMDR_WEB_TOKEN) - changing it here would change "
+                             "this box's page. Edit .env by hand if that is what you "
+                             "mean."}, 400
+        if any(str((e or {}).get("token_env") or "") == token_env
+               for other, e in a2a_remotes_map().items()
+               if other != name and isinstance(e, dict)):
+            return {"error": "another cohort also reads %s - changing it here would "
+                             "change that box's token too. Give this cohort its own "
+                             "token_env in config.json first." % token_env}, 400
+        try:
+            supplied, _note = secret_check(token_env, supplied)
+        except ValueError as problem:
+            return {"error": str(problem)}, 400
+        resolved = supplied
+    else:
+        resolved = os.environ.get(token_env, "")
+    if not resolved:
+        return {"error": "no token value is present for %s - paste the cohort's page "
+                         "token" % token_env}, 400
+    # The read-back is the proof, before anything is written: a rotated token that
+    # is still wrong changes nothing.
+    card, cerr, lines = _legion_probe_values(url, resolved)
+    if not isinstance(card, dict):
+        return {"error": "no AgentCard at %s (%s)" % (url, cerr or "no answer")}, 502
+    if supplied:
+        # .env first, config second - the ADD COHORT rule: a token with no entry is
+        # inert, while an entry with no token is a cohort every order fails on.
+        try:
+            _env_set(token_env, supplied)
+        except Exception as e:                                   # noqa: BLE001
+            return {"error": "could not write %s: %s" % (ENV_FILE.name, e)}, 500
+        os.environ[token_env] = supplied
+    raw, err = _config_raw()
+    if err:
+        return {"error": err}, 500
+    if not isinstance(raw, dict):
+        return {"error": "config.json holds something that is not an object"}, 500
+    agent = raw.get("agent")
+    remotes = agent.get("a2a_remotes") if isinstance(agent, dict) else None
+    if not isinstance(remotes, dict) or not isinstance(remotes.get(name), dict):
+        return {"error": "config.json has no agent.a2a_remotes.%s" % name}, 500
+    remotes[name]["url"] = url
+    remotes[name]["token_env"] = token_env
+    err = _config_write_raw(raw)
+    if err:
+        return {"error": err}, 500
+    err = _config_take_effect()
+    if err:
+        return {"error": err}, 500
+    _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "", "at": now_mono(),
+                           "lines": lines}
+    _LEGION_LINES_OFF.pop(name, None)
+    _LEGION_LINES_UNSUPPORTED.discard(name)
+    _LEGION_EGRESS_WARNED.discard(name)      # a new address gets its own warning
+    _legion_egress_check(name, url)
+    log.info("legion: RECONFIGURE COHORT set agent.a2a_remotes.%s -> %s%s",
+             name, url, (" and rewrote " + token_env) if supplied else "")
+    return {"ok": True, "name": name, "url": url, "token_env": token_env,
+            "token_updated": bool(supplied), "lines": lines,
+            "card": {"name": card.get("name"), "version": card.get("version")}}, 200
+
+
 def legion_send(name, text, client=""):
     """(run_id, error, status): register one order. It is ON THE WIRE before return."""
     if name not in legion_cohorts():
@@ -31441,8 +31540,9 @@ def _legion_row(name):
                 "state": rec.get("last_state") or "",
                 "started": rec.get("started"), "finished": rec.get("finished"),
                 "failed": rec.get("last_state") == "failed"}
-    return {"name": name, "host": _legion_host((legion_cohorts().get(name) or {})
-                                               .get("url") or ""),
+    entry = legion_cohorts().get(name) or {}
+    return {"name": name, "host": _legion_host(entry.get("url") or ""),
+            "url": str(entry.get("url") or ""),
             "state": state, "error": err,
             "version": str((card.get("card") or {}).get("version") or ""),
             "lines": _legion_lines_supported(name), "task": task}
@@ -32482,6 +32582,7 @@ function age(ts){
 // the design's campaign row: a 34px icon tile, then the title over a mono meta line
 const TERMINAL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>';
 const X_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+const PENCIL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>';
 function renderRail(){
  sessEl.textContent='';
  for(const s of sessions){
@@ -32580,6 +32681,14 @@ function renderLegion(){
   if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
   else if(c.task&&c.task.state==='working')row.title='on campaign (task '+c.task.id+')';
   if(!local){
+   const edit=document.createElement('button');
+   edit.type='button';edit.className='campaign-edit';edit.id='cohort-edit-'+c.name;
+   edit.title='reconfigure this cohort (address or page token)';
+   edit.setAttribute('aria-label','Reconfigure '+c.name);
+   edit.innerHTML=PENCIL_ICON;
+   edit.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
+    openAddCohort(c);};
+   row.appendChild(edit);
    const del=document.createElement('button');
    del.type='button';del.className='campaign-del';del.id='cohort-del-'+c.name;
    del.title='remove this cohort';del.setAttribute('aria-label','Remove '+c.name);
@@ -32644,16 +32753,21 @@ function renderTabs(){
  tab('PRAETORIUM','praetorium',false);
  for(const name of legion.tabs)tab(name,name,true);
 }
-function openAddCohort(){
+function openAddCohort(existing){
  if(legion.dialog)return;         // one dialog at a time: the overlay covers the rail
+ const editing=existing||null;
  const ov=document.createElement('div');ov.id='addcohort';
  const panel=document.createElement('div');panel.className='addcohort-panel';
  const head=document.createElement('div');head.className='addcohort-head';
- head.textContent='ADD COHORT';
+ head.textContent=editing?'RECONFIGURE COHORT':'ADD COHORT';
  const hint=document.createElement('div');hint.className='addcohort-hint';
- hint.textContent='Connect a box that already serves its page: its URL and the '
-  +'TINYCMDR_WEB_TOKEN in its .env. Its mesh door must answer there - newer builds '
-  +'publish it with the page; older ones need `web.a2a: true` and a restart.';
+ hint.textContent=editing
+  ?"Change this cohort's address, or paste its new page token. The card is probed "
+   +'with the values you type before anything is written; leave the token blank to '
+   +'keep the current one.'
+  :'Connect a box that already serves its page: its URL and the '
+   +'TINYCMDR_WEB_TOKEN in its .env. Its mesh door must answer there - newer builds '
+   +'publish it with the page; older ones need `web.a2a: true` and a restart.';
  panel.appendChild(head);panel.appendChild(hint);
  const field=function(id,label,ph,type){
   const lab=document.createElement('label');lab.className='addcohort-field';
@@ -32663,15 +32777,19 @@ function openAddCohort(){
   return i;
  };
  const name=field('addcohort-name','NAME','e.g. storage');
+ if(editing){name.value=editing.name;name.readOnly=true;}
  const url=field('addcohort-url','URL','http://host:8790');
- const tok=field('addcohort-token','TOKEN',"the other box's page token",'password');
+ if(editing)url.value=editing.url||'';
+ const tok=field('addcohort-token','TOKEN',editing
+  ?'leave blank to keep the current token'
+  :"the other box's page token",'password');
  const err=document.createElement('div');err.className='addcohort-error';err.hidden=true;
  panel.appendChild(err);
  const acts=document.createElement('div');acts.className='addcohort-acts';
  const cancel=document.createElement('button');cancel.type='button';
  cancel.textContent='CANCEL';
  const go=document.createElement('button');go.type='button';go.id='addcohort-go';
- go.textContent='ADD COHORT';
+ go.textContent=editing?'SAVE':'ADD COHORT';
  acts.appendChild(cancel);acts.appendChild(go);panel.appendChild(acts);
  ov.appendChild(panel);
  const close=function(){legion.dialog=null;ov.remove();};
@@ -32683,9 +32801,10 @@ function openAddCohort(){
  cancel.onclick=close;
  go.onclick=async function(){
   go.disabled=true;err.hidden=true;
-  const cname=name.value.trim();
-  const {status:code,j}=await post('/api/legion',{op:'add-remote',remote:cname,
-   url:url.value.trim(),token:tok.value});
+  const cname=editing?editing.name:name.value.trim();
+  const {status:code,j}=await post('/api/legion',
+   {op:editing?'update-remote':'add-remote',remote:cname,
+    url:url.value.trim(),token:tok.value});
   if(code!==200||j.error){
    go.disabled=false;err.hidden=false;
    err.textContent=(j&&j.error)||('the hub answered '+code);
@@ -32696,9 +32815,16 @@ function openAddCohort(){
   legion.cohorts=j.cohorts||[];legion.tabs=j.tabs||[];
   legion.on=legion.cohorts.length>0;
   renderLegion();
-  const added=j.added||{};
-  note('cohort '+cname+' added'+(added.lines===false
-   ?' \u00b7 no run-lines there: its tab shows the answer when it lands':''));
+  const info=j.added||j.updated||{};
+  const linesNote=info.lines===false
+   ?' \u00b7 no run-lines there: its tab shows the answer when it lands':'';
+  if(editing){
+   note('cohort '+cname+' updated'+(info.token_updated?' \u00b7 new token':'')
+    +linesNote);
+   if(legion.active===cname)openChannel(cname);
+   return;
+  }
+  note('cohort '+cname+' added'+linesNote);
   openChannel(cname);
  };
  document.body.appendChild(ov);
@@ -35780,13 +35906,14 @@ def run_webui():
                 return
             if self.path.startswith("/api/legion"):
                 # One POST family - {"op": "send" | "tab-open" | "tab-close" |
-                # "add-remote" | "remove-remote"} - see the legion block. An order and
-                # the tab ops name a CONFIGURED cohort and never a URL, so the relay
-                # cannot be aimed anywhere the operator did not write into
-                # agent.a2a_remotes; the tokens stay in this box's .env. add-remote
-                # and remove-remote are the authenticated page's own config writes:
-                # they write a box the operator runs into that same map, or take it
-                # out again - the values they would otherwise edit in by hand.
+                # "add-remote" | "update-remote" | "remove-remote"} - see the legion
+                # block. An order and the tab ops name a CONFIGURED cohort and never a
+                # URL, so the relay cannot be aimed anywhere the operator did not write
+                # into agent.a2a_remotes; the tokens stay in this box's .env.
+                # add-remote/update-remote/remove-remote are the authenticated page's
+                # own config writes: connect a box the operator runs, correct its
+                # address or rotated token, or take it out again - the values they
+                # would otherwise edit in by hand.
                 if not self._auth_ok():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
@@ -35814,6 +35941,16 @@ def run_webui():
                     out["added"] = added
                     self._json(out)
                     return
+                if op == "update-remote":
+                    updated, code = legion_update_remote(name, body.get("url"),
+                                                         body.get("token"))
+                    if code != 200:
+                        self._json(updated, code)
+                        return
+                    out = legion_overview(client)
+                    out["updated"] = updated
+                    self._json(out)
+                    return
                 if op == "remove-remote":
                     removed, code = legion_remove_remote(name)
                     if code != 200:
@@ -35838,7 +35975,8 @@ def run_webui():
                     self._json(out)
                     return
                 self._json({"error": "unknown op (send, send-all, tab-open, "
-                                     "tab-close, add-remote, remove-remote)"}, 400)
+                                     "tab-close, add-remote, update-remote, "
+                                     "remove-remote)"}, 400)
                 return
             if not self.path.startswith("/api/chat"):
                 self._drain()
