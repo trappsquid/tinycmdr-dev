@@ -3820,10 +3820,10 @@
     {
       "id": "k3-history-keeps-reasoning",
       "title": "Kimi K3's complete turn survives the next message",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "cd3ebc8",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The session history saved only the answer text, so the next user message replayed an assistant turn without `reasoning_content` and Kimi K3 answered 400; the history now keeps the complete assistant message - the same contract the in-run replay already honored - while the first reply teaches the echo and `doctor` and `/model add` say nothing needs setting.",
       "gate": "tests/test_endpoint_personas.py grades two turns with no configuration (the history carries 10,350 chars and the second request is complete); tests/test_verbs.py grades the doctor line; RED on v1.1.34"
