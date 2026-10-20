@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.39] - 2026-10-20
+
+### Fixed
+- **A cut answer is finished, not delivered half:** a reply that hit the output cap in the middle of the text used to be delivered as the final answer, so a long answer silently stopped mid-sentence - the run now asks for the rest once per turn and joins the pieces at a marked seam, and a second cut is reported with the setting to raise (tests/test_checkin.py).
+
 ## [1.1.38] - 2026-10-20
 
 ### Fixed
