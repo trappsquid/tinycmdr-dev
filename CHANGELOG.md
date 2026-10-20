@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.38] - 2026-10-20
+
+### Fixed
+- **A cohort tab keeps its way back:** the HUB row existed only in the URL fragment, which the page scrubs and a version-change reload discards, so one reload left a linked box with no way out - the return address is now kept for the tab and re-validated on every load, and the tab opens on the cohort's own page so Back reaches it (tests/test_webui_page.py).
+
 ## [1.1.37] - 2026-10-20
 
 ### Changed
