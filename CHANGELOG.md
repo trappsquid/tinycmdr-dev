@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.34] - 2026-10-20
+
+### Fixed
+- **Kimi K3 sees its complete reasoning back:** a completed assistant turn was sliced at `replay_reasoning_max_chars` (4,000) before being replayed and 0 could not disable the cap, so the complete message is now the default with a positive value kept as the opt-in bound, and a remote K3 endpoint receives it with `llm.replay_reasoning: "always"` (tests/test_retry_surface.py).
+
 ## [1.1.33] - 2026-10-20
 
 ### Fixed
