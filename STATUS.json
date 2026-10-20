@@ -3831,10 +3831,10 @@
     {
       "id": "completed-replay-only-when-proven",
       "title": "completed-turn reasoning is replayed only when the endpoint needs it",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "8a68b20",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The in-flight tool loop is always whole, but a completed turn's reasoning is stale context: it is now replayed only where the endpoint has proved it needs the field (a 400 naming it, or a reply that carries `reasoning_content` - K3 and DeepSeek-class) or when `llm.replay_reasoning` is \"always\"; otherwise it is dropped, so a local model stops re-buying old thinking and burning context.",
       "gate": "tests/test_retry_surface.py grades the local default, the proved/always paths and the cap; tests/test_endpoint_personas.py keeps the K3 turn whole"
@@ -3842,10 +3842,10 @@
     {
       "id": "reasoning-replay-verb",
       "title": "the reasoning history policy is a verb, not a config key",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "8a68b20",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "`reasoning replay always|auto|off` and `reasoning cap <chars>` write the policy through the same config path as every verb, `reasoning` with no argument prints the state and the commands, and `doctor` plus the `/model add` result point at it, so an operator on Mattermost, Telegram or the page changes it by typing a verb instead of finding a config key.",
       "gate": "tests/test_verbs.py grades `reasoning replay`, `reasoning cap` and the doctor line"
@@ -3853,10 +3853,10 @@
     {
       "id": "model-needs-say-so",
       "title": "a learned model need is said on the operator's surface",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4ec5101",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The request path learns per-model facts silently; each now stores a plain-language notice on the endpoint and posts it once through the chat lane, and `doctor` lists the same notes, so a user on Mattermost, Telegram or the page is told what the model needed and what the harness did instead of being handed a flag.",
       "gate": "tests/test_retry_surface.py grades the 400 note and the once-only surface"
