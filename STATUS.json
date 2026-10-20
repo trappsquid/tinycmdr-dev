@@ -3882,6 +3882,17 @@
       },
       "detail": "`model add` now recognizes a known model id from the shipped catalog (`assets/model-profiles.json`, data the request path never reads) and seeds the facts that path already consumes - the reasoning echo, the fields an endpoint rejects, the documented window - so the first turn takes the shape it needs; the interactive add and the page's key form offer the list, `model profiles` prints it, and `--profile none` skips the guess. The endpoint still wins: a learned value is never undone, and a contradiction is said once as a model note.",
       "gate": "tests/test_model_profiles.py grades the catalog against docs/model-contracts.md, the seeds, the learned override with its note, the add doors and the page form"
+    },
+    {
+      "id": "finish-path-waits-for-ci",
+      "title": "the finish path waits for the surface's tests",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "ee59fdc",
+        "expect": "untagged"
+      },
+      "detail": "A cut finished through `maintenance/finish-release.sh` attached the release object without waiting for the install surface's own tests, which is the check `release.sh` makes before it publishes; the tail now waits on the tree the tag points at, with the same `TINYCMDR_SKIP_PRODUCT_CI` override.",
+      "gate": "pending - the next cut is the proof; `bash -n` and tests/test_contracts.py pass"
     }
   ]
 }
