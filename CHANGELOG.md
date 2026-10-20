@@ -5,6 +5,17 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.33] - 2026-10-20
+
+### Fixed
+- **A thinking model no longer throttles itself:** one long-thinking or prefill-heavy call set the output cap for every later call, so a model that thinks hard was cut off mid-answer and repeated the cap in its log once per call; the cap now comes from the 75th percentile of the last eight decode-rate samples with wall-clock samples kept in a window of their own, never below a quarter of `llm.max_tokens` nor below what the wrap-up and mid-think retries need, and the line is said once per run (tests/test_envelope.py).
+
+### Added
+- **The doctor says what the endpoint's wire costs:** `tinycmdr doctor` probes the two chat paths with an empty body, names what a host that serves only the `messages` path loses over this wire (prompt caching, any reasoning-effort field) and prints the chat-template capabilities the endpoint declares (tests/test_endpoint_personas.py).
+
+### Changed
+- **The request path is graded against nine endpoint personas:** one conversation run under eight model names must produce one byte-identical request and every documented 400 verdict has a pinned reaction, so a model-name-keyed branch or a persona-only field turns the suite red (tests/test_endpoint_personas.py, tests/test_name_hygiene.py).
+
 ## [1.1.32] - 2026-10-19
 
 ### Fixed
