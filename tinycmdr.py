@@ -32226,7 +32226,16 @@ try{
  // The FRAGMENT first: it never reaches the server, its logs, or a Referer header.
  const frag=new URLSearchParams(location.hash.replace(/^#/,''));
  token=frag.get('token')||new URLSearchParams(location.search).get('token')||'';
+ // The way back belongs to the TAB, not to the load: the fragment is scrubbed below
+ // and this page reloads itself when the server's version differs, so an address that
+ // lived only in the fragment vanished at the first reload and the cohort was left with
+ // no way out. sessionStorage is per tab and per origin, so it ends with the tab - the
+ // right lifetime for "the box that opened this one". A fragment that arrives wins and
+ // is re-stored; an invalid one leaves the stored address alone, so a crafted fragment
+ // cannot replace or clear the row.
  pageFrom=safeOrigin(frag.get('from'));
+ if(pageFrom){try{sessionStorage.fb_from=pageFrom;}catch(e){}}
+ else{try{pageFrom=safeOrigin(sessionStorage.fb_from||'');}catch(e){pageFrom='';}}
  if(pageFrom){
   try{pageFromHost=new URL(pageFrom).host;}catch(e){pageFromHost=pageFrom;}
  }
@@ -32842,8 +32851,12 @@ function openCohortPage(name,ev){
   const code=res&&res.status,j=(res&&res.j)||{};
   if(code!==200||j.error){try{w.close();}catch(e){}
    note(j.error||('the hub answered '+code));return;}
-  w.location=j.url+(j.url.indexOf('#')>=0?'&':'#')
+  const back=j.url+(j.url.indexOf('#')>=0?'&':'#')
    +'from='+encodeURIComponent(location.origin||'');
+  // replace, not assign: this tab was opened blank, and assigning leaves that blank
+  // page as its only history entry, so the browser's Back button showed an empty page
+  // instead of the hub. One entry - the cohort's own page.
+  try{w.location.replace(back);}catch(e){w.location=back;}
  });
 }
 function removeCohort(name,ev){

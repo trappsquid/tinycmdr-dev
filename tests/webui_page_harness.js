@@ -172,14 +172,28 @@ globalThis.localStorage = store;
 // the page remembers a reload attempt per version in sessionStorage; a plain object
 // carries property reads and writes the same way the browser object does
 globalThis.sessionStorage = {};
+// a reload of the same tab keeps its sessionStorage: `scenario.session` is what a
+// second run of this page sees after the first run of it stored something
+Object.assign(globalThis.sessionStorage, scenario.session || {});
 let reloads = 0;
 let promptCalls = 0;
 let promptMsg = '';
 globalThis.prompt = (msg) => { promptCalls++; promptMsg = String(msg); return 'test-token'; };
 const openedPages = [];
+// A real tab is opened blank and then pointed at a URL. `replace` is what keeps its
+// history at ONE entry (the page the hub sent it to); assigning instead leaves the
+// blank page behind as the only thing the Back button can reach. Model both doors so
+// a page that assigns reads as the extra entry it really leaves.
 globalThis.window = { addEventListener() {},
   open() {
-    const w = { location: '', closed: false, close() { this.closed = true; } };
+    const loc = { href: 'about:blank', history: ['about:blank'], how: '',
+                  replace(u) { this.how = 'replace'; this.href = u; this.history[0] = u; },
+                  assign(u) { this.how = 'assign'; this.href = u; this.history.push(u); } };
+    const w = { closed: false, close() { this.closed = true; } };
+    Object.defineProperty(w, 'location', {
+      get() { return loc; },
+      set(v) { loc.assign(v); },
+    });
     openedPages.push(w);
     return w;
   } };
@@ -754,7 +768,10 @@ async function main() {
     legionUpdates: legionUpdates,
     legionRemovals: legionRemovals,
     legionOpens: legionOpens,
-    opened: openedPages.map((w) => w.location),
+    opened: openedPages.map((w) => w.location.href),
+    openedHow: openedPages.map((w) => w.location.how),
+    openedHistory: openedPages.map((w) => w.location.history),
+    session: Object.assign({}, globalThis.sessionStorage),
     addcohort: (globalThis.document.body.children || [])
       .filter((c) => c.id === 'addcohort').map((c) => c.textContent),
     addcohortFields: (() => {

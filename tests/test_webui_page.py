@@ -860,6 +860,11 @@ def main():
                                 "&from=http%3A%2F%2F127.0.0.1%3A8790"],
           f"...and opens that page with its token in the fragment and this page's "
           f"address as the way back ({res.get('opened')})")
+    check(res.get("openedHow") == ["replace"]
+          and res.get("openedHistory") == [["http://storage:8790/#token=tok-storage"
+                                            "&from=http%3A%2F%2F127.0.0.1%3A8790"]],
+          f"...replacing the blank tab it was opened in, so Back has no empty page "
+          f"behind it ({res.get('openedHow')}, {res.get('openedHistory')})")
     check(res.get("chan") == "COMMAND CHANNEL",
           f"the hub's own stage is untouched - the other page is a real tab "
           f"({res.get('chan')!r})")
@@ -889,6 +894,30 @@ def main():
           f"a page opened from a hub draws the way back above PRAETORIUM ({names})")
     check(res.get("href") == "http://hub.test:8790",
           f"...and clicking it returns to that hub ({res.get('href')!r})")
+    check((res.get("session") or {}).get("fb_from") == "http://hub.test:8790",
+          f"...and the tab keeps that address for its own later loads "
+          f"({(res.get('session') or {}).get('fb_from')!r})")
+    # A reload of that tab: the fragment is scrubbed on purpose and this page reloads
+    # itself on a version change, so the address has to come back from the tab's
+    # sessionStorage or the cohort is stranded after one reload (his report, second
+    # shape: the row was there, then gone).
+    sc = {"runs": [], "session": {"fb_from": "http://hub.test:8790"},
+          "steps": [{"kind": "polls", "n": 2},
+                    {"kind": "clickrow", "id": "cohorts", "text": "HUB"}]}
+    res = run_page(sc, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(not res["errors"] and "HUB" in (names[0] or ""),
+          f"a reload of that tab still draws the way back ({names})")
+    check(res.get("href") == "http://hub.test:8790",
+          f"...and it still returns to the hub ({res.get('href')!r})")
+    # ...and what is read back is held to the same rule as the fragment: a stored value
+    # is a URL this page will navigate to, so it is re-validated on every load.
+    res = run_page({"runs": [], "session": {"fb_from": "javascript:alert(1)"},
+                    "steps": [{"kind": "polls", "n": 2}]}, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 2 and not any("HUB" in (n or "") for n in names),
+          f"a stored return address that is not an http(s) origin is ignored too "
+          f"({names})")
     res = run_page({"runs": [], "hash": "#from=javascript%3Aalert(1)",
                     "steps": [{"kind": "polls", "n": 2}]}, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
