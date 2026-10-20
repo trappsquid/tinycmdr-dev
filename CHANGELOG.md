@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.36] - 2026-10-20
+
+### Changed
+- **A completed turn's reasoning is dropped unless the endpoint needs it:** the in-flight tool loop is still replayed whole, but stale reasoning from earlier answers is replayed only where the endpoint proved it needs the field (a 400, or a reply that carries it - Kimi K3, DeepSeek-class) or `llm.replay_reasoning` is `"always"`, so a local model stops re-buying old thinking and burning context (tests/test_retry_surface.py).
+
+### Added
+- **`reasoning replay` and `reasoning cap`:** the history policy is a verb on every chat surface, `doctor` and the `/model add` result point to it, and no config key is needed (tests/test_verbs.py).
+
 ## [1.1.35] - 2026-10-20
 
 ### Fixed

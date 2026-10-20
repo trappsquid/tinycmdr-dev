@@ -3827,6 +3827,28 @@
       },
       "detail": "The session history saved only the answer text, so the next user message replayed an assistant turn without `reasoning_content` and Kimi K3 answered 400; the history now keeps the complete assistant message - the same contract the in-run replay already honored - while the first reply teaches the echo and `doctor` and `/model add` say nothing needs setting.",
       "gate": "tests/test_endpoint_personas.py grades two turns with no configuration (the history carries 10,350 chars and the second request is complete); tests/test_verbs.py grades the doctor line; RED on v1.1.34"
+    },
+    {
+      "id": "completed-replay-only-when-proven",
+      "title": "completed-turn reasoning is replayed only when the endpoint needs it",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "8a68b20",
+        "expect": "untagged"
+      },
+      "detail": "The in-flight tool loop is always whole, but a completed turn's reasoning is stale context: it is now replayed only where the endpoint has proved it needs the field (a 400 naming it, or a reply that carries `reasoning_content` - K3 and DeepSeek-class) or when `llm.replay_reasoning` is \"always\"; otherwise it is dropped, so a local model stops re-buying old thinking and burning context.",
+      "gate": "tests/test_retry_surface.py grades the local default, the proved/always paths and the cap; tests/test_endpoint_personas.py keeps the K3 turn whole"
+    },
+    {
+      "id": "reasoning-replay-verb",
+      "title": "the reasoning history policy is a verb, not a config key",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "8a68b20",
+        "expect": "untagged"
+      },
+      "detail": "`reasoning replay always|auto|off` and `reasoning cap <chars>` write the policy through the same config path as every verb, `reasoning` with no argument prints the state and the commands, and `doctor` plus the `/model add` result point at it, so an operator on Mattermost, Telegram or the page changes it by typing a verb instead of finding a config key.",
+      "gate": "tests/test_verbs.py grades `reasoning replay`, `reasoning cap` and the doctor line"
     }
   ]
 }
