@@ -12,7 +12,8 @@
     "requirements-test.txt",
     "assets/tinycmdr-helm.png",
     "docs/tinycmdr-what-it-is.md",
-    "docs/computer-use.md"
+    "docs/computer-use.md",
+    "docs/model-contracts.md"
   ],
   "product_only": [
     "maintenance/product-files/tests.yml:.github/workflows/tests.yml"
