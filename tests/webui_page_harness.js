@@ -193,16 +193,20 @@ globalThis.setInterval = () => 0;
 if (scenario.no_token) { delete store.fb_token; }
 globalThis.location = { search: scenario.query || '', hash: scenario.hash || '',
                         pathname: '/',
+                        // a browser always has an origin; the page hands it to a
+                        // cohort it opens as the way back
+                        origin: 'http://127.0.0.1:8790',
                         reload: () => { reloads++; },
                         href: 'http://127.0.0.1:8790/' + (scenario.query || '') };
 const replaced = [];
 globalThis.history = { replaceState: (_s, _t, url) => { replaced.push(url); } };
-// the page makes blob URLs for downloads; Node's URL.createObjectURL refuses a plain
-// object, and without this the fetchFile path throws before it names the file
-globalThis.URL = {
-  createObjectURL: () => 'blob:harness',
-  revokeObjectURL: () => {},
-};
+// The page makes blob URLs for downloads (Node's URL.createObjectURL refuses a plain
+// object) and parses a return address with `new URL`. Keep Node's real constructor and
+// add the two static methods the download path calls.
+const RealURL = globalThis.URL;
+globalThis.URL = function (u) { return new RealURL(u); };
+globalThis.URL.createObjectURL = () => 'blob:harness';
+globalThis.URL.revokeObjectURL = () => {};
 
 const authSeen = [];
 let authFlaked = false;
@@ -770,6 +774,7 @@ async function main() {
     healthFetches: healthFetches,
     reloads: reloads,
     title: globalThis.document.title,
+    href: globalThis.location.href,
     errors,
   };
   process.stdout.write(JSON.stringify(out));

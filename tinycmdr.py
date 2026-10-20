@@ -31929,14 +31929,38 @@ function setStage(s,detail){
  stageStatusEl.title=(detail?detail+' - ':'')+(STAGE_TITLES[s]||'');
 }
 const PAGE_VER="{{VERSION}}";
+// The tab names the BOX, not just the app: with a hub and two cohorts open, every tab
+// otherwise reads "tinycmdr" and the only way to tell them apart was to read the host
+// card. `pageHost` comes from the sessions reply; `pageDown` keeps the lane marker.
+let pageHost='',pageDown=false;
+function refreshTitle(){
+ document.title=(pageDown?'CHAT LANE DOWN - ':'')
+  +(pageHost?pageHost+' \u00b7 ':'')+'tinycmdr';
+}
 // The token comes from the link first (the installer prints one that contains it), then from
 // last time. The old prompt said "leave empty if loopback", which was wrong the moment an
 // install HAD a token: empty means unauthorized, and nothing said where the token was.
-let token='';
+let token='',pageFrom='',pageFromHost='';
+// A page opened from another box's rail carries that box's address as `from` in the
+// same fragment that carried the token. It is a RETURN ADDRESS, not an instruction:
+// only a bare http(s) origin is accepted, because the rail turns it into a link and a
+// javascript: URL there would run in this page.
+function safeOrigin(raw){
+ try{
+  const u=new URL(String(raw||'').trim());
+  if((u.protocol==='http:'||u.protocol==='https:')&&u.host
+     &&(u.pathname==='/'||u.pathname==='')&&!u.search&&!u.hash)return u.origin;
+ }catch(e){}
+ return '';
+}
 try{
  // The FRAGMENT first: it never reaches the server, its logs, or a Referer header.
- const frag=new URLSearchParams(location.hash.replace(/^#/,'')).get('token');
- token=frag||new URLSearchParams(location.search).get('token')||'';
+ const frag=new URLSearchParams(location.hash.replace(/^#/,''));
+ token=frag.get('token')||new URLSearchParams(location.search).get('token')||'';
+ pageFrom=safeOrigin(frag.get('from'));
+ if(pageFrom){
+  try{pageFromHost=new URL(pageFrom).host;}catch(e){pageFromHost=pageFrom;}
+ }
 }catch(e){}
 if(!token){token=localStorage.fb_token||'';}
 function askToken(retry){
@@ -32389,25 +32413,52 @@ function renderLegion(){
  const n=legion.cohorts.length;
  legionStatEl.textContent=n?n+(n===1?' linked box':' linked boxes'):'none yet';
  cohortsEl.textContent='';
- const rows=[{name:'praetorium',host:(legion.praetorium.host||'this host'),
+ const rows=[];
+ if(pageFrom){
+  // Opened from another box's rail: that box is the way back. Its cookie is already
+  // in this browser (the hub page is where the click happened), so a plain link works
+  // and no token rides a URL. Drawn FIRST, above the praetorium, because it is the
+  // navigation a reader reaches for after opening a cohort.
+  rows.push({name:'hub',back:true,host:pageFromHost,
+   state:'ready',numeral:0,version:'',error:''});
+ }
+ rows.push({name:'praetorium',host:(legion.praetorium.host||'this host'),
    state:'ready',numeral:1,version:(legion.praetorium.version||''),
-   error:''}].concat(legion.cohorts);
+   error:''});
+ for(const c of legion.cohorts)rows.push(c);
  for(const c of rows){
   const local=c.name==='praetorium';
+  const back=!!c.back;
   const row=document.createElement('div');
-  row.className='campaign-item cohort '+(local?'local ':'');
+  row.className='campaign-item cohort '+(local?'local active ':'')+(back?'hub ':'');
   row.dataset.key=c.name;
+  if(local)row.setAttribute('aria-current','page');
   const ic=document.createElement('span');ic.className='campaign-icon';ic.innerHTML=SHIELD_ICON;
   row.appendChild(ic);
   const tx=document.createElement('span');
-  const t=document.createElement('strong');t.textContent=local?'PRAETORIUM':c.name;tx.appendChild(t);
+  const t=document.createElement('strong');
+  t.textContent=back?'HUB':(local?'PRAETORIUM':c.name);tx.appendChild(t);
   const m=document.createElement('small');
   m.appendChild(dotFor(c.state));
   const meta=document.createElement('span');
-  meta.textContent='Cohort '+(NUMERALS[(c.numeral||2)-1]||c.numeral)
-   +(local?' \u00b7 this host':' \u00b7 '+(c.host||''))+(c.version?' \u00b7 v'+c.version:'');
+  const hostTxt=String(c.host||'').trim();
+  if(back){
+   meta.textContent='return \u00b7 '+hostTxt;
+   row.title='go back to '+pageFrom;
+  }else{
+   meta.textContent='Cohort '+(NUMERALS[(c.numeral||2)-1]||c.numeral)
+    +(local?' \u00b7 this host'+(hostTxt&&hostTxt!=='this host'?' \u00b7 '+hostTxt:'')
+           :' \u00b7 '+hostTxt)
+    +(c.version?' \u00b7 v'+c.version:'');
+   if(local)row.title='this page is served by '+(hostTxt||'this box');
+  }
   m.appendChild(meta);
   tx.appendChild(m);row.appendChild(tx);
+  if(back){
+   row.onclick=function(){location.href=pageFrom;};
+   cohortsEl.appendChild(row);
+   continue;
+  }
   if(!local){
    row.title="open "+c.name+"'s page in a new tab";
    const edit=document.createElement('button');
@@ -32522,7 +32573,8 @@ function openCohortPage(name,ev){
   const code=res&&res.status,j=(res&&res.j)||{};
   if(code!==200||j.error){try{w.close();}catch(e){}
    note(j.error||('the hub answered '+code));return;}
-  w.location=j.url;
+  w.location=j.url+(j.url.indexOf('#')>=0?'&':'#')
+   +'from='+encodeURIComponent(location.origin||'');
  });
 }
 function removeCohort(name,ev){
@@ -32556,6 +32608,7 @@ async function loadSessions(){
  const j=await r.json();
  sessions=j.sessions||[];budget=j.budget||0;
  hostEl.textContent=(j.host||'');hostVerEl.textContent='tinycmdr \u00b7 v'+(j.version||'');
+ pageHost=j.host||pageHost;refreshTitle();
  // The legion rides this same 5-second clock: the count comes from this reply, and
  // only a box with cohorts configured pays the /api/legion read behind it. A box
  // with none still draws the rail - praetorium and the ADD COHORT invitation - and
@@ -32962,7 +33015,8 @@ async function versionCheck(){
   const detail=dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; ');
   showWarn(dl.length?'Messages can be drafted locally, but they may not be dispatched.':'', detail);
   showConfig(j.config_changed?j.config_changed+'.':'');
-  document.title=(dl.length?'CHAT LANE DOWN - ':'')+'tinycmdr'+(j.version?' '+j.version:'');
+  pageDown=dl.length>0;
+  refreshTitle();
   if(dl.length&&!laneWasDown){laneWasDown=true;note('chat lane down: '+verEl.title);}
   else if(!dl.length){laneWasDown=false;}
   // A lane that came back from a LONG outage says so once per page, out of the record

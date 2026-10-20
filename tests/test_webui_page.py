@@ -566,8 +566,10 @@ def main():
     check("bad" not in (res.get("ver") or {}).get("cls", "")
           and not (res.get("note") or {}).get("text"),
           f"a healthy bot shows NO banner ({(res.get('ver'), res.get('note'))})")
-    check((res.get("title") or "").startswith("tinycmdr"),
-          f"...and its tab title is just the app ({res.get('title')!r})")
+    check((res.get("title") or "").endswith("tinycmdr")
+          and "harness" in (res.get("title") or "")
+          and "DOWN" not in (res.get("title") or ""),
+          f"...and its tab names the box, with no alert ({res.get('title')!r})")
 
     # -- the lane banner is a notification, not a fixture -----------------------
     # Operator, 2026-10-04: "make that a closeable notification, not a permanent banner".
@@ -854,12 +856,44 @@ def main():
     check(res.get("legionOpens") == [{"name": "storage"}],
           f"clicking a linked box asks the hub for its own address "
           f"({res.get('legionOpens')})")
-    check(res.get("opened") == ["http://storage:8790/#token=tok-storage"],
-          f"...and opens that page with its token in the fragment "
-          f"({res.get('opened')})")
+    check(res.get("opened") == ["http://storage:8790/#token=tok-storage"
+                                "&from=http%3A%2F%2F127.0.0.1%3A8790"],
+          f"...and opens that page with its token in the fragment and this page's "
+          f"address as the way back ({res.get('opened')})")
     check(res.get("chan") == "COMMAND CHANNEL",
           f"the hub's own stage is untouched - the other page is a real tab "
           f"({res.get('chan')!r})")
+    check("harness" in (res.get("title") or "")
+          and (res.get("title") or "").endswith("tinycmdr")
+          and "active" in ((res["cohorts"][0] or {}).get("cls") or "")
+          and "harness" in (names[0] or ""),
+          f"the tab and the rail name the box THIS page is "
+          f"({res.get('title')!r}, {res['cohorts'][0].get('cls')!r}, {names[0]!r})")
+
+    # -- a cohort page carries the way back to the hub that opened it ------------------
+    # His report (2026-10-20): once a cohort is linked, its page has no way back - its
+    # praetorium IS itself and the hub is not one of its cohorts. The hub now hands the
+    # new tab this page's address as `from` in the same fragment as the token, and that
+    # page draws it above PRAETORIUM as a plain link (the browser already holds the
+    # hub's cookie). Only a bare http(s) origin is accepted, so a fragment cannot put a
+    # javascript: URL in the rail.
+    sc = {"runs": [], "legion_cohorts": [],
+          "hash": "#from=http%3A%2F%2Fhub.test%3A8790",
+          "steps": [{"kind": "polls", "n": 2},
+                    {"kind": "clickrow", "id": "cohorts", "text": "HUB"}]}
+    res = run_page(sc, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(not res["errors"], f"the linked page runs clean ({res['errors'][:1]})")
+    check(len(names) == 3 and "HUB" in names[0] and "hub.test:8790" in names[0]
+          and "PRAETORIUM" in names[1] and "ADD COHORT" in names[2],
+          f"a page opened from a hub draws the way back above PRAETORIUM ({names})")
+    check(res.get("href") == "http://hub.test:8790",
+          f"...and clicking it returns to that hub ({res.get('href')!r})")
+    res = run_page({"runs": [], "hash": "#from=javascript%3Aalert(1)",
+                    "steps": [{"kind": "polls", "n": 2}]}, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 2 and not any("HUB" in (n or "") for n in names),
+          f"a return address that is not an http(s) origin is ignored ({names})")
 
     # ...and a box with NO cohorts: the rail still shows - praetorium and the ADD
     # COHORT invitation - and no /api/legion read is paid

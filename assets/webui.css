@@ -1480,6 +1480,12 @@ svg.lucide{width:18px;height:18px;flex:0 0 auto}
 .legion-stat{margin-left:auto;color:var(--muted-2);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.62rem;font-weight:400;letter-spacing:.06em;text-transform:none}
 .campaign-item .dot.bad{background:var(--bad);box-shadow:0 0 12px color-mix(in srgb,var(--bad) 55%,transparent)}
 .campaign-item.cohort.local .campaign-icon{color:var(--gold-bright)}
+/* The hub row: a page opened from another box's rail carries that box's address, so
+ * the way back sits above PRAETORIUM. Dashed like the ADD row - both are about the
+ * rail's edges, not a box that is this page. */
+.campaign-item.cohort.hub{border-style:dashed;border-color:var(--line-soft)}
+.campaign-item.cohort.hub .campaign-icon{color:var(--muted);opacity:.75}
+.campaign-item.cohort.hub:hover .campaign-icon{color:var(--gold-bright);opacity:1}
 /* ADD COHORT: the rail's invitation row and the dialog it opens - the page's own
  * write into agent.a2a_remotes, in the same glass/bronze idiom as the rows above. */
 .campaign-item.addcohort{border-style:dashed;border-color:var(--line-soft)}
