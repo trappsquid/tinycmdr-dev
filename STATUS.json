@@ -3864,10 +3864,10 @@
     {
       "id": "webui-cohort-way-back",
       "title": "a cohort page names its box and carries the way back",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "8e1f702",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A page opened from a hub's rail had no way back - its praetorium is itself and the hub is not one of its cohorts - and every tab read `tinycmdr`, so several linked boxes were indistinguishable. The tab title and the active rail row now name the host, and the hub hands the tab its origin as `from` in the fragment, which that page draws as a HUB row above PRAETORIUM; only a bare http(s) origin is accepted, so a fragment cannot put a `javascript:` URL in the rail.",
       "gate": "tests/test_webui_page.py grades the host in the title, the active row, the return row and the rejected non-http address"
@@ -3875,10 +3875,10 @@
     {
       "id": "model-profile-picker",
       "title": "a known model is pre-set when it is added",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "eb99f4f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "`model add` now recognizes a known model id from the shipped catalog (`assets/model-profiles.json`, data the request path never reads) and seeds the facts that path already consumes - the reasoning echo, the fields an endpoint rejects, the documented window - so the first turn takes the shape it needs; the interactive add and the page's key form offer the list, `model profiles` prints it, and `--profile none` skips the guess. The endpoint still wins: a learned value is never undone, and a contradiction is said once as a model note.",
       "gate": "tests/test_model_profiles.py grades the catalog against docs/model-contracts.md, the seeds, the learned override with its note, the add doors and the page form"
