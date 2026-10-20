@@ -24008,9 +24008,9 @@ class Agent:
                     # replay_reasoning_max_chars renders a different token sequence
                     # than the server just generated, so the prefix KV-cache misses
                     # from the cut onward on every tool round), completed turns replay
-                    # capped, and an endpoint that later says the field is required is
-                    # served without re-running the turn. Capturing the capped copy
-                    # here defeated that before it could begin.
+                    # whole by default, and an endpoint that later says the field is
+                    # required is served without re-running the turn. Capturing the
+                    # capped copy here defeated that before it could begin.
                     if not isinstance(reply.get("reasoning_content"), str) \
                             or not reply.get("reasoning_content"):
                         reply.pop("reasoning_content", None)
