@@ -2814,8 +2814,12 @@ def _endpoint_facts(url):
     return _ENDPOINT_FACTS["data"].get(_endpoint_origin(url)) or {}
 
 
-def _endpoint_note(url, **facts):
-    """Record learned facts about one endpoint (read-modify-write under the state lock)."""
+def _endpoint_update(url, mutate):
+    """Read-modify-write one endpoint's fact entry under the state lock.
+
+    ONE write path for the facts store: the request path MERGES what it learned and the
+    picker replaces its own seed, and both are read-modify-writes on logs/state.json.
+    """
     key = _endpoint_origin(url)
     try:
         with _LANE_LOCK:
@@ -2825,17 +2829,8 @@ def _endpoint_note(url, **facts):
             if not isinstance(ents, dict):
                 ents = {}
             ent = ents.get(key)
-            if not isinstance(ent, dict):
-                ent = {}
-            for k, v in facts.items():
-                if k == "drop":
-                    merged = list(ent.get("drop") or [])
-                    for item in (v if isinstance(v, (list, tuple, set)) else [v]):
-                        if item not in merged:
-                            merged.append(item)
-                    ent["drop"] = merged
-                else:
-                    ent[k] = v
+            ent = dict(ent) if isinstance(ent, dict) else {}
+            mutate(ent)
             ents[key] = ent
             data["endpoints"] = ents
             LANE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -2844,6 +2839,39 @@ def _endpoint_note(url, **facts):
             _ENDPOINT_FACTS["loaded"] = True
     except Exception as e:                                   # noqa: BLE001
         log.debug("could not record endpoint facts for %s: %s", key, e)
+
+
+def _endpoint_note(url, **facts):
+    """Record learned facts about one endpoint (read-modify-write under the state lock).
+
+    A learned value that CONTRADICTS the picker's seed is kept and said once: the
+    endpoint's own answer is the truth, and the operator learns the profile was wrong
+    instead of wondering why the setting changed.
+    """
+    def merge(ent):
+        for k, v in facts.items():
+            if k == "drop":
+                merged = list(ent.get("drop") or [])
+                for item in (v if isinstance(v, (list, tuple, set)) else [v]):
+                    if item not in merged:
+                        merged.append(item)
+                ent["drop"] = merged
+            else:
+                ent[k] = v
+        prof = ent.get("profile")
+        seed = prof.get("seed") if isinstance(prof, dict) else None
+        if isinstance(seed, dict):
+            for k in ("reasoning", "wire"):
+                if k in facts and k in seed and facts[k] != seed[k]:
+                    notes = dict(ent.get("notices") or {})
+                    notes["profile:" + k] = (
+                        "the %s profile expected %s=%s; this endpoint answered %s - "
+                        "the harness used the endpoint's answer"
+                        % (prof.get("label") or prof.get("id") or "selected", k,
+                           seed[k], facts[k]))
+                    ent["notices"] = notes
+                    break
+    _endpoint_update(url, merge)
 
 
 def _model_notice(url, key, text):
@@ -2894,6 +2922,234 @@ def _surface_model_notices(url, say_cb):
         _endpoint_note(url, notices_said=said)
     except Exception as e:                                   # noqa: BLE001
         log.debug("could not mark the model notes said: %s", e)
+
+
+# The curated model catalog (assets/model-profiles.json) ---------------------------
+# A user cannot be expected to know what a model needs. A row is a STARTING POINT for
+# an endpoint being added: the picker seeds the facts the request path already reads
+# (the reasoning echo, fields an endpoint rejects, the documented window) and the
+# endpoint's own answers still win. The request path never reads this file or a model
+# NAME; the id is the picker's key only (tests/test_name_hygiene.py).
+_PROFILE_CACHE = {"loaded": False, "rows": []}
+
+
+def model_profiles():
+    """The catalog rows; [] when the asset is absent or damaged (an install without it
+    still works - every fact is learned from the endpoint)."""
+    if _PROFILE_CACHE["loaded"]:
+        return _PROFILE_CACHE["rows"]
+    _PROFILE_CACHE["loaded"] = True
+    try:
+        data = json.loads((BASE_DIR / "assets" / "model-profiles.json")
+                          .read_text(encoding="utf-8-sig"))
+        rows = data.get("profiles") if isinstance(data, dict) else data
+        _PROFILE_CACHE["rows"] = [r for r in (rows or [])
+                                  if isinstance(r, dict) and r.get("id")]
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("model profiles: %s", e)
+    return _PROFILE_CACHE["rows"]
+
+
+def model_profile_row(row_id):
+    """One row by id, or None."""
+    want = str(row_id or "").strip().lower()
+    for row in model_profiles():
+        if str(row.get("id") or "").lower() == want:
+            return row
+    return None
+
+
+def _profile_for_model(model, url=""):
+    """The row for a model id (or for a local endpoint), or None.
+
+    Called when an endpoint is ADDED, never from the request path. The longest matching
+    token wins, so a specific id beats its family word; `when: "local"` rows are chosen
+    by the endpoint's own address, after any model match.
+    """
+    name = str(model or "").lower()
+    best = None
+    for row in model_profiles():
+        for tok in row.get("match") or []:
+            t = str(tok).lower().strip()
+            if t and t in name and (best is None or len(t) > best[0]):
+                best = (len(t), row)
+    if best is not None:
+        return best[1]
+    if url and _is_local_url(url):
+        for row in model_profiles():
+            if str(row.get("when") or "") == "local":
+                return row
+    return None
+
+
+def _profile_summary(row):
+    """One line: what selecting this row actually pre-sets, in the operator's words."""
+    bits = []
+    if str(row.get("wire") or "") == "messages":
+        bits.append("a messages-only endpoint, reached through a translating gateway")
+    level = str(row.get("reasoning") or "auto").lower()
+    if level != "auto":
+        bits.append({"on": "history carries reasoning_content (the endpoint requires it)",
+                     "off": "history carries no reasoning_content (the endpoint rejects it)",
+                     "none": "no reasoning effort goes with tools"}.get(
+                         level, "reasoning %s" % level))
+    try:
+        ctx = int(row.get("context") or 0)
+    except (TypeError, ValueError):
+        ctx = 0
+    if ctx > 0:
+        bits.append("%s-token window documented" % format(ctx, ","))
+    drop = [str(x) for x in (row.get("drop") or []) if str(x)]
+    if drop:
+        bits.append("never sends %s" % ", ".join(drop))
+    if row.get("vision") is True:
+        bits.append("takes images")
+    elif row.get("vision") is False:
+        bits.append("text only")
+    return "; ".join(bits) or "nothing to pre-set - the endpoint teaches it"
+
+
+def _apply_profile(row, url):
+    """Seed one endpoint with a row's starting facts; returns (applied, kept).
+
+    What the endpoint already TAUGHT this box is never overwritten - a 400 or /props is
+    evidence, and a profile is a guess. Switching to another row replaces the previous
+    row's own seed (a key it no longer sets is removed while the value is still the
+    seed), so two profiles cannot stack. The profile label rides the facts for `doctor`;
+    nothing on the request path reads it.
+    """
+    seed = {}
+    level = str(row.get("reasoning") or "auto").strip().lower()
+    if level and level != "auto":
+        seed["reasoning"] = level
+    drop = [str(x) for x in (row.get("drop") or []) if str(x)]
+    if drop:
+        seed["drop"] = drop
+    try:
+        ctx = int(row.get("context") or 0)
+    except (TypeError, ValueError):
+        ctx = 0
+    if ctx > 0:
+        seed["window"] = ctx
+    applied, kept = {}, []
+
+    def mutate(ent):
+        old = ent.get("profile") if isinstance(ent.get("profile"), dict) else {}
+        old_seed = old.get("seed") if isinstance(old.get("seed"), dict) else {}
+        for k, v in seed.items():
+            if k in ent and ent.get(k) != old_seed.get(k):
+                kept.append(k)       # the endpoint taught this; the profile does not undo it
+                continue
+            ent[k] = list(v) if isinstance(v, list) else v
+            applied[k] = v
+        for k in list(old_seed):
+            if k not in seed and k in ent and ent.get(k) == old_seed[k]:
+                ent.pop(k, None)
+        ent["profile"] = {"id": str(row.get("id") or ""),
+                          "label": str(row.get("label") or row.get("id") or ""),
+                          "seed": {k: v for k, v in seed.items() if k in applied}}
+    _endpoint_update(url, mutate)
+    return applied, kept
+
+
+_MESSAGES_WIRE_SENTENCE = (
+    "this endpoint serves `messages`, not `chat/completions`, so it is reached "
+    "through the OpenAI-compatible wire and what lives on the other one is lost: "
+    "prompt caching (that vendor prices a cache read at a small fraction of a "
+    "write, and nothing is cached here) and `llm.reasoning`, which has no field "
+    "to ride on. A gateway that translates to chat completions, or an endpoint "
+    "that serves both paths, gets them back")
+
+
+def _profile_notes(row, url):
+    """What the endpoint says about the row's claims, recorded once as model notes.
+
+    Runs at ADD time only - two empty POSTs and the /props read the doctor already
+    makes - never on the request path. Returns the texts recorded, so the add can
+    print them where the operator is.
+    """
+    said = []
+    wire = None
+    if not _is_local_url(url):
+        try:
+            wire = _messages_wire_probe(url)
+        except Exception:                                    # noqa: BLE001
+            wire = None
+    if wire is True:
+        text = _MESSAGES_WIRE_SENTENCE
+    elif wire is False and str(row.get("wire") or "") == "messages":
+        text = ("the profile expected a messages-only endpoint, but this one answers "
+                "chat/completions - the harness uses the wire the endpoint serves")
+    else:
+        text = ""
+    if text:
+        _model_notice(url, "profile:wire", text)
+        said.append(text)
+    if row.get("vision") is True:
+        try:
+            ok, why = _endpoint_vision(url)
+        except Exception:                                    # noqa: BLE001
+            ok, why = True, ""
+        if not ok:
+            text = ("the profile says this model takes images, but %s - a screenshot "
+                    "would not be attached" % why)
+            _model_notice(url, "profile:vision", text)
+            said.append(text)
+    return said
+
+
+def _say_profile(row, url, announce=True, opt=""):
+    """Apply a row and say what changed (the add's own line, one sentence per fact)."""
+    if row is None:
+        if announce and not opt:
+            print("profile: none for this model id - the endpoint teaches the harness "
+                  "what it needs")
+        return []
+    applied, kept = _apply_profile(row, url)
+    print("profile: %s - %s" % (row.get("label") or row.get("id"),
+                                _profile_summary(row)))
+    if applied:
+        print("  seeded: %s" % ", ".join(sorted(applied)))
+    if kept:
+        print("  kept what the endpoint already taught: %s" % ", ".join(sorted(kept)))
+    said = _profile_notes(row, url)
+    for text in said:
+        print("note: %s" % text)
+    return said
+
+
+def _resolve_profile(opt, model, url):
+    """(row, error) for the add's --profile word: an exact id, 'none', or auto."""
+    word = str(opt or "").strip().lower()
+    if word in ("none", "off", "no"):
+        return None, ""
+    if word:
+        row = model_profile_row(word)
+        if row is None:
+            return None, ("no profile named %r - `tinycmdr model profiles` lists them"
+                          % opt)
+        return row, ""
+    return _profile_for_model(model, url), ""
+
+
+def _ask_profile(url, model):
+    """Interactive add: which known model is this? None lets the endpoint teach it.
+
+    Only asked when the id matched no row. Entry 0 is "not listed", so an unsure reader
+    is never forced to guess a family, and the endpoint's answers still correct a wrong
+    pick.
+    """
+    rows = model_profiles()
+    if not rows:
+        return None
+    print("   Known model? This pre-sets what it needs; the endpoint still wins.")
+    for n, row in enumerate(rows, 1):
+        print("     %2d) %-42s %s" % (n, row.get("label") or row.get("id"),
+                                      _profile_summary(row)))
+    ans = input("   Number, or Enter to let the endpoint teach it: ").strip()
+    if ans.isdigit() and 1 <= int(ans) <= len(rows):
+        return rows[int(ans) - 1]
+    return None
 
 
 def _replay_reasoning_ok(url=None):
@@ -4014,6 +4270,12 @@ def _preset_window(base_url):
             if (str(key).lower() in host and isinstance(val, (int, float))
                     and not isinstance(val, bool) and val > 0):
                 return int(val), "window_presets:%s" % key
+    # A profile's documented window (the picker seeds it) sits between the operator's
+    # own number and the built-in host table: explicit config still wins, and a number
+    # the endpoint reports itself never reaches this function at all.
+    fact = (_endpoint_facts(base_url) or {}).get("window")
+    if isinstance(fact, (int, float)) and not isinstance(fact, bool) and fact > 0:
+        return int(fact), "profile"
     for key, val in _CLOUD_WINDOW_PRESETS.items():
         if key in host:
             return int(val), "preset:%s" % key
@@ -4113,12 +4375,7 @@ def _messages_wire_note(url=None):
     None when it does (see `_messages_wire_probe`)."""
     if _messages_wire_probe(url) is not True:
         return None
-    return ("this endpoint serves `messages`, not `chat/completions`, so it is reached "
-            "through the OpenAI-compatible wire and what lives on the other one is lost: "
-            "prompt caching (that vendor prices a cache read at a small fraction of a "
-            "write, and nothing is cached here) and `llm.reasoning`, which has no field "
-            "to ride on. A gateway that translates to chat completions, or an endpoint "
-            "that serves both paths, gets them back")
+    return _MESSAGES_WIRE_SENTENCE
 
 
 def endpoint_slots(url):
@@ -29359,11 +29616,18 @@ def _secret_form_html(rec, sid):
         opts = "".join("<option value=\"%s\">%s</option>"
                        % (html.escape(str(i)), html.escape(str(i)))
                        for i in rec["ids"])
+        profs = "".join("<option value=\"%s\">%s</option>"
+                        % (html.escape(str(r.get("id"))),
+                           html.escape(str(r.get("label") or r.get("id"))))
+                        for r in model_profiles())
         return ("<p>Key stored as <code>%s</code> in .env (mode 600). Choose the model "
                 "for <code>%s</code>:</p><form method=\"post\" action=\"/secret/%s\">"
                 "<select name=\"model\">%s</select> "
+                "<select name=\"profile\"><option value=\"auto\">known model: detect "
+                "from the id</option>%s<option value=\"none\">not listed</option>"
+                "</select> "
                 "<button type=\"submit\">Add endpoint</button></form>"
-                % (env, url, action, opts))
+                % (env, url, action, opts, profs))
     return ("<p>Storing the key for <code>%s</code> as <code>%s</code> in this box's "
             ".env (mode 600). It is never written to a chat.</p>"
             "<form method=\"post\" action=\"/secret/%s\">"
@@ -29388,8 +29652,12 @@ def _secret_form_submit(sid, form):
         want = " ".join(str(form.get("model") or "").split())
         if want not in [str(i) for i in rec.get("ids") or []]:
             return 400, "<p class=\"bad\">Pick one of the listed models.</p>"
+        prof = " ".join(str(form.get("profile") or "auto").split()).lower()
+        if prof != "auto" and prof != "none" and model_profile_row(prof) is None:
+            return 400, "<p class=\"bad\">Pick one of the listed profiles.</p>"
         code, out = _run_model_add([rec["url"], "--key-env", rec["env"],
-                                    "--model", want])
+                                    "--model", want]
+                                   + ([] if prof == "auto" else ["--profile", prof]))
         _secret_door_burn(sid)
         _model_wizard_end(rec.get("session") or "")
         if code != 0:
@@ -29465,7 +29733,8 @@ def model_command(session_key, arg):
     # not linger to swallow a message meant for the model.
     _model_wizard_end(session_key)
     if _sub in ("add", "remove", "rm", "endpoint", "url", "host", "setup", "wizard",
-                "new", "change", "failover", "cloud-failover", "use", "set"):
+                "new", "change", "failover", "cloud-failover", "use", "set",
+                "profiles", "profile"):
         return verb_from_chat("model " + arg)
     is_global = any(t.lstrip("-").lower() in ("global", "g", "all")
                     for t in tokens if t.startswith("-"))
@@ -42236,12 +42505,24 @@ def _run_setup_interactive(rest=None):
         # this variable. (The wizard used to save the key and then drop it from the live
         # CONFIG when it wrote the file back.)
         os.environ["TINYCMDR_LLM_API_KEY"] = target["key"]
+    # The model id says which family this is, and the family says what the first turn
+    # must carry. The seed is a starting point (the endpoint still wins); a documented
+    # window also saves the question below.
+    _prow = _profile_for_model(target["model"], target["url"])
+    _pw = 0
+    if _prow:
+        _say_profile(_prow, target["url"])
+        try:
+            _pw = int(_prow.get("context") or 0)
+        except (TypeError, ValueError):
+            _pw = 0
     # A hosted endpoint says nothing about its window (/v1/models carries no max_model_len
     # and there is no /props to ask), so the harness would run it on an assumed 8000 and clip
     # replies at 2048. Setup is where the endpoint is being named, so it is where the one key
     # that fixes it belongs. The probe is read-only, the same one the envelope runs;
     # an on-LAN box is skipped - its lever is its own context slot, not a config key.
-    if not _is_local_url(llm["base_url"]) and not _detect_window(llm["base_url"], None):
+    if (not _pw and not _is_local_url(llm["base_url"])
+            and not _detect_window(llm["base_url"], None)):
         # The window is ASKED here, at the moment the endpoint is being named, rather
         # than left as a note and homework: the operator is already configuring this
         # endpoint ("it should have asked at that time";
@@ -42932,7 +43213,7 @@ def _cli_model(rest, pick=False):
         opts, pos, idx = {}, [], 0
         while idx < len(args):
             a = args[idx]
-            if a in ("--model", "--alias", "--key-env"):
+            if a in ("--model", "--alias", "--key-env", "--profile"):
                 if idx + 1 >= len(args):
                     print(red("  %s needs a value" % a))
                     return
@@ -44671,6 +44952,12 @@ def _verb_doctor():
                         .get("notices") or {})
     for _note_key in sorted(_model_notes):
         print("  model note: %s" % _model_notes[_note_key])
+    _prof = (_endpoint_facts(CONFIG["llm"].get("base_url")) or {}).get("profile")
+    if isinstance(_prof, dict) and _prof.get("label"):
+        print("  profile   : %s%s" % (
+            _prof["label"],
+            " (seeded %s)" % ", ".join(sorted(_prof.get("seed") or {}))
+            if _prof.get("seed") else " (nothing needed seeding)"))
 
     # The persona is invisible state: nothing else in this output says whether the agent is
     # running the shipped identity or one somebody edited here. (`update` consumes the
@@ -44961,7 +45248,7 @@ def _verb_doctor():
 # /v1/models GET, for the id check.
 
 MODEL_ADD_HELP = """tinycmdr model add [<url>] [--model NAME] [--alias A] [--key-env VAR]
-                   [--primary] [--force]
+                   [--profile ID|none] [--primary] [--force]
 
   With no <url> it asks: local or cloud, then the API key (cloud) and the endpoint
   link, proves the key with a bearer GET /v1/models, and offers the models that come
@@ -44979,6 +45266,12 @@ MODEL_ADD_HELP = """tinycmdr model add [<url>] [--model NAME] [--alias A] [--key
 
   The KEY is never a command-line value: --key-env names the .env variable, and
   `tinycmdr token set <NAME>` reads the value from stdin.
+
+  A known model is recognized from the id and pre-set: its reasoning echo, fields the
+  endpoint rejects, and the documented window are seeded so the first turn already
+  takes the shape it needs. The endpoint still wins - a 400 or /props overwrites the
+  seed and the disagreement is said once as a model note. `tinycmdr model profiles`
+  lists them; --profile ID picks one by hand, --profile none skips the guess.
 
   A running bot reads config.json at start, so `tinycmdr restart` afterwards.
 
@@ -46459,7 +46752,7 @@ def _verb_model_endpoints(rest):
     opts, positional, i = {}, [], 0
     while i < len(args):
         a = args[i]
-        if a in ("--model", "--alias", "--key-env"):
+        if a in ("--model", "--alias", "--key-env", "--profile"):
             if i + 1 >= len(args):
                 print("%s needs a value" % a, file=sys.stderr)
                 return 2
@@ -46475,6 +46768,26 @@ def _verb_model_endpoints(rest):
     if what in ("remove", "rm"):
         return _verb_model_remove(positional)
     return _verb_model_add(opts, positional)
+
+
+def _verb_model_profiles(positional):
+    """`model profiles`: the catalog the add picker chooses from - data, not a config key."""
+    rows = model_profiles()
+    if not rows:
+        print("no model profiles ship with this build (assets/model-profiles.json is "
+              "missing); `model add` still learns every habit from the endpoint",
+              file=sys.stderr)
+        return 1
+    print("model profiles - `model add` picks one from the model id, or pass "
+          "--profile <id>:")
+    for row in rows:
+        print("  %-14s %s" % (row.get("id"), row.get("label") or row.get("id")))
+        print("                 %s" % _profile_summary(row))
+        if row.get("note"):
+            print("                 %s" % row["note"])
+    print("a profile is a starting point: the endpoint's own answers overwrite it, "
+          "and each disagreement is said once as a model note")
+    return 0
 
 
 def endpoint_report():
@@ -46776,6 +47089,12 @@ def _verb_model_add_interactive(opts):
         print("%s IS the primary already - pass --primary to change the primary's URL "
               "or model" % url, file=sys.stderr)
         return 2
+    _prow, _perr = _resolve_profile(opts.get("profile"), want, url)
+    if _perr:
+        print(_perr, file=sys.stderr)
+        return 2
+    if _prow is None and not str(opts.get("profile") or "").strip():
+        _prow = _ask_profile(url, want)
     route = want
     if primary:
         if not _is_local_url(url) and not key:
@@ -46840,6 +47159,7 @@ def _verb_model_add_interactive(opts):
         print(err, file=sys.stderr)
         return 1
     print(line)
+    _say_profile(_prow, url, opt=str(opts.get("profile") or ""))
     if not primary and not _is_local_url(url):
         print("note: %s is off-LAN, so automatic failover only reaches it while "
               "llm.allow_cloud_fallback is true; `/model %s` routes there explicitly."
@@ -46950,6 +47270,10 @@ def _verb_model_add(opts, positional):
     if not want:
         print("a fallback entry needs a model id: add `--model <name>`", file=sys.stderr)
         return 2
+    _prow, _perr = _resolve_profile(opts.get("profile"), want, url)
+    if _perr:
+        print(_perr, file=sys.stderr)
+        return 2
     if opts.get("primary"):
         if not _is_local_url(url) and not _primary_api_key() and not opts.get("force"):
             print("a hosted endpoint as the PRIMARY needs its API key, and the primary's\n"
@@ -46980,6 +47304,7 @@ def _verb_model_add(opts, positional):
         print(err, file=sys.stderr)
         return 1
     print(line)
+    _say_profile(_prow, url, opt=str(opts.get("profile") or ""))
     print("reasoning: learned from the endpoint; `/reasoning` shows or changes it")
     if not opts.get("primary"):
         print("reach it with `/model %s`" % (alias or want))
@@ -47398,6 +47723,8 @@ def _verb_search_test(rest):
 def _verb_model(rest):
     if rest and rest[0] in ("add", "remove", "rm"):
         return _verb_model_endpoints(rest)
+    if rest and rest[0] in ("profiles", "profile"):
+        return _verb_model_profiles(rest[1:])
     if rest and rest[0] in ("setup", "wizard", "new", "change"):
         return _model_setup_wizard()
     if rest and rest[0] in ("endpoint", "url", "host"):

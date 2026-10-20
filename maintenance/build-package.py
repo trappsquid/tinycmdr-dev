@@ -170,6 +170,11 @@ SHIP = [
     # the badge master by maintenance/make-brand-art.py; the app degrades to no art when
     # the terminal cannot show braille, so its absence is survivable but dull.
     "assets/tui-rail-badge.json",
+    # The curated model catalog: data, not code (the request path never reads it; the
+    # add picker uses an id as its key). Without it an install still works - every habit
+    # is learned from the endpoint - but the first turn for a known model pays that
+    # lesson instead of starting from the documented shape.
+    "assets/model-profiles.json",
     # The page's icon: the same badge, squared and flattened, served as /icon.png. A host
     # that wants different art drops its own file at this path; the built-in PNG in
     # tinycmdr.py is the fallback for a tree without assets/ at all.

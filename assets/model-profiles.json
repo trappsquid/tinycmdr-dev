@@ -1,0 +1,90 @@
+{
+  "_about": "Known model profiles for `model add`. A profile is a STARTING POINT: the picker seeds the facts the request path reads (the reasoning echo, fields an endpoint rejects, the documented window), and the endpoint's own answers - a 400, /props, /models - overwrite them, with the disagreement said once as a model note. The request path never reads this file or a model name; an id is the PICKER's key only. `doc` names the row of docs/model-contracts.md this profile encodes; tests/test_model_profiles.py grades that the row is there.",
+  "profiles": [
+    {
+      "id": "kimi-k3",
+      "label": "Kimi K3 (Moonshot)",
+      "doc": "Kimi K3",
+      "match": ["kimi-k3", "kimi"],
+      "wire": "chat",
+      "reasoning": "on",
+      "complete_message": true,
+      "context": 1000000,
+      "vision": true,
+      "sampling": "omit",
+      "drop": [],
+      "note": "always thinking; the complete assistant message, reasoning and tool calls, goes back"
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek (thinking mode)",
+      "doc": "DeepSeek-class",
+      "match": ["deepseek"],
+      "wire": "chat",
+      "reasoning": "on",
+      "complete_message": true,
+      "context": 128000,
+      "vision": null,
+      "sampling": "omit",
+      "drop": [],
+      "note": "thinking mode 400s when the echoed reasoning_content is missing"
+    },
+    {
+      "id": "claude-gateway",
+      "label": "Claude behind a translating gateway",
+      "doc": "Anthropic",
+      "match": ["claude"],
+      "wire": "messages",
+      "reasoning": "auto",
+      "complete_message": false,
+      "context": 200000,
+      "vision": true,
+      "sampling": "omit",
+      "drop": [],
+      "note": "this build speaks chat completions, so a gateway that translates is the way through; the messages-only cost is said once when the endpoint is added"
+    },
+    {
+      "id": "groq",
+      "label": "Groq-hosted (no reasoning echo)",
+      "doc": "Groq-class",
+      "match": [],
+      "wire": "chat",
+      "reasoning": "off",
+      "complete_message": false,
+      "context": 0,
+      "vision": null,
+      "sampling": "omit",
+      "drop": [],
+      "note": "rejects reasoning_content, so history is sent without it"
+    },
+    {
+      "id": "local",
+      "label": "Local server (llama.cpp-compatible)",
+      "doc": "llama.cpp-compatible",
+      "match": [],
+      "when": "local",
+      "wire": "chat",
+      "reasoning": "auto",
+      "complete_message": false,
+      "context": 0,
+      "vision": null,
+      "sampling": "omit",
+      "drop": [],
+      "note": "the server reports its own window and template; the harness learns the rest"
+    },
+    {
+      "id": "anonymous",
+      "label": "Not listed - learn it from the endpoint",
+      "doc": "anonymous",
+      "match": [],
+      "wire": "chat",
+      "reasoning": "auto",
+      "complete_message": false,
+      "context": 0,
+      "vision": null,
+      "sampling": "omit",
+      "drop": [],
+      "note": "nothing is assumed; every habit is learned from an answer"
+    }
+  ]
+}

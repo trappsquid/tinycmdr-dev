@@ -81,7 +81,30 @@ blocks (vendor doc), so Claude-direct preserved thinking cannot bind there; the 
 cache and reasoning-effort losses, and a translating gateway that does preserve thinking must keep
 the system prompt, tools and earlier messages byte-stable.
 
-## Answering "does it support X" for a model nobody has tested here
+## The picker: profiles are data, and the endpoint still wins (2026-10-20)
+
+A user cannot be expected to know which flags a model needs, so `model add` recognizes a
+known model from the id it advertises and pre-sets what that family needs. The catalog is
+`assets/model-profiles.json` - data, shipped with the build, never read by the request
+path; a model name is only the picker's key. `tinycmdr model profiles` prints it, the
+interactive add offers it when the id matches nothing, the page's key form has the same
+list, and `--profile <id>` (or `--profile none`) decides by hand.
+
+A row seeds the facts the request path already reads: the reasoning echo (`on` where the
+field must come back, `off` where it is rejected), the fields an endpoint refuses, and the
+documented context window (used only when the endpoint reports none). Selecting a row is a
+STARTING POINT, not a setting: a 400, `/props` or `/models` still overwrites it, a learned
+value is never undone by a profile, and a disagreement is said once as a `Model note:` -
+"the profile expected X; this endpoint answered Y - the harness used the endpoint's
+answer". `doctor` prints the row in force and what it seeded. Rows that only describe a
+family (the wire, vision, the complete-message rule, sampling) are checked against the
+endpoint when the endpoint is added: a messages-only server and a vision veto each become
+a note, and `sampling` is always `omit` because this build sends no sampling keys.
+
+No row seeds a reply cap: the cap is sized from the window and `llm.max_tokens`, and a
+number nobody measured would be worse than the measured default.
+
+
 
 Four requests, none of which generates more than a few tokens:
 
