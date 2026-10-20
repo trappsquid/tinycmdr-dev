@@ -466,8 +466,8 @@ def _body():
         rc, out, err = call(fb, ["doctor"])
         check("doctor exits 0 on a healthy chat install", rc == 0, (rc, err[:300]))
         check("doctor says so plainly", "no problems found" in out, out[-200:])
-        check("doctor says reasoning is learned from the endpoint, not a config edit",
-              "reasoning :" in out and "nothing to set" in out, out[-600:])
+        check("doctor names the reasoning state and the verb that changes it",
+              "reasoning :" in out and "/reasoning" in out, out[-600:])
         # An install that predates the page has no token; doctor is where that state is
         # named (it is a note, not a problem - the next start mints one).
         check("doctor names the page and its token state",
@@ -2641,6 +2641,22 @@ def _body():
     rc, out, err = call(fb, ["tasks"])
     check("H1: `tasks` is no longer a verb (the ledger was removed)",
           rc == 2 and "unknown verb" in err, (rc, err[:120]))
+
+    # ---- the reasoning verb: the history policy is a surface, not a config key -----
+    # Last on purpose: `config set` re-reads config.json and applies it, so a write here
+    # must not land between checks that depend on the in-memory test config.
+    rc, out, err = call(fb, ["reasoning", "replay"])
+    check(rc == 0 and "replay:" in out and "reasoning replay" in out,
+          "reasoning replay prints the history policy and the command", out)
+    rc, out, err = call(fb, ["reasoning", "replay", "always"])
+    check(rc == 0 and fb.CONFIG["llm"]["replay_reasoning"] == "always",
+          "reasoning replay always is a verb, not a config key", (rc, out, err))
+    rc, out, err = call(fb, ["reasoning", "cap", "4000"])
+    check(rc == 0 and fb.CONFIG["llm"]["replay_reasoning_max_chars"] == 4000,
+          "reasoning cap sets the completed-turn bound", (rc, out, err))
+    rc, out, err = call(fb, ["reasoning", "replay", "auto"])
+    check(rc == 0 and fb.CONFIG["llm"]["replay_reasoning"] in (True, "true"),
+          "reasoning replay auto restores the learned policy", (rc, out, err))
 
     print()
     _tail()

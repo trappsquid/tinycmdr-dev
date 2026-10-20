@@ -2871,6 +2871,28 @@ def _replay_reasoning_ok(url=None):
     return _endpoint_facts(url).get("reasoning") == "on"
 
 
+def _replay_completed_ok(url=None):
+    """Whether a COMPLETED turn's reasoning may be replayed.
+
+    The turn IN FLIGHT is the tool loop the server just generated and is always whole
+    (see _messages_for_wire). A COMPLETED turn is stale context: replaying it re-buys the
+    thoughts of an earlier answer on every later request, anchors the model to old plans
+    and burns context (the operator's own experience, 2026-10-20). It is replayed only
+    where the endpoint has PROVED it needs the field - a 400 naming reasoning_content, or
+    a reply that carries it (K3, DeepSeek-class) - or where the operator set
+    `llm.replay_reasoning: "always"`. A local endpoint is not assumed to need it: this
+    box's server showed 0 cache reuse on growing prompts, and the full trace cost +23.5%
+    of the prompt. `reasoning replay` is the surface for the override.
+    """
+    cfg = str(CONFIG["llm"].get("replay_reasoning", True)).strip().lower()
+    if cfg == "always":
+        return True
+    url = url or CONFIG["llm"].get("base_url", "")
+    if not _replay_reasoning_ok(url):
+        return False
+    return str((_endpoint_facts(url) or {}).get("reasoning") or "") == "on"
+
+
 def _reasoning_400_verdict(body):
     """What a 400 about reasoning MEANS: "on", "off", "none", or None (unparsed).
 
@@ -2938,21 +2960,20 @@ def _messages_for_wire(messages, url):
     Two per-request repairs live here, because the stored history must keep the
     unrepaired shape:
 
-    * THE ECHO: the reasoning policy for this endpoint (see _replay_reasoning_ok).
-      When the echo is ON, the turn still IN FLIGHT - the assistant messages after
+    * THE ECHO: the reasoning policy for this endpoint (see _replay_reasoning_ok and
+      _replay_completed_ok). The turn still IN FLIGHT - the assistant messages after
       the last OPERATOR user message (see _operator_user; the trailing state block
       is a user message too, so the naive boundary would call every tool round
-      completed) - carries its reasoning WHOLE: the server's chat
-      template rebuilds the <think> block from it, and a value sliced by
-      replay_reasoning_max_chars renders a different token sequence than the one
-      the server just generated, so the prefix KV-cache misses from the cut onward
-      on every tool round of every thinking model. Older, completed turns replay
-      whole by default (_reasoning_for_replay), because Kimi K3's contract is the
-      complete assistant message; a positive replay_reasoning_max_chars bounds what
-      a long-lived conversation re-buys. When the echo is OFF the field
-      is stripped everywhere (the history keeps the text unconditionally, which is
-      what lets an endpoint which LATER says the field is required be served
-      without replaying the turn).
+      completed) - carries its reasoning WHOLE: the server's chat template rebuilds
+      the <think> block from it, and a value sliced by replay_reasoning_max_chars
+      renders a different token sequence than the one the server just generated, so
+      the prefix KV-cache misses from the cut onward on every tool round of every
+      thinking model. A COMPLETED turn is stale context: it is replayed only where
+      the endpoint proved it needs the field (a 400, or a reply that carries it -
+      Kimi K3 and DeepSeek-class) or `llm.replay_reasoning` is "always"; otherwise
+      it is dropped. When the echo is OFF the field is stripped everywhere (the
+      history keeps the text unconditionally, which is what lets an endpoint which
+      LATER says the field is required be served without replaying the turn).
     * THE JOIN: consecutive `user` messages are coalesced into one. The harness
       builds them on purpose - the volatile state block is inserted before the
       operator's message, tool images are appended after it, a carried tool-result
@@ -2965,6 +2986,7 @@ def _messages_for_wire(messages, url):
     for the local templates byte-identical to what they were.
     """
     replay = _replay_reasoning_ok(url)
+    replay_done = _replay_completed_ok(url)
     last_user = -1
     for i, m in enumerate(messages):
         if _operator_user(m):
@@ -2974,6 +2996,9 @@ def _messages_for_wire(messages, url):
     for i, m in enumerate(messages):
         if isinstance(m, dict) and m.get("reasoning_content"):
             if not replay:
+                m = {k: v for k, v in m.items() if k != "reasoning_content"}
+                changed = True
+            elif i < last_user and not replay_done:
                 m = {k: v for k, v in m.items() if k != "reasoning_content"}
                 changed = True
             elif i < last_user:
@@ -44499,21 +44524,13 @@ def _verb_doctor():
     if _declared:
         print("  template  : the endpoint declares %s" % ", ".join(_declared))
 
-    # Whether the ENDPOINT has taught this box how to replay its reasoning. This is the
-    # one model-support setting a user might be sent to config.json for; say the state
-    # here, on a surface every chat lane already has (`doctor` is a chat verb), and say
-    # that nothing needs setting when the first reply has not taught it yet.
-    _echo = str((_endpoint_facts(CONFIG["llm"].get("base_url")) or {})
-                .get("reasoning") or "")
-    if _echo == "on":
-        print("  reasoning : the endpoint's replies carry reasoning_content; the complete "
-              "assistant message is replayed (learned - nothing to set)")
-    elif _echo == "off":
-        print("  reasoning : the endpoint refused reasoning_content; history is sent "
-              "without it (learned - nothing to set)")
-    else:
-        print("  reasoning : no reply has carried reasoning_content yet; the first one "
-              "teaches the echo - nothing to set")
+    # Whether the ENDPOINT has taught this box how to replay its reasoning, and whether
+    # a completed turn is allowed to replay it. Say the state on a surface every chat
+    # lane already has (`doctor` is a chat verb), and name the verb that changes it -
+    # a config key nobody can find is not a setting.
+    _replay_line, _replay_cap = _replay_reasoning_state()
+    print("  reasoning : %s (cap %s) - `/reasoning` changes it"
+          % (_replay_line, "whole" if _replay_cap == 0 else _replay_cap))
 
     # The persona is invisible state: nothing else in this output says whether the agent is
     # running the shipped identity or one somebody edited here. (`update` consumes the
@@ -45146,15 +45163,69 @@ def _verb_proc():
     return 0
 
 
-def _verb_reasoning(rest):
-    """`reasoning [auto|off|minimal|low|medium|high|xhigh|max]` - what the box asks for.
+def _replay_reasoning_state():
+    """(state, cap) for the `reasoning replay` verb and the doctor."""
+    base = CONFIG["llm"].get("base_url")
+    fact = str((_endpoint_facts(base) or {}).get("reasoning") or "unknown")
+    on = _replay_reasoning_ok(base)
+    done = _replay_completed_ok(base)
+    if not on:
+        state = "off - history carries no reasoning_content"
+    elif done:
+        state = ("on (%s) - the in-flight turn is whole; completed turns replay"
+                 % ("always" if str(CONFIG["llm"].get("replay_reasoning")).lower()
+                    == "always" else "learned on"))
+    else:
+        state = ("in-flight only - completed turns are dropped; the endpoint has not "
+                 "proved it needs the field (fact: %s)" % fact)
+    try:
+        cap = int(CONFIG["llm"].get("replay_reasoning_max_chars", 0) or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    return state, cap
 
-    The operator's door to llm.reasoning. With no argument it prints the level in force and
-    the shape the endpoint will receive it in (apply_reasoning decides that from the URL or
-    llm.reasoning_mode); with one it writes config.json through the same path `config set`
-    uses, so the read-back and the file format are the ones already graded.
+
+def _verb_reasoning(rest):
+    """`reasoning [level]`, `reasoning replay [always|auto|off]`, `reasoning cap <n>`.
+
+    The level is llm.reasoning (what the box asks for). `replay` is the HISTORY policy:
+    the turn in flight is always whole; a completed turn is replayed only where the
+    endpoint proved it needs the field, or `always`. `cap` bounds a replayed completed
+    turn (0 = whole). With no argument the verb prints both, so the policy is found by
+    typing `reasoning` - no config key to know, and every chat lane carries the verb.
     """
-    want = (rest[0].strip().lower() if rest else "")
+    sub = (rest[0].strip().lower() if rest else "")
+    if sub == "replay":
+        want = (rest[1].strip().lower() if len(rest) > 1 else "")
+        if not want:
+            state, cap = _replay_reasoning_state()
+            print("replay: %s" % state)
+            print("        cap: %s%s" % (cap, " (whole)" if cap == 0 else ""))
+            print("set:    reasoning replay always|auto|off  ·  reasoning cap <chars>")
+            return 0
+        if want not in ("always", "auto", "on", "off"):
+            print("replay is always, auto or off - not %r" % want, file=sys.stderr)
+            return 2
+        value = {"always": "always", "auto": "true", "on": "true",
+                 "off": "false"}[want]
+        return _verb_config(["set", "llm.replay_reasoning", value])
+    if sub == "cap":
+        raw = (rest[1].strip() if len(rest) > 1 else "")
+        if not raw:
+            _state, cap = _replay_reasoning_state()
+            print("replay cap: %s%s" % (cap, " (whole)" if cap == 0 else ""))
+            return 0
+        try:
+            n = int(raw)
+        except ValueError:
+            print("replay cap takes a number of characters (0 = whole)",
+                  file=sys.stderr)
+            return 2
+        if n < 0:
+            print("replay cap is not negative (0 = whole)", file=sys.stderr)
+            return 2
+        return _verb_config(["set", "llm.replay_reasoning_max_chars", str(n)])
+    want = sub
     if not want:
         level = str(CONFIG["llm"].get("reasoning") or "auto")
         mode = str(CONFIG["llm"].get("reasoning_mode") or "auto").lower()
@@ -45167,6 +45238,10 @@ def _verb_reasoning(rest):
         print("reasoning: %s (sent as `%s`)%s"
               % (level, wire, "" if level != "auto" else " - no field is sent at all"))
         print("levels: auto, off, %s" % ", ".join(REASONING_LEVELS))
+        state, cap = _replay_reasoning_state()
+        print("replay: %s (cap %s)" % (state, "whole" if cap == 0 else cap))
+        print("        set it: reasoning replay always|auto|off  ·  reasoning cap "
+              "<chars>")
         return 0
     if want not in REASONING_LEVELS + ("auto", "off"):
         print("unknown level %r - use auto, off, or one of: %s"
@@ -46765,8 +46840,7 @@ def _verb_model_add(opts, positional):
         print(err, file=sys.stderr)
         return 1
     print(line)
-    print("reasoning: nothing to set - the first reply (or its 400) teaches this box "
-          "whether to replay reasoning_content")
+    print("reasoning: learned from the endpoint; `/reasoning` shows or changes it")
     if not opts.get("primary"):
         print("reach it with `/model %s`" % (alias or want))
     if key_env and key_env not in _env_file_keys():

@@ -59,22 +59,24 @@ Readings:
 `tinycmdr doctor` prints what the endpoint declares (`template : the endpoint declares …`) from the
 same `/props` reply the vision and slot probes already ask for. Nothing branches on the caps.
 
-## The replay cap and Kimi K3 (2026-10-20)
+## The replay policy and Kimi K3 (2026-10-20)
 
-`llm.replay_reasoning_max_chars` shipped as 4,000, which sliced a completed assistant turn's
-`reasoning_content` before sending it back; K3's contract is the complete message, so the default is
-now 0 (replay whole, and let the context envelope bound the prompt). A positive value is the opt-in
-cost bound. A remote endpoint receives the field once it has proved it takes the echo - a 400
-naming the field, or a reply that carries `reasoning_content`. K3 always thinks, so its first reply
-teaches the harness and a fresh conversation needs **no switch at all**; the session history keeps
-the reasoning with the answer, so the next user message replays the complete assistant turn.
-`llm.replay_reasoning: "always"` is the override for a conversation whose first reply carries none,
-and it is a chat command on every surface (`/config set llm.replay_reasoning always`), not a file
-edit. `tinycmdr doctor` and the `/model add` result say which state the endpoint is in and that
-nothing needs setting. The two sides of the same rule: the compat wire does not return
-thinking blocks (vendor doc), so Claude-direct preserved thinking cannot bind there; the doctor note
-names the cache and reasoning-effort losses, and a translating gateway that does preserve thinking
-must keep the system prompt, tools and earlier messages byte-stable.
+The turn IN FLIGHT - the tool loop the server just generated - is always replayed whole: the
+provider's contract requires it (DeepSeek 400s without the field, K3 requires the complete
+assistant message), and a slice is a different message. A COMPLETED turn is stale context and is
+different: it is replayed only where the endpoint has proved it needs the echo - a 400 naming the
+field, or a reply that carries `reasoning_content` (K3's first reply does) - or when
+`llm.replay_reasoning` is `"always"`; otherwise it is dropped. That is the normal chat shape and it
+stops a local model re-buying old thinking. `replay_reasoning_max_chars` applies only to a
+completed turn that is replayed; 0 (the default) sends it whole, which is K3's contract, and a
+positive value is the cost bound. The session history keeps the reasoning with the answer, so a K3
+conversation replays the complete turn on the next message with no switch. The override is a verb on
+every surface: `reasoning` prints the state, `reasoning replay always|auto|off` sets it, `reasoning
+cap <chars>` bounds it (chat writes `/reasoning replay always`; the host drops the slash). `doctor`
+prints the same state. The two sides of the same rule: the compat wire does not return thinking
+blocks (vendor doc), so Claude-direct preserved thinking cannot bind there; the doctor note names the
+cache and reasoning-effort losses, and a translating gateway that does preserve thinking must keep
+the system prompt, tools and earlier messages byte-stable.
 
 ## Answering "does it support X" for a model nobody has tested here
 

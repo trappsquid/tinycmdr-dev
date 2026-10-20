@@ -401,6 +401,12 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
             fb.CONFIG["llm"]["replay_reasoning"] = False
             check(not fb._replay_reasoning_ok(), "the switch turns it off")
             fb.CONFIG["llm"]["replay_reasoning"] = True
+            check(not fb._replay_completed_ok(),
+                  "a completed turn is NOT replayed on a local endpoint by default "
+                  "(no endpoint proof; stale context)")
+            fb.CONFIG["llm"]["replay_reasoning"] = "always"
+            check(fb._replay_completed_ok(), "'always' is the operator override")
+            fb.CONFIG["llm"]["replay_reasoning"] = True
 
             fb.CONFIG["llm"]["replay_reasoning_max_chars"] = 100
             capped = fb._reasoning_for_replay({"reasoning_content": "x" * 500})
@@ -467,26 +473,37 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
                   "no captured payload of a real run carries adjacent user messages",
                   [[m.get("role") for m in _p.get("messages") or []] for _p in seen[:2]])
 
-            # ---- the cap applies to COMPLETED turns only --------------------------
-            # The reason the cap exists is context economy on later requests; the turn
-            # the server just generated must replay whole or its prefix cache dies at
-            # the cut. One message list covering both sides of the boundary:
-            _aged = _wf([{"role": "user", "content": "first"},
-                         {"role": "assistant", "content": "done",
-                          "reasoning_content": "x" * 500},
-                         {"role": "user", "content": "second"},
-                         {"role": "assistant", "content": "",
-                          "reasoning_content": "y" * 500,
-                          "tool_calls": [{"id": "z", "type": "function",
-                                          "function": {"name": "shell",
-                                                       "arguments": "{}"}}]},
-                         {"role": "tool", "tool_call_id": "z", "content": "r"}], "")
+            # ---- completed turns are stale context; the in-flight turn is not ------
+            # A completed turn is replayed only where the endpoint proved it needs the
+            # field (or "always"); the turn the server just generated must stay whole
+            # because the tool loop continues it. One message list covers both sides:
+            _both = [{"role": "user", "content": "first"},
+                     {"role": "assistant", "content": "done",
+                      "reasoning_content": "x" * 500},
+                     {"role": "user", "content": "second"},
+                     {"role": "assistant", "content": "",
+                      "reasoning_content": "y" * 500,
+                      "tool_calls": [{"id": "z", "type": "function",
+                                      "function": {"name": "shell",
+                                                   "arguments": "{}"}}]},
+                     {"role": "tool", "tool_call_id": "z", "content": "r"}]
+            _plain = _wf([{**m} for m in _both], "")
+            check(_plain[1].get("reasoning_content") is None,
+                  "a completed turn's reasoning is dropped by default on a local "
+                  "endpoint (stale context, context burn)",
+                  _plain[1].get("reasoning_content"))
+            check(_plain[3].get("reasoning_content") == "y" * 500,
+                  "...while the turn still in flight stays whole",
+                  len(_plain[3].get("reasoning_content") or ""))
+            fb.CONFIG["llm"]["replay_reasoning"] = "always"
+            _aged = _wf([{**m} for m in _both], "")
             check(_aged[1].get("reasoning_content") == "x" * 100,
-                  "a completed turn's reasoning replays capped",
+                  "with 'always', a completed turn replays and takes the cap",
                   len(_aged[1].get("reasoning_content") or ""))
             check(_aged[3].get("reasoning_content") == "y" * 500,
-                  "...while the turn still in flight keeps it whole",
+                  "...and the in-flight turn is still whole",
                   len(_aged[3].get("reasoning_content") or ""))
+            fb.CONFIG["llm"]["replay_reasoning"] = True
 
             # ---- K3: the COMPLETE reasoning is the default, and 0 disables the cap
             # K3's README requires the assistant message returned by the API to be
