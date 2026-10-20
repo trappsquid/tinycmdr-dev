@@ -2235,10 +2235,12 @@ def _clamp_floor(rate):
 
 
 def _call_budget_tokens(rate, seconds):
-    """Tokens one call may generate inside `seconds` at `rate` tok/s, or 0 when either is
-    unknown (no measurement yet, or the bound is disabled). `_clamp_floor` is the floor:
-    the time bound may shrink a call, never strangle it. The wrap-up and the mid-think
-    retry take their numbers from here, so one floor covers all three."""
+    """The output budget for one call at `rate` tok/s over `seconds` of generation, or 0
+    when either is unknown (no measurement yet, or the bound is disabled). The number is
+    rate x seconds, raised to `_clamp_floor` - so a pathological measurement cannot
+    shrink a call below the floor, and a floor-bound call may run past `seconds` up to
+    what fits `llm.request_timeout`. The wrap-up and the mid-think retry take their
+    numbers from here, so one floor covers all three."""
     try:
         rate, seconds = float(rate or 0), float(seconds or 0)
     except (TypeError, ValueError):
@@ -3212,7 +3214,9 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                  first_byte_seconds=None):
     """Consume an SSE chat completion into the same shape the JSON path returns.
 
-    Returns (data, stats) where `data` is `{"choices": [{...}], "usage": {...}}`, so
+    Returns (data, stats) where `data` is `{"choices": [{...}], "usage": {...},
+    "timings": {...}}` - `timings` is the server's last timings block (possibly empty),
+    kept because the decode-only rate the output cap is sized from lives there - so
     every downstream decision (usage accounting, the finish=length escalation, the
     clamp check) is identical to the non-streaming path.
 
