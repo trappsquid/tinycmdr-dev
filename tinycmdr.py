@@ -2528,6 +2528,17 @@ WINDOW_MISS_TTL = 20.0
 # every call with nothing must not be able to spin.
 NO_ANSWER_CONTINUES = 1
 
+# A reply that ends `finish_reason: "length"` WITH text is half an answer, and it used
+# to be delivered as the whole one. The run asks for the rest once per turn, with the
+# same tools and the partial answer in the transcript, and joins the pieces at a
+# marked seam. ONE continuation, not a chain: a model that always cuts (a repetition
+# loop, a cap far below what the task needs) must not be able to spend the run asking
+# for the rest until the clock runs out - the second cut is reported instead, naming
+# the lever.
+LENGTH_CONTINUES = 1
+# Where one piece of a cut answer ends and the next begins, in the delivered text.
+CUT_JOIN = "\n\n[continued after the output cap]\n\n"
+
 
 class InfraError(RuntimeError):
     """Every endpoint failed at the transport level. The model never got a
@@ -24198,6 +24209,11 @@ class Agent:
             # MODEL failed to answer is not a run that used its budget, so this has
             # its own small bound instead of spending a continuation segment.
             _no_answer = 0
+            # The pieces of a cut answer (see the final-answer branch) and how many
+            # continuations this run has asked for. _cut_pieces is non-empty only
+            # between a `length` reply with text and the reply that completes it.
+            _cut_pieces = []
+            _cut_used = 0
             # Promise/no-call retries for this run: a reply that announces the work and
             # stops with no tool call at all. Bounded by agent.nudge_retries (default 3) -
             # a model that will not act is eventually reported, not asked forever, but one
@@ -24475,6 +24491,12 @@ class Agent:
                             # simply gone. An answer the model already wrote is
                             # data; losing it to a scheduling coincidence is loss.
                             _composed = (reply.get("content") or "").strip()
+                            if _composed and _cut_pieces:
+                                # This reply is the REST of a cut answer and it is
+                                # delivered now, so the partial it continues ships
+                                # with it rather than being stranded.
+                                _composed = CUT_JOIN.join(_cut_pieces + [_composed])
+                                _cut_pieces = []
                             if _composed:
                                 if say_cb:
                                     try:
@@ -24505,6 +24527,42 @@ class Agent:
                                                 f"handle this steering now, and fold in "
                                                 f"whatever it changes] {msg}")})
                             continue
+                        # A REPLY CUT AT THE OUTPUT CAP IS HALF AN ANSWER (2026-10-20).
+                        # `finish_reason: "length"` with text used to be delivered as
+                        # final, so a long answer simply stopped mid-sentence and the
+                        # operator had no way to tell it from a finished one. Ask for
+                        # the rest, with the partial answer in the transcript and the
+                        # same tool list, once per turn (LENGTH_CONTINUES); the join is
+                        # marked where the pieces meet, and a second cut is reported
+                        # with the lever rather than chased.
+                        if ((reply.get("content") or "").strip()
+                                and usage.get("finish_reason", "") == "length"
+                                and _cut_used < LENGTH_CONTINUES
+                                and not spun
+                                and (now_mono() - t0) < max_seconds):
+                            _cut_used += 1
+                            _cut_pieces.append((reply.get("content") or "").strip())
+                            # The partial assistant turn STAYS in the transcript: it is
+                            # what the model continues from, and dropping it (the way the
+                            # empty-answer retry does) would ask it to write the answer
+                            # again from nothing.
+                            messages.append({"role": "user", "content": (
+                                "SYSTEM: your last answer was CUT OFF at the output "
+                                "limit in the middle of the text - it is NOT finished. "
+                                "Continue it from the exact word where it stopped: no "
+                                "preamble, no apology, no repetition of what you already "
+                                "wrote, and do not start a new answer.")})
+                            _note = ("the answer was cut at the output cap - asking "
+                                     f"for the rest ({_cut_used} of "
+                                     f"{LENGTH_CONTINUES})")
+                            log.warning("[%s] %s", session_key, _note)
+                            if say_cb:
+                                try:
+                                    say_cb(_note)
+                                except Exception:
+                                    log.debug("cut-continue notice failed",
+                                              exc_info=True)
+                            continue
                         # A reply that PROMISES the work and then stops is not an answer,
                         # and the run must not end on it. Only when the run has made NO
                         # tool call at all, so a report that follows real work is never
@@ -24527,6 +24585,7 @@ class Agent:
                                      and calls == 0
                                      and bool(_TEXT_CALL_RX.search(_promise)))
                         if (_no_call_used < _nudge_cap and calls == 0 and not spun
+                                and not _cut_pieces
                                 and len(_promise) <= (_INTENT_MAX_CHARS if _promised
                                                       else _RESULT_CLAIM_MAX_CHARS)
                                 and not _promise.endswith("?")
@@ -24590,6 +24649,7 @@ class Agent:
                         # _annotate_promise).
                         if (_promised and _promise_used < _nudge_cap and calls > 0
                                 and not spun
+                                and not _cut_pieces
                                 and len(_promise) <= _INTENT_MAX_CHARS
                                 and not _promise.endswith("?")
                                 and steps < max_steps
@@ -24686,6 +24746,13 @@ class Agent:
                             status = ("truncated"
                                       if (fr == "length" and rchars)
                                       else "empty")
+                            if _cut_pieces:
+                                # THE REST NEVER CAME. What the run already wrote is
+                                # still the answer the operator is owed, so it ships
+                                # ahead of the note that says why it stops early.
+                                answer = (CUT_JOIN.join(_cut_pieces)
+                                          + "\n\n" + answer)
+                                _cut_pieces = []
                         # A run must not end on the HARNESS's own note when the
                         # generation was CUT rather than refused: a length cut is a
                         # request that can be asked differently, so the task gets
@@ -24697,6 +24764,7 @@ class Agent:
                         # NO_ANSWER_CONTINUES and by the run's own step and wall
                         # budgets, so a dead endpoint cannot spin.
                         if (status == "truncated" and not spun
+                                and not _cut_used
                                 and _no_answer < NO_ANSWER_CONTINUES
                                 and steps < max_steps
                                 and (now_mono() - t0) < max_seconds):
@@ -24719,6 +24787,26 @@ class Agent:
                                     log.debug("no-answer notice failed",
                                               exc_info=True)
                             continue
+                        # THE JOIN OF A CUT ANSWER (2026-10-20). The pieces collected
+                        # from `finish_reason: "length"` replies and the text that
+                        # completed them are ONE answer, delivered with the seam
+                        # marked. A second cut is reported, not chased: the note names
+                        # the lever, and the run does not spend its clock re-asking.
+                        if _cut_pieces:
+                            _pieces = _cut_pieces + ([answer] if answer else [])
+                            _cut_pieces = []
+                            answer = CUT_JOIN.join(_pieces)
+                            if usage.get("finish_reason", "") == "length":
+                                status = "truncated"
+                                answer += (
+                                    "\n\n⚠️ **cut off at the output cap** — this "
+                                    "answer was continued once and cut again, so it "
+                                    "is incomplete: raise llm.max_tokens / "
+                                    "llm.max_tokens_ceiling in config.json, or send "
+                                    "`continue`.")
+                                log.warning("[%s] the continuation was cut too - "
+                                            "delivering %d char(s) and the note",
+                                            session_key, len(answer))
                         # THE PRE-DELIVERY CHECKPOINT (2026-10-16). This is the one
                         # moment a bare answer is about to ship, so it is where the
                         # harness's state gets one last word. It fires only when that
@@ -24764,6 +24852,11 @@ class Agent:
                             answer = "\n\n".join(_dropped_answers + [answer])
                         hist.append(_history_assistant(reply, scrub(answer)))
                         return scrub(answer)
+
+                    # A cut answer that ended in TOOL CALLS was narration, not an
+                    # answer: its text stays in the turn history and is not joined
+                    # into the final report, where it would read twice.
+                    _cut_pieces = []
 
                     # The model's own narration ("Checking what holds the lock:")
                     # arrives WITH the tool calls. Post it before they run, so the

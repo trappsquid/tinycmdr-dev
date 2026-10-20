@@ -580,6 +580,52 @@ def test_a_cut_turn_with_no_answer_is_asked_again():
           len(seen2) == 3 and "No answer" in out2, (len(seen2), out2[:80]))
 
 
+def test_a_cut_answer_with_text_is_continued_and_joined():
+    """A reply that ends finish_reason=length WITH text used to be delivered as
+    final, so a long answer silently stopped mid-sentence. The run asks for the
+    rest once, keeps the partial turn in the transcript it continues from, and
+    joins the two pieces at a marked seam."""
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "The first half says",
+         "finish_reason": "length"},
+        {"role": "assistant", "content": "the rest of the answer.",
+         "finish_reason": "stop"},
+    ], session="cut-answer")
+    check("a cut answer with text is continued (2 calls)", len(seen) == 2, len(seen))
+    check("both halves are delivered",
+          "The first half says" in out and "the rest of the answer." in out, out)
+    check("the seam is marked",
+          "[continued after the output cap]" in out, out)
+    check("a completed continuation is not reported as unfinished",
+          "cut off at the output cap" not in out, out)
+    if len(seen) == 2:
+        check("the continuation keeps the partial assistant turn",
+              any(m.get("role") == "assistant"
+                  and m.get("content") == "The first half says" for m in seen[1]),
+              seen[1])
+        check("the continuation asks for the rest, naming the cut",
+              seen[1][-1].get("role") == "user"
+              and "CUT OFF" in str(seen[1][-1].get("content")), seen[1][-1])
+
+
+def test_a_second_cut_is_reported_not_chased():
+    """One continuation per turn, not a chain: a model that cuts again has both
+    pieces delivered with the lever named. The stub offers a clean third reply -
+    the harness must not spend the call."""
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "first piece,", "finish_reason": "length"},
+        {"role": "assistant", "content": "second piece,", "finish_reason": "length"},
+        {"role": "assistant", "content": "NEVER DELIVERED", "finish_reason": "stop"},
+    ], session="cut-twice")
+    check("the continuation is bounded to one per turn", len(seen) == 2, len(seen))
+    check("both pieces are delivered",
+          "first piece," in out and "second piece," in out, out)
+    check("the seam is marked", "[continued after the output cap]" in out, out)
+    check("the second cut is named with the lever",
+          "cut off at the output cap" in out and "llm.max_tokens" in out, out)
+    check("the unused clean reply never arrives", "NEVER DELIVERED" not in out, out)
+
+
 # ------------------------------------------- v1.9.29: streamed narration
 
 def test_streamed_narration_posts_once_and_grows():
