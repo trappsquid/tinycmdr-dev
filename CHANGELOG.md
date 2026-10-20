@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A fixed starter tool reaches an existing install:** update refreshes a `tools/` copy that is still byte-identical to a version the package shipped (`tools-stock.sha256` names every stock version) and leaves an edited tool alone, so the 1.1.28 console-window fix no longer stops at new installs (tests/test_update_script.py, tests/test_verbs.py).
+- **The Windows updater no longer depends on a module:** update.ps1 computes SHA256 with .NET instead of the Get-FileHash cmdlet, so its checksum and stock-tool checks run in a PowerShell where that cmdlet does not resolve (tests/test_update_script.py).
 
 ## [1.1.31] - 2026-10-19
 

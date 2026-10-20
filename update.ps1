@@ -37,6 +37,23 @@ function Get-Version([string]$file) {
     if ($t -match '(?m)^VERSION = "(.*?)"') { return $Matches[1] }
     return "?"
 }
+function Get-Sha256([string]$path) {
+    # .NET, not Get-FileHash: the cmdlet lives in a module whose auto-loading an updater
+    # on another box cannot assume - the Windows gate found a PowerShell that could not
+    # resolve it, and the update stopped before it read a byte of the install.
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $fs = [System.IO.File]::OpenRead($path)
+        try {
+            $bytes = $sha.ComputeHash($fs)
+        } finally {
+            $fs.Dispose()
+        }
+        return [System.BitConverter]::ToString($bytes).Replace("-", "").ToLower()
+    } finally {
+        $sha.Dispose()
+    }
+}
 $Cur = Get-Version (Join-Path $Dir "tinycmdr.py")
 $Work = Join-Path $env:TEMP ("tinycmdr-update-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Force -Path $Work | Out-Null
@@ -52,7 +69,7 @@ try {
     Invoke-WebRequest -UseBasicParsing "$Base/SHA256SUMS" -OutFile (Join-Path $Work "SHA256SUMS")
     $Want = (Select-String -Path (Join-Path $Work "SHA256SUMS") -Pattern ([regex]::Escape(" " + $Asset) + '$') |
              Select-Object -First 1).Line.Split(" ")[0]
-    $Got = (Get-FileHash (Join-Path $Work $Asset) -Algorithm SHA256).Hash.ToLower()
+    $Got = Get-Sha256 (Join-Path $Work $Asset)
     if (-not $Want -or $Want.ToLower() -ne $Got) {
         Write-Error "update: checksum mismatch - nothing was changed"; exit 1
     }
@@ -129,11 +146,11 @@ try {
                 if ($top -eq "tools") {
                     if (Test-Path $dest) {
                         $key = $rel.Replace("\", "/")
-                        $have = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
+                        $have = Get-Sha256 $dest
                         if (-not ($Stock.ContainsKey($key) -and ($Stock[$key] -contains $have))) {
                             return
                         }
-                        if ((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() -ne $have) {
+                        if ((Get-Sha256 $_.FullName) -ne $have) {
                             $refreshed += $key
                         }
                     }

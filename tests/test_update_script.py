@@ -49,6 +49,15 @@ def check(cond, what, detail=""):
         FAILS.append(what)
 
 
+def read(path):
+    """File text, or "" when the updater never wrote it: a missing file is a failed
+    check with evidence, never a traceback that hides the first failure."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
 def _sha(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -133,6 +142,7 @@ def main():
             print("skip: no `sh` on PATH to run update.sh with")
             return 77
         script = UNIX_SCRIPT
+    print("updater under test: %s (%s)" % (script, shell))
 
     work = Path(tempfile.mkdtemp(prefix="tc-update-script-"))
     srv = None
@@ -211,18 +221,18 @@ def main():
               (proc.returncode, out[-300:]))
         check("9.9.9" in out and "1.0.0" in out,
               "it names the version it moved from and to", out[:200])
-        check('VERSION = "9.9.9"' in (inst / "tinycmdr.py").read_text(encoding="utf-8"),
+        check('VERSION = "9.9.9"' in read(inst / "tinycmdr.py"),
               "the install now runs the release build")
-        check((inst / "notes.md").read_text(encoding="utf-8").startswith("HOST NOTES"),
+        check(read(inst / "notes.md").startswith("HOST NOTES"),
               "a host-owned file is left alone")
 
         # tools/ is host-owned, but the bytes still match a stock version the package
         # lists: a fix under an unedited starter now reaches an existing install.
-        check((inst / "tools" / "process.py").read_text(encoding="utf-8") == "NEW STOCK",
+        check(read(inst / "tools" / "process.py") == "NEW STOCK",
               "an unedited stock starter tool is refreshed from the release")
-        check((inst / "tools" / "mine.py").read_text(encoding="utf-8") == "MY EDIT",
+        check(read(inst / "tools" / "mine.py") == "MY EDIT",
               "...and the agent's edited tool is left exactly alone")
-        check((inst / "tools" / "new.py").read_text(encoding="utf-8") == "SEED",
+        check(read(inst / "tools" / "new.py") == "SEED",
               "...while a missing starter is seeded")
         check("refreshed unedited starter tool(s):" in out
               and "tools/process.py" in out,
@@ -230,7 +240,7 @@ def main():
         check((inst / "tools-stock.sha256").is_file(),
               "the stock manifest lands for the next update")
 
-        env_text = (inst / ".env").read_text(encoding="utf-8")
+        env_text = read(inst / ".env")
         lines = env_text.splitlines()
         check("TINYCMDR_MODEL_KEY=abc" in lines,
               "the .env line that was there is still a line of its own", lines)
@@ -257,7 +267,7 @@ def main():
         # A second run must not append another token: the guard the merge defeated.
         proc2 = run_update(inst)
         out2 = proc2.stdout + proc2.stderr
-        again = [l for l in (inst / ".env").read_text(encoding="utf-8").splitlines()
+        again = [l for l in read(inst / ".env").splitlines()
                  if l.startswith("TINYCMDR_WEB_TOKEN=")]
         check(len(again) == 1,
               "a later update finds the token and does not mint another", again)
@@ -281,7 +291,7 @@ def main():
         check("cannot be read" in out3 and "0.0.0" in out3,
               "an unreadable VERSION says the guard has nothing to compare",
               out3[-400:])
-        check('VERSION = "9.9.9"' in (inst2 / "tinycmdr.py").read_text(encoding="utf-8"),
+        check('VERSION = "9.9.9"' in read(inst2 / "tinycmdr.py"),
               "...and the damaged tree now runs the release build")
 
         if os.name == "posix":
