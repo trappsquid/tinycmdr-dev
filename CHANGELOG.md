@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.37] - 2026-10-20
+
+### Changed
+- **A cohort page carries the way back:** the tab title and the active rail row name the host, and a page opened from a hub draws that hub above PRAETORIUM as a plain link, so linked boxes are tellable apart and the hub is one click away (tests/test_webui_page.py).
+
+### Added
+- **A known model is pre-set when it is added:** `model add` recognizes a known id from the shipped catalog and seeds the reasoning echo, refused fields and documented window, the endpoint still wins and says so once, and `model profiles` lists the rows (tests/test_model_profiles.py).
+
 ## [1.1.36] - 2026-10-20
 
 ### Changed
