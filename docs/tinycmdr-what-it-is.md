@@ -343,7 +343,13 @@ Interop and ecosystem
   no ACP/agent-protocol integration, no plugin market
   no LSP or language tooling; no repo map, no symbol index, no call-graph tooling (an Aider
   strength); search is a regex walk of the tree plus the model's own reading
-  no native Anthropic/Google message formats: OpenAI-compatible endpoints only
+  no native Anthropic/Google message formats: OpenAI-compatible endpoints only. Pointed
+  at a direct Anthropic endpoint - whose only chat path is `/v1/messages` - it still
+  answers, but two things quietly stop existing: prompt caching (that vendor prices a
+  cache read at a small fraction of a write, and nothing is cached over this wire) and
+  any reasoning-effort field. Put a translating gateway in front, or an endpoint that
+  serves both paths; `tinycmdr doctor` prints the sentence when the host answers
+  `/messages` while 404-ing `/chat/completions`
   no browser automation built in (GUI control can come from the shipped starter,
   ./tools/computer_use.py - docs/computer-use.md)
 

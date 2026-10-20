@@ -3974,6 +3974,47 @@ def _llama_props(base_url, headers=None, timeout=5):
     return props
 
 
+def _messages_wire_probe(url=None, timeout=6):
+    """True when this endpoint's only chat path is `messages`, False when it serves
+    `chat/completions` like this build sends, None when it cannot be asked.
+
+    Asked by `doctor` alone - never on the request path, which must not pay two probes to
+    learn something that changes no byte of the request. The signature is the two paths
+    rather than a host name, so a gateway, a proxy or a self-hosted box that translates
+    is read by what it answers. Neither POST generates anything: with an empty body there
+    is nothing to bill, and a server with no `messages` route says 404 about it.
+    """
+    base = str(url or CONFIG["llm"].get("base_url") or "").rstrip("/")
+    if not base.startswith("http"):
+        return None
+    headers = {"Content-Type": "application/json"}
+    key = str(CONFIG["llm"].get("api_key") or "")
+    if key and key != "none":
+        headers["authorization"] = "Bearer " + key
+        headers["x-api-key"] = key
+    try:
+        chat = requests.post(base + "/chat/completions", json={}, headers=headers,
+                             timeout=_probe_timeout(timeout), allow_redirects=False)
+        msgs = requests.post(base + "/messages", json={}, headers=headers,
+                             timeout=_probe_timeout(timeout), allow_redirects=False)
+    except Exception:                                        # noqa: BLE001 - unreachable
+        return None
+    return chat.status_code == 404 and msgs.status_code != 404
+
+
+def _messages_wire_note(url=None):
+    """The doctor sentence about an endpoint that does not serve this build's wire, or
+    None when it does (see `_messages_wire_probe`)."""
+    if _messages_wire_probe(url) is not True:
+        return None
+    return ("this endpoint serves `messages`, not `chat/completions`, so it is reached "
+            "through the OpenAI-compatible wire and what lives on the other one is lost: "
+            "prompt caching (that vendor prices a cache read at a small fraction of a "
+            "write, and nothing is cached here) and `llm.reasoning`, which has no field "
+            "to ride on. A gateway that translates to chat completions, or an endpoint "
+            "that serves both paths, gets them back")
+
+
 def endpoint_slots(url):
     """How many requests this endpoint will serve AT ONCE, or 0 when it does not say.
 
@@ -44403,6 +44444,28 @@ def _verb_doctor():
         print("  vision    : off - tool screenshots are NOT sent; set agent.vision true "
               "(`tinycmdr config set agent.vision true` + restart) if the endpoint "
               "accepts images")
+
+    # What this endpoint speaks, said once where it can be read. This build sends the
+    # OpenAI-compatible wire; an endpoint whose only chat path is `messages` still
+    # connects and answers, so the features that quietly do not exist there have to be
+    # named out loud instead of discovered as a bill or a flat answer.
+    _wire_note = _messages_wire_note()
+    if _wire_note:
+        print("  wire      : messages (this build sends chat completions)")
+        notes.append(_wire_note)
+
+    # What the endpoint's own chat template implements - tools, tool_calls, the system
+    # role, parallel calls, preserved reasoning - read off the /props reply the vision and
+    # slot probes already ask for. It is the only place a server SAYS what its template
+    # does, which is what makes a reasoning question answerable from facts instead of from
+    # a model name. Measured 2026-10-19 on the operator's box: it declares
+    # `supports_preserve_reasoning`, and sending the flag (either spelling) moved no byte
+    # of the prompt - the declaration means it keeps the trace the CLIENT sends.
+    _caps = (_llama_props(CONFIG["llm"].get("base_url")) or {}).get("chat_template_caps")
+    _declared = sorted(str(_k).replace("supports_", "")
+                       for _k, _v in (dict(_caps or {}).items()) if _v)
+    if _declared:
+        print("  template  : the endpoint declares %s" % ", ".join(_declared))
 
     # The persona is invisible state: nothing else in this output says whether the agent is
     # running the shipped identity or one somebody edited here. (`update` consumes the
