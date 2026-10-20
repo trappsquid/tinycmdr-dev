@@ -40,7 +40,8 @@
     "tests/test_verbs.py",
     "tests/test_webui.py",
     "tests/test_webui_page.py",
-    "tests/test_wording.py"
+    "tests/test_wording.py",
+    "tests/test_update_script.py"
   ],
   "scheduled": [
     "tests/test_a2_surface.py",
@@ -63,7 +64,6 @@
   ],
   "excluded": {},
   "not_applicable": {
-    "tests/test_update_script.py": "runs update.sh, a POSIX shell script; it declares exit 77 on Windows",
     "tests/test_fix_perms.py": "grades POSIX mode bits on sessions/ sidecars; it declares exit 77 on Windows (the fix deliberately leaves ACLs alone there)",
     "tests/test_installer_unix.py": "grades the Unix installer (bash + systemd + AF_UNIX); it declares exit 77 on Windows and names test_installer_windows.py as the Windows counterpart"
   },

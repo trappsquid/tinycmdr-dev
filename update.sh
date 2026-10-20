@@ -144,8 +144,35 @@ find . -type f | sed 's|^\./||' > "$WORK/filelist"
 OLD_REQ=""
 [ -f "$DIR/requirements.txt" ] && OLD_REQ="$(cat "$DIR/requirements.txt")"
 COUNT=0
+# A starter tool is the package's until the host edits it. tools/ is host-owned, but a
+# copy whose bytes still match a version the package shipped was never edited, so the
+# release fixes it in place. tools-stock.sha256 lists every stock version; an edited
+# copy matches none and is left alone.
+REFRESHED=""
+_stock_sha() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+_stock_match() {  # <rel> <file> -> 0 when <file> is a stock copy the package shipped
+    [ -f "$SRC/tools-stock.sha256" ] || return 1
+    _h="$(_stock_sha "$2")" || return 1
+    grep -qxF "$_h  $1" "$SRC/tools-stock.sha256"
+}
 while IFS= read -r rel; do
-    is_host "$rel" && continue
+    if is_host "$rel"; then
+        case "$rel" in
+            tools/*)
+                if [ -e "$DIR/$rel" ]; then
+                    _stock_match "$rel" "$DIR/$rel" || continue
+                    cmp -s "$SRC/$rel" "$DIR/$rel" || REFRESHED="$REFRESHED $rel"
+                fi
+                ;;
+            *) continue ;;
+        esac
+    fi
     dest="$DIR/$rel"
     mkdir -p "$(dirname "$dest")"
     # BESIDE the file and renamed: a kill, a crash or a full disk mid-copy used to
@@ -174,6 +201,9 @@ if [ -f "$DIR/requirements.txt" ] && [ "$(cat "$DIR/requirements.txt")" != "$OLD
     echo "    (a missing venv: re-run the installer in $DIR - this file needs no download)"
 fi
 
+if [ -n "$REFRESHED" ]; then
+    echo "update: refreshed unedited starter tool(s):$REFRESHED"
+fi
 echo "update: $CUR -> $NEW ($COUNT file(s); host-owned files left alone)"
 if [ "$CUR" = "$NEW" ]; then
     echo "update: already current"

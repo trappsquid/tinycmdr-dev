@@ -495,6 +495,9 @@ chat) and it works.** That is a hard rule, not an aspiration:
   download before touching the install, and applies it while leaving every host-owned path
   alone (`config.json`, `.env`, `soul.md`, notes, `tools/`, `skills/`, sessions, state,
   jobs, tasks, logs, spill, venv, `theme.toml`);
+- the one exception under `tools/` is a starter tool whose installed bytes are still a
+  version the package shipped: `tools-stock.sha256` lists every stock version, so that
+  copy is refreshed from the release while an edited tool is left alone;
 - it never shells out to git: a dirty, pruned or gitless checkout is not a blocker (that
   was the 1.0.46-1.0.48 dead end);
 - an install whose own updater is missing or broken is repaired by the **published**

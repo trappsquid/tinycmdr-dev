@@ -22,6 +22,7 @@ import pathlib
 import plistlib
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -579,6 +580,61 @@ def stage(target):
     return target
 
 
+TOOLS_STOCK = "tools-stock.sha256"
+
+
+def _stock_history(rel):
+    """sha256 of every committed version of one starter tool.
+
+    tools/ is host-owned, so an update never overwrites it - but a copy that is still
+    byte-for-byte a version the package shipped was never edited, and a fix in the
+    package is that host's fix too. This lists every stock version, so the three
+    updaters can tell "never touched" from "the agent's own file" without carrying a
+    second copy. git is a convenience, never a requirement: a build from a tarball
+    lists the version it is shipping.
+    """
+    seen = set()
+    try:
+        revs = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-list", "--all", "--", rel],
+            capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return seen
+    if revs.returncode != 0:
+        return seen
+    for rev in revs.stdout.split():
+        try:
+            blob = subprocess.run(
+                ["git", "-C", str(ROOT), "cat-file", "blob", "%s:%s" % (rev, rel)],
+                capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if blob.returncode == 0:
+            seen.add(hashlib.sha256(blob.stdout).hexdigest())
+    return seen
+
+
+def write_stock_manifest(stage_dir):
+    """Write tools-stock.sha256: every stock version of every shipped starter tool.
+
+    Called after redaction, so the current hashes are the bytes that actually ship.
+    The file rides at the package root, NOT in tools/, because tools/ is host-owned
+    and an update must copy the manifest itself.
+    """
+    rows = []
+    for rel in sorted(r for r in SHIP if r.startswith("tools/")):
+        src = stage_dir / rel
+        if not src.is_file():
+            continue
+        hashes = _stock_history(rel)
+        hashes.add(hashlib.sha256(src.read_bytes()).hexdigest())
+        for h in sorted(hashes):
+            rows.append("%s  %s" % (h, rel))
+    (stage_dir / TOOLS_STOCK).write_text("\n".join(rows) + "\n",
+                                         encoding="utf-8", newline="\n")
+    return len(rows)
+
+
 # Secrets and personal ids get replaced rather than dropped: the docs stay
 # useful on the new host, without carrying this box's credentials or ids.
 PLACEHOLDER = {
@@ -1028,9 +1084,14 @@ def main():
             if len(files) > 8:
                 print(f"  ... and {len(files) - 8} more")
 
-        # The hashes are PRINTED, not shipped. They are how a build gets verified here; a
-        # manifest file in the download is one more document a reader has to decide about,
-        # and nothing in the code reads it.
+        # The starter tools are host-owned, so a fixed default reached only new installs
+        # until the updaters learned to tell stock bytes from the agent's own. The
+        # manifest is written last: its current hashes are the bytes that ship.
+        n_stock = write_stock_manifest(stage_dir)
+        print(f"stock tools: {n_stock} version hash(es) for the updaters")
+
+        # These hashes are PRINTED as a build receipt, next to the one manifest the
+        # updaters DO read (tools-stock.sha256, above).
         files = sorted(f for f in stage_dir.rglob("*") if f.is_file())
         print("  sha256 of the files that matter:")
         for rel in ("tinycmdr.py", "config.example.json", ".env.example",

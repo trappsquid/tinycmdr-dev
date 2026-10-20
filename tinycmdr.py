@@ -45303,6 +45303,29 @@ def _host_owned(rel):
                                          for p in _HOST_OWNED_PREFIXES)
 
 
+def _stock_tools(root):
+    """{rel: {sha256}} from the package's tools-stock.sha256.
+
+    Every version of a starter tool this project has shipped. A host-owned tools/ file
+    whose bytes are still one of them was never edited, so the package may replace it;
+    anything else is the agent's own file and is left alone.
+    """
+    out = {}
+    try:
+        text = (root / "tools-stock.sha256").read_text(encoding="utf-8",
+                                                       errors="replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+            continue
+        key = parts[-1].lstrip("*").replace("\\", "/")
+        if key.startswith("tools/"):
+            out.setdefault(key, set()).add(parts[0].lower())
+    return out
+
+
 def _disk_version():
     """VERSION as the file on disk NOW says it.
 
@@ -45549,9 +45572,12 @@ def _apply_package(root):
     copies a replaced file aside: a stamped .bak per file per update is how an install
     grows by gigabytes for no reason, and the release it came from stays downloadable.
     Host state (config.json, .env, sessions/, notes, tools/, skills/) is simply not in
-    the package, so it cannot be touched by construction.
+    the package, so it cannot be touched by construction - except a starter tool whose
+    installed bytes are still one the package shipped (tools-stock.sha256): that copy
+    was never edited, and a fix under it belongs on this host too.
     """
     written, skipped = [], []
+    stock = _stock_tools(root)
     for src in sorted(root.rglob("*")):
         if not src.is_file():
             continue
@@ -45564,11 +45590,18 @@ def _apply_package(root):
         except OSError:
             continue
         # A host-owned path is only ever SEEDED: an existing one is the operator's (or the
-        # agent's own tool) and is left exactly as it is. This is the whole per-host set,
-        # not just soul.md.
+        # agent's own tool) and is left exactly as it is. The narrow exception is a tool
+        # whose bytes still match a stock version the package lists - the agent never
+        # edited it, so leaving it would strand a fixed default on new installs only.
         if _host_owned(rel) and dest.exists():
-            skipped.append(rel.as_posix())
-            continue
+            key = rel.as_posix()
+            try:
+                replaceable = key in stock and _sha256(dest) in stock[key]
+            except OSError:
+                replaceable = False
+            if not replaceable:
+                skipped.append(key)
+                continue
         old = dest.read_bytes() if dest.exists() else None
         if old == new:
             continue
@@ -45585,8 +45618,10 @@ def _package_differs(root):
     loop killed by disk-full, an indexer holding a file open) was told "already up to
     date" for ever, and the one command that repairs it refused to run.
     Same skip rules as _apply_package: an existing host-owned destination is the
-    operator's own file and never counts as a difference.
+    operator's own file and never counts as a difference - unless its bytes are a
+    stock copy the package lists, which _apply_package would refresh.
     """
+    stock = _stock_tools(root)
     for src in sorted(root.rglob("*")):
         if not src.is_file():
             continue
@@ -45599,7 +45634,13 @@ def _package_differs(root):
         except OSError:
             continue
         if _host_owned(rel) and dest.exists():
-            continue
+            key = rel.as_posix()
+            try:
+                replaceable = key in stock and _sha256(dest) in stock[key]
+            except OSError:
+                replaceable = False
+            if not replaceable:
+                continue
         old = dest.read_bytes() if dest.exists() else None
         if old != new:
             return True

@@ -204,16 +204,28 @@ def _body():
             (_pkg / "tinycmdr.py").write_text("new", encoding="utf-8")
             (_pkg / "install").mkdir()
             (_pkg / "install" / "x.sh").write_text("new", encoding="utf-8")
+            # A starter tool whose installed bytes are a stock version the package lists:
+            # tools/ is host-owned, but this copy was never edited, so a fix under it
+            # must reach the host; patch.py's "MINE" matches nothing and survives.
+            import hashlib
+            (_atmp / "tools" / "stock.py").write_text("OLD STOCK", encoding="utf-8")
+            (_pkg / "tools" / "stock.py").write_text("NEW STOCK", encoding="utf-8")
+            (_pkg / "tools-stock.sha256").write_text(
+                "%s  tools/stock.py\n"
+                % hashlib.sha256(b"OLD STOCK").hexdigest(), encoding="utf-8")
             _wrote, _skipped = fb._apply_package(_pkg)
             check("apply writes what the package owns",
                   (_atmp / "tinycmdr.py").read_text(encoding="utf-8") == "new"
                   and (_atmp / "install" / "x.sh").exists()
                   and "tinycmdr.py" in _wrote, str(_wrote))
-            check("...and never overwrites a host-owned file (tools/, skills/, soul.md)",
+            check("...and never overwrites an edited host-owned file (tools/, skills/, soul.md)",
                   (_atmp / "tools" / "patch.py").read_text(encoding="utf-8") == "MINE"
                   and (_atmp / "skills" / "README.md").read_text(encoding="utf-8") == "MINE"
                   and (_atmp / "soul.md").read_text(encoding="utf-8") == "my persona",
                   str(_skipped))
+            check("...but refreshes a tools/ file that is still a stock version",
+                  (_atmp / "tools" / "stock.py").read_text(encoding="utf-8") == "NEW STOCK"
+                  and "tools/stock.py" in _wrote, (_wrote, _skipped))
             (_pkg / "skills" / "RULES.md").write_text("seed", encoding="utf-8")
             fb._apply_package(_pkg)
             check("...while a MISSING host-owned file IS seeded",
@@ -248,6 +260,17 @@ def _body():
             (_dpkg / "tools" / "mine.py").write_text("SHIPPED", encoding="utf-8")
             check("...and a host-owned difference is not a repair (never overwritten)",
                   fb._package_differs(_dpkg) is False)
+            # ...unless the installed bytes are still a stock version the package lists:
+            # then applying it WOULD write, so a same-version repair must not say "up to
+            # date" while the fixed tool waits in the package.
+            _manifest = ("%s  tools/stock.py\n"
+                         % hashlib.sha256(b"OLD STOCK").hexdigest())
+            (_dtmp / "tools-stock.sha256").write_text(_manifest, encoding="utf-8")
+            (_dpkg / "tools-stock.sha256").write_text(_manifest, encoding="utf-8")
+            (_dtmp / "tools" / "stock.py").write_text("OLD STOCK", encoding="utf-8")
+            (_dpkg / "tools" / "stock.py").write_text("NEW STOCK", encoding="utf-8")
+            check("...but a stock tool the package carries a fix under IS a repair",
+                  fb._package_differs(_dpkg) is True)
             (_dpkg / "install").mkdir()
             (_dpkg / "install" / "x.sh").write_text("new", encoding="utf-8")
             check("...while a MISSING package file is", fb._package_differs(_dpkg) is True)

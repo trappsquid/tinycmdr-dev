@@ -96,6 +96,23 @@ try {
     $HostDirs = @("tools", "skills", "sessions", "snapshots", "logs", "spill", "venv",
                   "dist", ".git", "tmp")
     $written = 0
+    $refreshed = @()
+    # A starter tool is the package's until the host edits it: a tools/ copy whose bytes
+    # still match a version the package shipped was never edited, so the release fixes it
+    # in place. tools-stock.sha256 lists every stock version; an edited copy matches none.
+    $Stock = @{}
+    $StockFile = Join-Path $Src "tools-stock.sha256"
+    if (Test-Path $StockFile) {
+        foreach ($line in Get-Content $StockFile) {
+            if ($line -match '^([0-9a-fA-F]{64})\s+(\S.*)$') {
+                $key = $Matches[2].Replace("\", "/")
+                if (-not $Stock.ContainsKey($key)) {
+                    $Stock[$key] = New-Object System.Collections.ArrayList
+                }
+                [void]$Stock[$key].Add($Matches[1].ToLower())
+            }
+        }
+    }
     # What this host's requirements.txt held before the copy, so a release that moved
     # the dependency bounds can say so (the update.sh twin carries the same note).
     $oldReq = ""
@@ -107,8 +124,24 @@ try {
         Get-ChildItem -Recurse -File -Force | ForEach-Object {
             $rel = $_.FullName.Substring($Src.Length).TrimStart("\")
             $top = $rel.Split("\")[0]
-            if ($HostFiles -contains $rel -or $HostDirs -contains $top) { return }
             $dest = Join-Path $Dir $rel
+            if ($HostFiles -contains $rel -or $HostDirs -contains $top) {
+                if ($top -eq "tools") {
+                    if (Test-Path $dest) {
+                        $key = $rel.Replace("\", "/")
+                        $have = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
+                        if (-not ($Stock.ContainsKey($key) -and ($Stock[$key] -contains $have))) {
+                            return
+                        }
+                        if ((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() -ne $have) {
+                            $refreshed += $key
+                        }
+                    }
+                    # no destination: fall through and seed it
+                } else {
+                    return
+                }
+            }
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
             # BESIDE the file and moved over it: a kill or a full disk mid-copy left a
             # torn tinycmdr.py the next start cannot even read, with no rollback
@@ -124,6 +157,9 @@ try {
         Write-Host "update: dependencies changed in this release - reconcile the venv:"
         Write-Host "    $Dir\venv\Scripts\python.exe -m pip install -r $Dir\requirements.txt"
         Write-Host "    (a missing venv: re-run INSTALL-WINDOWS.cmd in $Dir - this file needs no download)"
+    }
+    if ($refreshed.Count -gt 0) {
+        Write-Host ("update: refreshed unedited starter tool(s): " + ($refreshed -join ", "))
     }
     Write-Host "update: $Cur -> $New ($written file(s); host-owned files left alone)"
     if ($Cur -eq $New) { Write-Host "update: already current" }
