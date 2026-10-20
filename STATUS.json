@@ -3742,6 +3742,69 @@
       },
       "detail": "The photo was a band anchored at the bottom of the stage, so a third of the chat window above it stayed dark and the photo's top edge crossed the chibi's helmet; the photo now fills the stage from top to bottom, the chat bar's fill is gone, the welcome copy carries a shadow and ivory ink so it stays readable over the photo, and a conversation dims the photo to 28% behind the transcript while the palette and panels are unchanged.",
       "gate": "tests/test_webui_page.py grades the page's stylesheet and assets"
+    },
+    {
+      "id": "decode-clamp-throttle",
+      "title": "the decode-rate clamp throttled a thinking model",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "ea3832b",
+        "expect": "untagged"
+      },
+      "detail": "The per-call output cap was sized from whatever the last call measured, so one long-thinking turn or one prefill-heavy wall sample lowered every later cap and a model that thinks hard throttled itself; the estimate is now the 75th percentile of the last eight samples, wall samples keep a window of their own until a decode-only rate exists, the floor is a quarter of llm.max_tokens capped by what fits request_timeout, the wrap-up and the mid-think retry never fall below it, and the cap is announced once per session per value instead of once per call.",
+      "gate": "tests/test_envelope.py grades the window, the floor, the wrap-up and the once-per-run line; RED on the build before it"
+    },
+    {
+      "id": "prefix-cache-headroom",
+      "title": "the prompt prefix and the KV cache, measured rather than assumed",
+      "state": "closed",
+      "anchor": {
+        "file": "docs/model-contracts.md"
+      },
+      "detail": "Closed 2026-10-19 by measurement: across four scenarios (28 timed calls, 22 consecutive request pairs) every first divergence was the trailing volatile block - the tool list grew twice and nothing else moved early - while KV reuse showed 0 cached tokens on eight consecutive growing-prompt turns and 6,752 of 6,759 on an immediately repeated identical prompt, so prefill on this hardware tracks prompt size at about 1,100 tok/s and there is no cache defect left to fix.",
+      "gate": "the prefix probe over agent.debug_dump_dir dumps plus the recorded timings; the numbers are in docs/model-contracts.md"
+    },
+    {
+      "id": "server-keeps-reasoning",
+      "title": "let an endpoint that declares the caps keep the reasoning itself",
+      "state": "closed",
+      "anchor": {
+        "file": "docs/model-contracts.md"
+      },
+      "detail": "Closed 2026-10-19 measured: sending preserve_reasoning - and the template's own preserve_thinking spelling - moved no byte of a 6,759-token prompt on the endpoint that declares supports_preserve_reasoning, so the declaration means the server keeps the trace the CLIENT sends, the client-side replay stays, and what landed is the doctor line that prints the declaration (the replay costs 23.5% of the prompt, about 1.2s of prefill per turn, and that trade is now written down)."
+    },
+    {
+      "id": "compat-mode-cost-note",
+      "title": "what the OpenAI-compatible wire costs is said out loud",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "444d001",
+        "expect": "untagged"
+      },
+      "detail": "`tinycmdr doctor` now probes the two chat paths with an empty body and names what a host that serves only `messages` loses over this wire (prompt caching, any reasoning-effort field), and prints the chat-template capabilities the endpoint declares from the /props reply the vision and slot probes already ask for; the limitations list in the docs says the same thing.",
+      "gate": "tests/test_endpoint_personas.py grades the Anthropic-messages persona (the note names both losses, the probe bills nothing) and the anonymous persona (no note)"
+    },
+    {
+      "id": "persona-payload-guards",
+      "title": "endpoint personas and a model-name census grade the request path",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4c5f94c",
+        "expect": "untagged"
+      },
+      "detail": "Nine local endpoint personas pin the request body and the reaction to each documented 400 verdict - including an anonymous endpoint whose normalized body is the golden the agnosticism claim rests on - and the same conversation run under eight model names must produce one byte-identical request, with the 13 model-family literals that remain in the code each carrying the reason it is legitimate.",
+      "gate": "tests/test_endpoint_personas.py and tests/test_name_hygiene.py, both in the Windows must tier; a name-keyed branch injected into the request path turns both red"
+    },
+    {
+      "id": "model-contracts-doc",
+      "title": "a model contract answered from facts, not from a README",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "cece439",
+        "expect": "untagged"
+      },
+      "detail": "docs/model-contracts.md records what each endpoint family demands - append-only history, which field binds thinking or effort, how the output cap behaves, where cached tokens appear, whether malformed calls are refused or ignored - plus the four cheap requests that answer whether an untested model supports something, so the answer is a persona row rather than a new branch.",
+      "gate": "tests/test_wording.py keeps it public-safe"
     }
   ]
 }
