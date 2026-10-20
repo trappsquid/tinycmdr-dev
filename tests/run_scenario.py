@@ -187,9 +187,12 @@ def instrument(fb, metrics):
             metrics["duplicates_blocked"] += 1
         return out
 
-    def drop(self, messages, marker):
+    def drop(self, messages, marker, *a, **kw):
+        # Tolerant on purpose, like `compact` above: _drop_oldest_block grew `key` and
+        # `reason`, and a wrapper pinned to two arguments killed the `long` scenario on
+        # its first shrink (measured 2026-10-19) - the rig read as "broken", not the build.
         before = list(messages)
-        ok = real_drop(self, messages, marker)
+        ok = real_drop(self, messages, marker, *a, **kw)
         if ok:
             metrics["compactions"] += 1
             metrics["blocks_dropped"] += len(before) - len(messages)
