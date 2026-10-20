@@ -2203,17 +2203,49 @@ def _call_seconds():
     return configured
 
 
+_CLAMP_FLOOR_FRACTION = 0.25    # the clamp may not throttle below a quarter of max_tokens
+_CLAMP_FLOOR_MIN = 256         # ...and never below this, whatever the arithmetic says
+
+
+def _clamp_floor(rate):
+    """The smallest output cap the time-bound clamp is allowed to set, for any rate.
+
+    256 tokens is not an answer for a model that thinks before it speaks: thinking
+    tokens ARE output tokens (measured 2026-10-19, one `long` run put 5,652 reasoning
+    characters into a single 3,522-token turn), so a floor that small turns a slow
+    measurement into a THROTTLED answer instead of a slow one. The floor is a quarter of
+    the operator's configured `llm.max_tokens`, capped by what this endpoint can
+    physically decode inside `llm.request_timeout` - past that the call dies with no
+    answer at all, which is the defect the clamp exists to prevent. Measured on the
+    operator's box the same day: request_timeout 1200s, configured 16,384, so the floor
+    is 4,096 down to 3.41 tok/s and the transport's own capacity below that.
+    """
+    try:
+        configured = int(CONFIG["llm"].get("max_tokens") or 0)
+    except (TypeError, ValueError):
+        configured = 0
+    floor = max(_CLAMP_FLOOR_MIN, int(configured * _CLAMP_FLOOR_FRACTION))
+    try:
+        transport = float(CONFIG["llm"].get("request_timeout") or 0)
+    except (TypeError, ValueError):
+        transport = 0.0
+    if transport > 0:
+        floor = min(floor, max(_CLAMP_FLOOR_MIN, int(float(rate or 0) * transport)))
+    return floor
+
+
 def _call_budget_tokens(rate, seconds):
     """Tokens one call may generate inside `seconds` at `rate` tok/s, or 0 when either is
-    unknown (no measurement yet, or the bound is disabled). The 256 floor keeps a
-    pathologically slow endpoint from being asked for a token or two."""
+    unknown (no measurement yet, or the bound is disabled). `_clamp_floor` is the floor:
+    the time bound may shrink a call, never strangle it. The wrap-up and the mid-think
+    retry take their numbers from here, so one floor covers all three."""
     try:
         rate, seconds = float(rate or 0), float(seconds or 0)
     except (TypeError, ValueError):
         return 0
     if rate <= 0 or seconds <= 0:
         return 0
-    return max(256, int(rate * seconds))
+    return max(_clamp_floor(rate), int(rate * seconds))
 
 
 def _wrapup_cap(final_cfg, window, rate, seconds):
@@ -2223,6 +2255,10 @@ def _wrapup_cap(final_cfg, window, rate, seconds):
     Without the budget a 2 tok/s box asks for 8,192 tokens in the run's LAST call - 68
     minutes, which the transport abandons at its own bound, so the final answer dies
     truncated. 0 means "let the envelope decide" when nothing else is known.
+
+    The budget can lower the configured value, but never below `_clamp_floor`: the run's
+    last answer is the worst place to deliver a throttled one. A small window still
+    wins - the quarter is a physical limit, the floor is a policy.
     """
     cap = int(final_cfg or 0)
     if window and int(window) > 0:
@@ -3594,7 +3630,11 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         # id, or a fresh slot), and sorted() would raise comparing them.
         msg["tool_calls"] = list(calls.values())
     return ({"choices": [{"message": msg, "finish_reason": finish}],
-             "usage": suse},
+             "usage": suse,
+             # Kept, as the server's own JSON response keeps it: the decode-only rate
+             # the output cap is sized from (`_decode_rate_from_timings`). Dropping it
+             # here is what made every streamed call fall back to the wall-clock rate.
+             "timings": timings},
             stats)
 
 def _record_attempt(usage, url, outcome, detail="", secs=0.0):
@@ -4008,25 +4048,82 @@ def _delegate_gate(url):
         return gate
 
 
-# The last decode rate this process MEASURED per endpoint, tokens/second, from the server's own
+# The decode rates this process MEASURED per endpoint, tokens/second, from the server's own
 # usage line. This is the only honest way to size a generation to a box: measured 2026-09-29, the
 # same endpoint served 8-57 tok/s depending on how many requests were in flight against its two
 # slots. Keyed by the server root, so the configured base_url and the request URL agree.
+# _DECODE_TPS holds the ESTIMATE (_tps_estimate below) - never the last sample.
 _DECODE_TPS = {}
+_TPS_SAMPLES = {}                # endpoint root -> decode-only samples, oldest first
+_TPS_WALL = {}                   # endpoint root -> wall-clock samples (prefill included)
+_TPS_SAMPLE_WINDOW = 8           # bound at birth: four contention cycles, nothing older
 _TPS_PERSIST_TTL = 24 * 3600.0   # how long a rate measured by an EARLIER run is trusted
 _TPS_NOTE_AT = {}                # endpoint root -> when the rate was last written to disk
 _TPS_NOTE_EVERY = 60.0           # the state file is not rewritten on every call
 
+_CLAMP_ANNOUNCED = set()       # (session, cap) already logged: the clamp binding is one
+_CLAMP_ANNOUNCED_MAX = 512     # sentence per run, not one per call (837 lines in three
+                               # weeks was the report, not the bug)
+
+
+def _tps_estimate(samples):
+    """The operating rate: the 75th percentile of the recent samples, not the last call.
+
+    The clamp sizes the NEXT call from this number, and one slow sample is enough to
+    throttle a thinking model - thinking tokens are output tokens, so a long-thinking
+    turn (or the second request sharing a two-slot box) reads as "this endpoint is slow"
+    and the next call is capped at what THAT turn managed. Measured 2026-10-19 on the
+    operator's own box: 35 tok/s decoding while the number in its state file said 4.4 and
+    one call's said 13.5, and the resulting `capped at` line appears 837 times in three
+    weeks of its log. A high percentile keeps the bound in the direction that costs only
+    wall clock (an over-estimate makes one call longer and the transport catches it) and
+    stops it costing answer quality. The index is integer arithmetic - ceil(0.75 x n) - 1
+    over the sorted samples - so this stays correct for n = 1.
+    """
+    v = sorted(float(s) for s in (samples or ()) if float(s) > 0)
+    if not v:
+        return 0.0
+    return v[min(max((3 * len(v) + 3) // 4 - 1, 0), len(v) - 1)]
+
+
+def _decode_rate_from_timings(timings, completion=0):
+    """Decode tokens/second out of an endpoint's own `timings` block, or 0 when it says
+    nothing.
+
+    `predicted_per_second` is the server's decode-only rate; the wall-clock rate is not a
+    substitute, because prefill rides in it. Measured 2026-10-19 on the operator's
+    2-slot box: prompts of 5.5-19.5k tokens cost 8.3-24.3 s of prefill per call while
+    decoding ran at 34-38 tok/s, so completion-tokens-over-wall-seconds reported 13.5 -
+    and that number is what sized every later call's output cap. llama.cpp and vLLM put
+    this block on the plain JSON response as well as on a stream's last chunk, so both
+    wires can be asked. `predicted_ms` is the fallback for a server that reports the
+    timings without the rate.
+    """
+    if not isinstance(timings, dict):
+        return 0.0
+    rate = 0.0
+    try:
+        rate = float(timings.get("predicted_per_second") or 0)
+        if rate <= 0:
+            ms = float(timings.get("predicted_ms") or 0)
+            if ms > 0 and int(completion or 0) > 0:
+                rate = int(completion) / (ms / 1000.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return rate if rate > 0 else 0.0
+
 
 def decode_rate(url=None):
-    """The decode rate last measured for this endpoint, or 0 when nothing is known.
+    """The decode rate to size this endpoint's calls by, or 0 when nothing is known.
 
-    The in-memory number is the current process's own measurement. On a miss it adopts
-    what the PREVIOUS process wrote into the endpoint-facts store, bounded by
-    _TPS_PERSIST_TTL: otherwise a restart on a 2 tok/s box would ask for the configured
-    16,384-token cap on its first call, which the transport abandons at its own bound
-    and the answer dies truncated. A stale rate only mis-sizes one call - the first
-    response measures again and replaces it.
+    The in-memory number is the ESTIMATE over this process's recent samples
+    (`_tps_estimate`), not its last measurement. On a miss it adopts what the PREVIOUS
+    process wrote into the endpoint-facts store, bounded by _TPS_PERSIST_TTL: otherwise a
+    restart on a 2 tok/s box would ask for the configured 16,384-token cap on its first
+    call, which the transport abandons at its own bound and the answer dies truncated. A
+    stale rate only mis-sizes one call - the first response measures again. The adopted
+    number seeds the sample window so the first few calls of a new process are not
+    sized by one sample, which is the same strangling the percentile exists to stop.
     """
     base = url or CONFIG["llm"].get("base_url")
     root = _endpoint_root(base)
@@ -4040,32 +4137,55 @@ def decode_rate(url=None):
         ent = _endpoint_facts(base)
         tps = float(ent.get("tps") or 0)
         at = float(ent.get("tps_at") or 0)
+        kind = str(ent.get("tps_kind") or "decode")
     except Exception:                                        # noqa: BLE001 - no store = no rate
         return 0.0
     if tps > 0 and at > 0 and time.time() - at <= _TPS_PERSIST_TTL:
         _DECODE_TPS[root] = tps
+        # Seed the window of the kind that was measured, so a rate that included prefill
+        # is not re-borne as a decode rate - and so the first calls of a new process are
+        # not sized by a single sample.
+        (_TPS_WALL if kind == "wall" else _TPS_SAMPLES)[root] = [tps]
         return tps
     return 0.0
 
 
-def _note_decode_rate(url, tps):
-    """Remember a measured decode rate: in memory for the next call, on disk for the next
-    PROCESS. The disk write is bounded to once per minute per endpoint - this runs on
-    every LLM call, and the endpoint-facts store is a read-modify-write under the lane
-    lock."""
+def _note_decode_rate(url, tps, wall=False):
+    """Remember a measured rate, and return the estimate the next call is sized from.
+
+    The sample joins this endpoint's window (bounded at birth to _TPS_SAMPLE_WINDOW) and
+    what is kept - in memory and on disk - is the PERCENTILE over that window, never the
+    sample itself. `wall=True` marks a completion-tokens-over-wall-seconds sample, which
+    includes prefill: those live in a window of their own and are used only while this
+    endpoint has never reported a decode-only rate, so a prefill-heavy call cannot
+    overwrite the honest number. Measured 2026-10-19: before the two were separated the
+    wall sample won on EVERY streaming call - the stream noted its rate and the usage
+    accounting overwrote it a moment later - and the operator's box ran sized to 13.5
+    tok/s while its streams decoded at 34-38.
+
+    The disk copy is the estimate too, so a restart adopts a robust number, and it is
+    written at most once a minute per endpoint - this runs on every LLM call, and the
+    endpoint-facts store is a read-modify-write under the lane lock.
+    """
     try:
         tps = float(tps)
     except (TypeError, ValueError):
-        return
+        return 0.0
     if tps <= 0:
-        return
+        return 0.0
     root = _endpoint_root(url)
-    _DECODE_TPS[root] = tps
+    samples = (wall and _TPS_WALL or _TPS_SAMPLES).setdefault(root, [])
+    samples.append(tps)
+    del samples[:-_TPS_SAMPLE_WINDOW]
+    estimate = (_tps_estimate(_TPS_SAMPLES.get(root))
+                or _tps_estimate(_TPS_WALL.get(root)))
+    _DECODE_TPS[root] = estimate
     now = time.time()
-    if now - float(_TPS_NOTE_AT.get(root) or 0.0) < _TPS_NOTE_EVERY:
-        return
-    _TPS_NOTE_AT[root] = now
-    _endpoint_note(url, tps=round(tps, 1), tps_at=round(now, 1))
+    if now - float(_TPS_NOTE_AT.get(root) or 0.0) >= _TPS_NOTE_EVERY:
+        _TPS_NOTE_AT[root] = now
+        _endpoint_note(url, tps=round(estimate, 1), tps_at=round(now, 1),
+                       tps_kind=("decode" if _TPS_SAMPLES.get(root) else "wall"))
+    return estimate
 
 
 _LLAMA_EXT_ANNOUNCED = set()
@@ -22024,9 +22144,26 @@ class Agent:
         if _mc > 0 and _tps > 0:
             _bounded = _call_budget_tokens(_tps, _mc)
             if _bounded and _bounded < reply:
-                log.info("[%s] %s tok/s measured - this call is capped at %d tokens "
-                         "(%.0fs at that rate), not %d", session_key, _tps, _bounded,
-                         _mc, reply)
+                # Say WHICH measurement and WHICH bound: an operator reads this line to
+                # decide whether to raise llm.max_call_seconds, so a number the floor set
+                # must not blame the time bound, and a rate that includes prefill must not
+                # read as the endpoint's decode speed (it is the last-resort estimate).
+                _kind = ("decode-only" if _TPS_SAMPLES.get(_endpoint_root(base))
+                         else "completion over wall, includes prefill")
+                _why = (f"its floor of a quarter of llm.max_tokens, not the %.0fs bound"
+                        % _mc if _clamp_floor(_tps) > _tps * _mc
+                        else "%.0fs at that rate" % _mc)
+                _said = (session_key, _bounded)
+                if len(_CLAMP_ANNOUNCED) > _CLAMP_ANNOUNCED_MAX:
+                    _CLAMP_ANNOUNCED.clear()
+                if _said not in _CLAMP_ANNOUNCED:
+                    # Once per session per cap. The number is what the operator acts on,
+                    # and it moves when the rate estimate does - a repeated identical
+                    # sentence on every call is the 837-line log, which taught nothing.
+                    _CLAMP_ANNOUNCED.add(_said)
+                    log.info("[%s] %s tok/s measured (%s) - this call is capped at %d "
+                             "tokens (%s), not %d", session_key, _tps, _kind, _bounded,
+                             _why, reply)
                 reply = _bounded
         # Caps for the band this window falls in, before anything reads them. The
         # window-scaled defaults in mem_limit_* are the floor of this design; this is
@@ -22696,9 +22833,9 @@ class Agent:
                                                       + sstats["ttft"])
                             if sstats.get("server_tps"):
                                 usage["server_tps"] = sstats["server_tps"]
-                                # The measured rate, for the NEXT call's size: see
-                                # decode_rate and max_call_seconds.
-                                _note_decode_rate(url, sstats["server_tps"])
+                                # Noted once, where usage is accounted: the timings that
+                                # carry this number now travel with `data`, and noting it
+                                # here too would put two samples in the window per call.
                         log.info("stream %s: %d chunk(s)%s%s, first delta %s, "
                                  "%s tok/s (server), %s",
                                  url, sstats.get("deltas", 0),
@@ -23013,11 +23150,20 @@ class Agent:
                             _cached_tokens_from_usage(u)
                         _got_c = int(u.get("completion_tokens") or 0)
                         if _got_c > 0 and secs > 0:
-                            # Includes prefill, so it UNDERSTATES the decode rate - the
-                            # safe direction for a cap, and the only rate a non-streaming
-                            # endpoint ever gives (the stream's usage line names it
-                            # directly).
-                            _note_decode_rate(url, _got_c / secs)
+                            # The endpoint's own DECODE-ONLY rate when it reports one
+                            # (llama.cpp and vLLM put `timings` on the plain JSON response
+                            # as well as on the stream's last chunk, and _stream_chat keeps
+                            # it). The wall-clock rate includes prefill - measured
+                            # 2026-10-19 on a 5.5-19.5k-token prompt: 8.3-24.3 s of prefill
+                            # per call while the stream decoded at 34-38 tok/s, so
+                            # completion/wall reported 13.5 and the next call was sized by
+                            # it. A wall sample is kept, but only until this endpoint has
+                            # said how fast it decodes.
+                            _rate = _decode_rate_from_timings(data.get("timings"), _got_c)
+                            if _rate > 0:
+                                _note_decode_rate(url, _rate)
+                            else:
+                                _note_decode_rate(url, _got_c / secs, wall=True)
                     else:
                         # server didn't report usage — estimate from payload
                         est_p = self._messages_token_est(messages)

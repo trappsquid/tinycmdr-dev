@@ -978,14 +978,16 @@ window, which is exactly what the detection probe returns on a real box.
                 fb.CONFIG["llm"]["max_call_seconds"] = 300
                 fb._DECODE_TPS[_rate_key] = 2.0
                 very_slow = at_window(fb, 131072)
-                check(very_slow["reply"] == 1800,
-                      "2 tok/s: one call is 900s of generation, 1,800 tokens "
-                      f"({very_slow['reply']})")
+                check(very_slow["reply"] == 2400,
+                      "2 tok/s: the call gets the floor - a quarter of the configured "
+                      f"16,384, capped by what fits request_timeout - not 900s of a "
+                      f"pathological measurement ({very_slow['reply']})")
                 # ...and the mid-think retry is bounded by the same budget: at 2 tok/s
                 # nothing bigger than the cap that just failed fits, so no 65,536-token
                 # nine-hour retry
-                check(fb._escalation_cap(1800, 65536, 131072, 2.0, 900) == 0,
-                      "2 tok/s: the mid-think retry is refused, not run at the ceiling "
+                check(fb._escalation_cap(1800, 65536, 131072, 2.0, 900) == 2400,
+                      "2 tok/s: a call strangled to 1,800 gets ONE bigger retry at the "
+                      "floor, still nowhere near a 65,536-token nine-hour generation "
                       f"({fb._escalation_cap(1800, 65536, 131072, 2.0, 900)})")
                 check(fb._escalation_cap(16384, 65536, 131072, 30.0, 900) == 27000,
                       "30 tok/s: the retry escalates to 900s of generation (27,000) "
@@ -1000,16 +1002,21 @@ window, which is exactly what the detection probe returns on a real box.
                       "...and a window below the failed cap has no room either "
                       f"({fb._escalation_cap(16384, 65536, 12000, 30.0, 900)})")
                 # the forced wrap-up and the floor of the budget
-                check(fb._call_budget_tokens(2.0, 900) == 1800,
-                      "the budget helper is rate x seconds (2 tok/s -> 1,800)")
+                check(fb._call_budget_tokens(2.0, 900) == 2400,
+                      "the budget helper is rate x seconds, floored at a quarter of "
+                      f"llm.max_tokens as far as request_timeout allows "
+                      f"(2 tok/s x 1200s = 2,400, not 1,800: "
+                      f"{fb._call_budget_tokens(2.0, 900)})")
                 check(fb._call_budget_tokens(0, 900) == 0
                       and fb._call_budget_tokens(30.0, 0) == 0,
                       "...and 0 when either side is unknown")
                 check(fb._call_budget_tokens(0.1, 900) == 256,
-                      "...with a 256-token floor for a pathological endpoint")
-                check(fb._wrapup_cap(8192, 131072, 2.0, 900) == 1800,
-                      "the forced wrap-up takes the SAME budget, not its 8,192 "
-                      f"({fb._wrapup_cap(8192, 131072, 2.0, 900)})")
+                      "...with the 256-token floor kept when even the transport's own "
+                      "capacity is below it (0.1 tok/s x 1200s = 12) "
+                      f"({fb._call_budget_tokens(0.1, 900)})")
+                check(fb._wrapup_cap(8192, 131072, 2.0, 900) == 2400,
+                      "the forced wrap-up takes the SAME budget, floor included, not its "
+                      f"8,192 ({fb._wrapup_cap(8192, 131072, 2.0, 900)})")
                 check(fb._wrapup_cap(8192, 6000, 0, 0) == 1500,
                       "...and still the window's quarter on a small box "
                       f"({fb._wrapup_cap(8192, 6000, 0, 0)})")
@@ -1032,12 +1039,143 @@ window, which is exactly what the detection probe returns on a real box.
                       "...unless it is older than the trust window, where the first "
                       f"call measures again ({fb.decode_rate(_url)})")
                 fb._DECODE_TPS.clear()
+                (getattr(fb, "_TPS_SAMPLES", {}) or {}).clear()
+                (getattr(fb, "_TPS_WALL", {}) or {}).clear()
                 fb._TPS_NOTE_AT.clear()
                 fb._note_decode_rate(_url, 3.0)
                 check(fb._DECODE_TPS.get(fb._endpoint_root(_url)) == 3.0,
                       "a fresh measurement is held in memory for the next call")
+                # What a cold start adopts is the window's FIRST sample, not its history.
+                _ur = fb._endpoint_root(_url)
+                fb._endpoint_note(_url, tps=7.5, tps_at=fb.time.time(), tps_kind="decode")
+                fb._DECODE_TPS.clear()
+                (getattr(fb, "_TPS_SAMPLES", {}) or {}).clear()
+                fb._ENDPOINT_FACTS["loaded"] = False
+                fb._TPS_NOTE_AT[_ur] = fb.time.time()
+                check(abs(fb.decode_rate(_url) - 7.5) < 1e-6,
+                      "the stored rate is adopted on a cold start and seeds the window "
+                      f"({fb.decode_rate(_url)})")
+                for _ in range(7):
+                    fb._note_decode_rate(_url, 30.0)
+                check(fb._DECODE_TPS.get(_ur) == 30.0,
+                      "a box that then serves seven fast calls is believed, because "
+                      "under-estimating is what costs answer quality "
+                      f"({fb._DECODE_TPS.get(_ur)})")
+                for _ in range(7):
+                    fb._note_decode_rate(_url, 2.0)
+                check(fb._DECODE_TPS.get(_ur) == 2.0,
+                      "...and one fast sample inside seven slow ones is not "
+                      f"({fb._DECODE_TPS.get(_ur)})")
+
+                # --- one slow turn must not strangle the NEXT call ----------------------
+                # Measured 2026-10-19 on the operator's own box: its streams decoded at
+                # 34-38 tok/s while the number sizing every call said 13.5, then 4.4 -
+                # completion tokens over wall seconds, which carries the prefill
+                # (8.3-24.3 s on a 5.5-19.5k-token prompt) - and it OVERWROTE the
+                # stream's decode-only rate a moment after being recorded. `capped at`
+                # fired 837 times in three weeks on a box that was never slow. Guarded
+                # through getattr/try so a build without the fix FAILS these checks
+                # instead of crashing on a missing symbol (a crash is not a verdict).
+                _rt = fb._endpoint_root(fb.CONFIG["llm"]["base_url"])
+                fb._TPS_NOTE_AT[_rt] = fb.time.time()      # keep this off the disk
+                _est = getattr(fb, "_tps_estimate", None)
+                check(callable(_est) and _est([4.0, 34.0, 35.0]) == 35.0
+                      and _est([4.0, 4.0, 4.0, 4.0, 4.0, 4.0, 35.0, 35.0]) == 4.0
+                      and _est([9.0]) == 9.0 and _est([]) == 0.0,
+                      "the operating rate is the 75th percentile of recent samples: one "
+                      "slow call is ignored, six of eight are not "
+                      f"({_est([4.0, 34.0, 35.0]) if callable(_est) else 'no _tps_estimate'})")
+                fb._DECODE_TPS.clear()
+                (getattr(fb, "_TPS_SAMPLES", {}) or {}).clear()
+                (getattr(fb, "_TPS_WALL", {}) or {}).clear()
+                fb._note_decode_rate(fb.CONFIG["llm"]["base_url"], 35.0)
+                _after_fast = at_window(fb, 131072)["reply"]
+                fb._note_decode_rate(fb.CONFIG["llm"]["base_url"], 4.0)   # the long think
+                third = at_window(fb, 131072)["reply"]
+                check(_after_fast == 16384 and third == 16384,
+                      "three calls - fast, one reasoning-heavy turn measured at 4 tok/s, "
+                      "the next call: the third is NOT sized by the worst sample "
+                      f"(fast {_after_fast}, third {third}, configured 16384)")
+                fb._DECODE_TPS.clear()
+                (getattr(fb, "_TPS_SAMPLES", {}) or {}).clear()
+                (getattr(fb, "_TPS_WALL", {}) or {}).clear()
+                for _ in range(3):
+                    fb._note_decode_rate(fb.CONFIG["llm"]["base_url"], 4.0)
+                check(at_window(fb, 131072)["reply"] == 4096,
+                      "...while a box that is SLOW on every sample is still bounded, and "
+                      "at 4 tok/s the floor binds before the time bound does (a quarter "
+                      f"of 16,384 is 4,096 > 900s x 4 tok/s = 3,600; got "
+                      f"{at_window(fb, 131072)['reply']})")
+                # ...and it says so ONCE. The same cap on the next call is the same
+                # sentence; three weeks of the live log carried 837 of them and taught
+                # nobody anything (measured 2026-10-19). A cap that CHANGES is news, so
+                # the second rate has to be reported again.
+                import logging as _logging
+                _rec = []
+
+                class _Cap(_logging.Handler):
+                    def emit(self, record):
+                        _rec.append(record.getMessage())
+
+                _h = _Cap()
+                fb.log.addHandler(_h)
+                try:
+                    getattr(fb, "_CLAMP_ANNOUNCED", set()).clear()
+                    for _ in range(3):
+                        at_window(fb, 131072)
+                    said = [m for m in _rec if "capped at" in m]
+                    check(len(said) == 1,
+                          "a slow box says `capped at` once per run, not once per call "
+                          f"({len(said)} line(s), first: {said[:1]})")
+                    for _ in range(3):
+                        fb._note_decode_rate(fb.CONFIG["llm"]["base_url"], 12.0)
+                    at_window(fb, 131072)
+                    said2 = [m for m in _rec if "capped at" in m]
+                    check(len(said2) == 2 and str(10800) in said2[-1],
+                          "...and a cap that moved is reported again (12 tok/s of the "
+                          f"window: 10,800 tokens, not 4,096; lines now {len(said2)}: "
+                          f"{said2[-1][:110] if said2 else 'none'})")
+                finally:
+                    fb.log.removeHandler(_h)
+                    getattr(fb, "_CLAMP_ANNOUNCED", set()).clear()
+                _timings = getattr(fb, "_decode_rate_from_timings", None)
+                check(callable(_timings) and _timings({"predicted_per_second": 37.5}, 50)
+                      == 37.5 and _timings({"predicted_ms": 2000.0}, 60) == 30.0
+                      and _timings(None, 10) == 0.0 and _timings({}, 0) == 0.0,
+                      "the server's own decode-only rate is read off `timings` - both "
+                      "the rate and, for a server that only reports timings, "
+                      "completion/predicted_ms "
+                      f"({_timings({'predicted_per_second': 37.5}, 50) if callable(_timings) else 'no helper'})")
+                fb._DECODE_TPS.clear()
+                (getattr(fb, "_TPS_SAMPLES", {}) or {}).clear()
+                (getattr(fb, "_TPS_WALL", {}) or {}).clear()
+
+                def _note_wall(val, wall):
+                    try:
+                        return fb._note_decode_rate(fb.CONFIG["llm"]["base_url"], val,
+                                                    wall=wall)
+                    except TypeError:
+                        return None        # a build with one rate window: a FAIL, not a crash
+
+                check(_note_wall(35.0, False) == 35.0 and _note_wall(13.5, True) == 35.0
+                      and abs(fb.decode_rate(fb.CONFIG["llm"]["base_url"]) - 35.0) < 1e-6,
+                      "a wall-clock sample (prefill included) never overwrites a "
+                      "decode-only one "
+                      f"({fb.decode_rate(fb.CONFIG['llm']['base_url'])})")
+                fb._DECODE_TPS.clear()
+                (getattr(fb, "_TPS_SAMPLES", {}) or {}).clear()
+                (getattr(fb, "_TPS_WALL", {}) or {}).clear()
+                check(_note_wall(13.5, True) == 13.5
+                      and abs(fb.decode_rate(fb.CONFIG["llm"]["base_url"]) - 13.5) < 1e-6,
+                      "...and an endpoint that reports no decode rate at all is still "
+                      "bounded by the only number it gives "
+                      f"({fb.decode_rate(fb.CONFIG['llm']['base_url'])})")
+                # nothing this block learned may leak into the next envelope
+                fb._endpoint_note(fb.CONFIG["llm"]["base_url"], tps=0, tps_at=0)
                 fb._TPS_NOTE_AT.clear()
                 fb._DECODE_TPS.clear()
+                (getattr(fb, "_TPS_SAMPLES", {}) or {}).clear()
+                (getattr(fb, "_TPS_WALL", {}) or {}).clear()
             finally:
                 if _saved_cs is None:
                     fb.CONFIG["llm"].pop("max_call_seconds", None)
