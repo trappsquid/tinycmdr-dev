@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.35] - 2026-10-20
+
+### Fixed
+- **Kimi K3's complete turn survives the next message:** the session history kept only the answer text, so the next user message replayed an assistant turn without `reasoning_content` and K3 refused it; the history now keeps the complete assistant message, the first reply still teaches the echo, and `doctor` and `/model add` say that nothing needs setting (tests/test_endpoint_personas.py, tests/test_verbs.py).
+
 ## [1.1.34] - 2026-10-20
 
 ### Fixed
