@@ -778,7 +778,13 @@ def _suite_personas():
         check(any(messages(p["body"]) for p in rec["posts"]),
               "anthropic-messages: a real request body reached the chat path")
         mark = len(rec["posts"])
-        note = fb._messages_wire_note()
+        # Looked up, not named, so a build without the probe FAILS this row rather than
+        # crashing it.
+        note_fn = getattr(fb, "_messages_wire_note", None)
+        check(callable(note_fn),
+              "the harness can say what an endpoint that speaks only the Messages wire "
+              "costs (no `_messages_wire_note` in this build)")
+        note = note_fn() if callable(note_fn) else "absent"
         probe = rec["posts"][mark:]
         check(isinstance(note, str) and "prompt caching" in note
               and "reasoning" in note,
@@ -849,7 +855,13 @@ def _suite_personas():
         """None for the anonymous persona: it serves chat/completions, so nothing is
         lost and the doctor note must stay silent."""
         mark = len(rec["posts"])
-        note = fb._messages_wire_note(base_url)
+        # Looked up, not named: a build without the probe must FAIL this row, not crash
+        # it - a crash is not a verdict about the behaviour.
+        note_fn = getattr(fb, "_messages_wire_note", None)
+        check(callable(note_fn),
+              "the harness can say what an endpoint that speaks only the Messages wire "
+              "costs (no `_messages_wire_note` in this build)")
+        note = note_fn(base_url) if callable(note_fn) else "absent"
         probe = rec["posts"][mark:]
         check(note is None,
               "anonymous: _messages_wire_note is None for an endpoint that serves "
