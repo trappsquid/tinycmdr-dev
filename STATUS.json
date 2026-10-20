@@ -3909,10 +3909,10 @@
     {
       "id": "cut-answer-continued",
       "title": "a cut answer is continued, not delivered half",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "70b1790",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A reply that ends `finish_reason: \"length\"` with text was delivered as final, so a long answer silently stopped mid-sentence; the run asks for the rest once per turn with the partial turn it continues from still in the transcript, joins the pieces at a marked seam, and reports a second cut with the lever named.",
       "gate": "tests/test_checkin.py grades the continuation call, the kept partial turn, the marked join, the one-per-turn bound and the second cut's note"
