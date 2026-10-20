@@ -19,10 +19,10 @@
     {
       "id": "starter-tool-refresh",
       "title": "a fixed starter tool reaches an existing install",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "e645c73",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "An update never overwrites tools/ because it is the agent's own, so the console-window fix shipped in 1.1.28 reached only new installs and every updated box kept the old job wrapper and kept flashing a PowerShell window; the package now carries tools-stock.sha256 listing every stock version of each starter tool, and all three update paths refresh a tools/ file only while its bytes still match one, so an agent's edited tool is left alone.",
       "gate": "tests/test_update_script.py runs both published updaters against a fake release (the PowerShell twin on Windows) and tests/test_verbs.py grades the in-app update path."
@@ -30,10 +30,10 @@
     {
       "id": "updater-hashes-without-a-module",
       "title": "the Windows updater hashes without Get-FileHash",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "f664ea3",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The updater's checksum check called Get-FileHash, which did not resolve in the PowerShell the Windows gate ran it under, and the update stopped before it touched the install; SHA256 now comes from System.Security.Cryptography, so the checksum and the stock-tool comparison need no module autoloading.",
       "gate": "tests/test_update_script.py runs update.ps1 on Windows and grades the checksum, the update and the stock-tool refresh."
