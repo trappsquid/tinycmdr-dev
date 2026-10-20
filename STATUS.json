@@ -3746,10 +3746,10 @@
     {
       "id": "decode-clamp-throttle",
       "title": "the decode-rate clamp throttled a thinking model",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "ea3832b",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The per-call output cap was sized from whatever the last call measured, so one long-thinking turn or one prefill-heavy wall sample lowered every later cap and a model that thinks hard throttled itself; the estimate is now the 75th percentile of the last eight samples, wall samples keep a window of their own until a decode-only rate exists, the floor is a quarter of llm.max_tokens capped by what fits request_timeout, the wrap-up and the mid-think retry never fall below it, and the cap is announced once per session per value instead of once per call.",
       "gate": "tests/test_envelope.py grades the window, the floor, the wrap-up and the once-per-run line; RED on the build before it"
@@ -3776,10 +3776,10 @@
     {
       "id": "compat-mode-cost-note",
       "title": "what the OpenAI-compatible wire costs is said out loud",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "444d001",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "`tinycmdr doctor` now probes the two chat paths with an empty body and names what a host that serves only `messages` loses over this wire (prompt caching, any reasoning-effort field), and prints the chat-template capabilities the endpoint declares from the /props reply the vision and slot probes already ask for; the limitations list in the docs says the same thing.",
       "gate": "tests/test_endpoint_personas.py grades the Anthropic-messages persona (the note names both losses, the probe bills nothing) and the anonymous persona (no note)"
@@ -3787,10 +3787,10 @@
     {
       "id": "persona-payload-guards",
       "title": "endpoint personas and a model-name census grade the request path",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4c5f94c",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Nine local endpoint personas pin the request body and the reaction to each documented 400 verdict - including an anonymous endpoint whose normalized body is the golden the agnosticism claim rests on - and the same conversation run under eight model names must produce one byte-identical request, with the 13 model-family literals that remain in the code each carrying the reason it is legitimate.",
       "gate": "tests/test_endpoint_personas.py and tests/test_name_hygiene.py, both in the Windows must tier; a name-keyed branch injected into the request path turns both red"
@@ -3798,10 +3798,10 @@
     {
       "id": "model-contracts-doc",
       "title": "a model contract answered from facts, not from a README",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "cece439",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "docs/model-contracts.md records what each endpoint family demands - append-only history, which field binds thinking or effort, how the output cap behaves, where cached tokens appear, whether malformed calls are refused or ignored - plus the four cheap requests that answer whether an untested model supports something, so the answer is a persona row rather than a new branch.",
       "gate": "tests/test_wording.py keeps it public-safe"
