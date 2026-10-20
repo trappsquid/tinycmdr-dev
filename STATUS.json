@@ -3849,6 +3849,17 @@
       },
       "detail": "`reasoning replay always|auto|off` and `reasoning cap <chars>` write the policy through the same config path as every verb, `reasoning` with no argument prints the state and the commands, and `doctor` plus the `/model add` result point at it, so an operator on Mattermost, Telegram or the page changes it by typing a verb instead of finding a config key.",
       "gate": "tests/test_verbs.py grades `reasoning replay`, `reasoning cap` and the doctor line"
+    },
+    {
+      "id": "model-needs-say-so",
+      "title": "a learned model need is said on the operator's surface",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4ec5101",
+        "expect": "untagged"
+      },
+      "detail": "The request path learns per-model facts silently; each now stores a plain-language notice on the endpoint and posts it once through the chat lane, and `doctor` lists the same notes, so a user on Mattermost, Telegram or the page is told what the model needed and what the harness did instead of being handed a flag.",
+      "gate": "tests/test_retry_surface.py grades the 400 note and the once-only surface"
     }
   ]
 }
