@@ -488,6 +488,22 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
                   "...while the turn still in flight keeps it whole",
                   len(_aged[3].get("reasoning_content") or ""))
 
+            # ---- K3: the COMPLETE reasoning is the default, and 0 disables the cap
+            # K3's README requires the assistant message returned by the API to be
+            # passed back as-is, reasoning_content included; a slice is a different
+            # message. 0 means whole, and it is now the shipped default.
+            _whole = "y" * 5000
+            fb.CONFIG["llm"]["replay_reasoning_max_chars"] = 0
+            _got = fb._reasoning_for_replay({"reasoning_content": _whole})
+            check(_got == _whole,
+                  "0 replays the complete reasoning (Kimi K3's contract), not 4,000",
+                  len(_got))
+            fb.CONFIG["llm"].pop("replay_reasoning_max_chars", None)
+            _got = fb._reasoning_for_replay({"reasoning_content": _whole})
+            check(_got == _whole,
+                  "the shipped default replays the complete reasoning", len(_got))
+            fb.CONFIG["llm"]["replay_reasoning_max_chars"] = 100
+
             # ---- switch off: the field is gone
             fb.CONFIG["llm"]["replay_reasoning"] = False
             seen = []

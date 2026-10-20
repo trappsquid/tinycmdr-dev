@@ -376,12 +376,14 @@ DEFAULT_CONFIG = {
                              # the field and logs a one-time warning instead)
         # Replay assistant `reasoning_content` on history turns TO LOCAL endpoints (a
         # template rebuilds the <think> block from it, keeping the replayed prefix
-        # byte-aligned for the KV cache); a remote endpoint gets no such field. The cap
-        # bounds what a COMPLETED turn re-buys on later requests; the turn still in
-        # flight replays whole, because a sliced <think> renders a different token
-        # sequence than the server just generated and throws its cache away.
+        # byte-aligned for the KV cache); a remote endpoint gets it once it proves it
+        # takes the echo, or when replay_reasoning is "always" (Kimi K3). A COMPLETED
+        # turn replays whole by default (0): K3's contract is the complete assistant
+        # message, and a sliced <think> renders a different token sequence than the
+        # server generated. A positive max_chars is the opt-in cost bound; the turn
+        # still in flight is always whole.
         "replay_reasoning": True,
-        "replay_reasoning_max_chars": 4000,
+        "replay_reasoning_max_chars": 0,
         "fallbacks": [],   # [{"base_url": ..., "model": ..., "api_key": ...,
                            #   "alias": ..., "api_key_env": ...}]
         "allow_cloud_fallback": False,  # True = a local failure may silently
@@ -2945,8 +2947,9 @@ def _messages_for_wire(messages, url):
       replay_reasoning_max_chars renders a different token sequence than the one
       the server just generated, so the prefix KV-cache misses from the cut onward
       on every tool round of every thinking model. Older, completed turns replay
-      capped (_reasoning_for_replay) - they are stale context by then, and the cap
-      bounds what a long-lived conversation re-buys. When the echo is OFF the field
+      whole by default (_reasoning_for_replay), because Kimi K3's contract is the
+      complete assistant message; a positive replay_reasoning_max_chars bounds what
+      a long-lived conversation re-buys. When the echo is OFF the field
       is stripped everywhere (the history keeps the text unconditionally, which is
       what lets an endpoint which LATER says the field is required be served
       without replaying the turn).
@@ -3036,20 +3039,28 @@ def _cached_tokens_from_usage(u):
 
 
 def _reasoning_for_replay(msg):
-    """The capped reasoning text for ONE COMPLETED assistant turn, or "".
+    """The reasoning text for ONE COMPLETED assistant turn, or "".
 
-    This is the send-time cap for turns that are already behind a user message
-    (see _messages_for_wire): it bounds what old turns re-buy on every later
-    request. The turn still IN FLIGHT is replayed whole, never through here - a
-    <think> sliced by replay_reasoning_max_chars renders a different token
-    sequence than the server just generated (the cut shifts every later token),
-    so the prefix KV-cache misses from the cut onward on every tool round.
+    The COMPLETE text is the default. Kimi K3's own README (2026-07-21) requires the
+    assistant message returned by the API to be passed back AS-IS - `reasoning_content`
+    and `tool_calls`, not just `content` - and a sliced trace is a different message.
+    `llm.replay_reasoning_max_chars` > 0 is the opt-in cost bound; 0 (the shipped
+    default) replays whole and lets the context envelope bound the prompt. The turn
+    still IN FLIGHT is always whole, never through here - a <think> sliced by the cap
+    renders a different token sequence than the server just generated (the cut shifts
+    every later token), so the prefix KV-cache misses from the cut onward on every
+    tool round.
     """
     rc = msg.get("reasoning_content") if isinstance(msg, dict) else None
     if not isinstance(rc, str) or not rc:
         return ""
-    cap = int(CONFIG["llm"].get("replay_reasoning_max_chars") or 4000)
-    return rc[:max(0, cap)]
+    try:
+        cap = int(CONFIG["llm"].get("replay_reasoning_max_chars", 0))
+    except (TypeError, ValueError):
+        cap = 0
+    if cap <= 0:
+        return rc
+    return rc[:cap]
 
 
 def _delta_tool_calls(d):

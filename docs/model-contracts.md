@@ -12,10 +12,11 @@ behaviour that this box has not reproduced is labelled **doc**; anything else wa
 |---|---|---|---|---|---|
 | OpenAI `/chat/completions` (current) | append-only; `tool` result must follow every `tool_calls`; assistant `reasoning_content` optional | `reasoning_effort` (a level string) | `max_tokens`; truncation reports `finish_reason: "length"` | `prompt_tokens_details.cached_tokens` | well-formed |
 | OpenAI `/responses` | `input` items, append-only; no `messages` field at all | `reasoning: {effort}` | `max_output_tokens` | `response.usage.input_tokens_details.cached_tokens` | well-formed |
-| Anthropic `/v1/messages` | `system` is a top-level field, not a message; a `tool_use` block must be answered by a `tool_result` block | `thinking: {type: "enabled", budget_tokens: N}` - a token **budget**, floor 1,024 (vendor rule, **doc**) | `max_tokens` is REQUIRED; without it the request 400s | `usage.cache_read_input_tokens` (**doc**) | well-formed |
+| Anthropic `/v1/messages` | `system` is a top-level field, not a message; a `tool_use` block must be answered by a `tool_result` block; **preserved thinking binds a thinking block to the exact system+tools+messages prefix that produced it** - editing any of them before the block is a 400 (or the block is dropped in non-strict mode), so compaction, injected reminders and mid-session tool edits are the named breakers (vendor doc, 2026) | `thinking: {type: "enabled", budget_tokens: N}` - a token **budget**, floor 1,024 (vendor rule, **doc**) | `max_tokens` is REQUIRED; without it the request 400s | `usage.cache_read_input_tokens` (**doc**) | well-formed |
 | DeepSeek-class | assistant turns MUST carry `reasoning_content` back in thinking mode: missing it is a 400 naming the field; the echoed field is inert unless the paired flag (`clear_thinking: false`) rides (vendor docs) | `reasoning_effort`; thinking mode is the model's own switch | `max_tokens` | `prompt_cache_hit_tokens` (this harness reads it) | well-formed |
 | Groq-class | assistant turns must NOT carry `reasoning_content`: present is a 400 (`Unrecognized key`) | nothing portable; the server decides | `max_tokens` | `prompt_tokens_details.cached_tokens` when the server reports it | well-formed |
 | Z.AI / Fireworks-class | keeps `reasoning_content` and needs its own paired flag to make the echo mean something (`clear_thinking: false` / `reasoning_history: "preserved"`, vendor docs) | server-specific | `max_tokens` | as reported | well-formed |
+| Kimi K3 (`kimi-k3`, OpenAI- and Anthropic-compatible) | **the complete assistant message**, `reasoning_content` AND `tool_calls` passed back as-is - not just `content`; always thinking (vendor README, 2026-07-21) | `reasoning_effort` = low/high/max, default max | `max_tokens`; 1M-token context | automatic block cache, TTL 5m/1h (vendor guide, **doc**) | well-formed |
 | Mistral-class | strict about ids: a `tool_call_id` that is not exactly 9 alphanumeric characters is a 400; a dangling tool call is a 400/500 | `reasoning_effort` on the thinking models only | `max_tokens` | as reported | refuses, does not repair |
 | llama.cpp-compatible (local) | tolerant; rebuilds `<|im_start|>assistant\n<think>…</think>` from `reasoning_content` in history | template switches ride in `chat_template_kwargs` (`enable_thinking`, `preserve_thinking`); `reasoning_effort` is a template variable, not a server field | `max_tokens` / `n_predict`; `default_generation_settings.n_predict` is often `-1` (unbounded) | `usage.prompt_tokens_details.cached_tokens` AND `timings.cache_n` | tolerant: emits id-less and name-less call fragments |
 | vLLM | tolerant | server-side | `max_tokens` | only when `stream_options.include_usage` is asked for | id-less SSE fragments, no `usage` unless asked |
@@ -57,6 +58,18 @@ Readings:
 
 `tinycmdr doctor` prints what the endpoint declares (`template : the endpoint declares …`) from the
 same `/props` reply the vision and slot probes already ask for. Nothing branches on the caps.
+
+## The replay cap and Kimi K3 (2026-10-20)
+
+`llm.replay_reasoning_max_chars` shipped as 4,000, which sliced a completed assistant turn's
+`reasoning_content` before sending it back; K3's contract is the complete message, so the default is
+now 0 (replay whole, and let the context envelope bound the prompt). A positive value is the opt-in
+cost bound. A remote endpoint receives the field only after it proves it takes the echo (a 400
+naming it) or when `llm.replay_reasoning` is `"always"` - set that before the first K3 request rather
+than relying on a 400 to teach it. The two sides of the same rule: the compat wire does not return
+thinking blocks (vendor doc), so Claude-direct preserved thinking cannot bind there; the doctor note
+names the cache and reasoning-effort losses, and a translating gateway that does preserve thinking
+must keep the system prompt, tools and earlier messages byte-stable.
 
 ## Answering "does it support X" for a model nobody has tested here
 
