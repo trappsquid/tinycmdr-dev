@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.32] - 2026-10-19
+
+### Fixed
+- **A fixed starter tool reaches an existing install:** update refreshes a `tools/` copy that is still byte-identical to a version the package shipped (`tools-stock.sha256` names every stock version) and leaves an edited tool alone, so the 1.1.28 console-window fix no longer stops at new installs (tests/test_update_script.py, tests/test_verbs.py).
+
 ## [1.1.31] - 2026-10-19
 
 ### Changed

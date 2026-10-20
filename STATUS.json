@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "starter-tool-refresh",
+      "title": "a fixed starter tool reaches an existing install",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "e645c73",
+        "expect": "untagged"
+      },
+      "detail": "An update never overwrites tools/ because it is the agent's own, so the console-window fix shipped in 1.1.28 reached only new installs and every updated box kept the old job wrapper and kept flashing a PowerShell window. The package now carries tools-stock.sha256 listing every stock version of each starter tool, and update.sh, update.ps1 and the in-app update refresh a tools/ file only while its bytes still match one, so an agent's edited tool is left alone.",
+      "gate": "tests/test_update_script.py runs both published updaters against a fake release (the PowerShell twin on Windows) and tests/test_verbs.py grades the in-app update path."
+    },
+    {
       "id": "legion-links-pages",
       "title": "a cohort is another box's page, opened in its own tab",
       "state": "shipped",
