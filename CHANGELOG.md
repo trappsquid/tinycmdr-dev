@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`reasoning replay` and `reasoning cap`:** the history policy is a verb on every chat surface, `doctor` and the `/model add` result point to it, and no config key is needed (tests/test_verbs.py).
+- **The model says what it needed:** when the harness learns a per-model fact (reasoning echo, `/responses` switch, a rejected field, a stream downgrade), it posts one `Model note:` line on the chat surface and `doctor` lists the same notes, so a user never has to find a flag (tests/test_retry_surface.py).
 
 ## [1.1.35] - 2026-10-20
 

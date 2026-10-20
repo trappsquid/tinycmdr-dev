@@ -73,7 +73,10 @@ positive value is the cost bound. The session history keeps the reasoning with t
 conversation replays the complete turn on the next message with no switch. The override is a verb on
 every surface: `reasoning` prints the state, `reasoning replay always|auto|off` sets it, `reasoning
 cap <chars>` bounds it (chat writes `/reasoning replay always`; the host drops the slash). `doctor`
-prints the same state. The two sides of the same rule: the compat wire does not return thinking
+prints the same state. Whatever the harness learns about a model - the reasoning echo, the
+`/responses` switch, a field it rejected, a streaming downgrade - is also said once as a
+`Model note:` on the chat surface, and `doctor` lists the same notes; the user is never handed a
+config key. The two sides of the same rule: the compat wire does not return thinking
 blocks (vendor doc), so Claude-direct preserved thinking cannot bind there; the doctor note names the
 cache and reasoning-effort losses, and a translating gateway that does preserve thinking must keep
 the system prompt, tools and earlier messages byte-stable.

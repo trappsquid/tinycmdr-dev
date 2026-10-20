@@ -2846,6 +2846,56 @@ def _endpoint_note(url, **facts):
         log.debug("could not record endpoint facts for %s: %s", key, e)
 
 
+def _model_notice(url, key, text):
+    """Store one plain-language note about what this model needed, for the operator.
+
+    The facts are learned silently by the request path; a user cannot be expected to read
+    a log or find a config key. The note rides the endpoint's facts and
+    _surface_model_notices posts it once on the chat surface. The key makes it idempotent.
+    """
+    try:
+        ent = _endpoint_facts(url) or {}
+        notes = dict(ent.get("notices") or {})
+        if notes.get(key) == text:
+            return
+        notes[key] = text
+        _endpoint_note(url, notices=notes)
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("could not record the model note: %s", e)
+
+
+def _pending_model_notices(url):
+    ent = _endpoint_facts(url) or {}
+    notes = dict(ent.get("notices") or {})
+    said = set(ent.get("notices_said") or [])
+    return [(k, v) for k, v in notes.items() if k not in said]
+
+
+def _surface_model_notices(url, say_cb):
+    """Post each new model note once on the operator's surface; log them all.
+
+    `say_cb` is the lane's own harness-voice line (Mattermost, Telegram and the page all
+    pass one); a console run still logs it and `doctor` lists it. A user who never opens a
+    config file learns that the model needed something and what was done about it.
+    """
+    fresh = _pending_model_notices(url)
+    if not fresh:
+        return
+    for _key, _text in fresh:
+        log.info("[model] %s", _text)
+        if say_cb:
+            try:
+                say_cb("Model note: %s" % _text)
+            except Exception:                                # noqa: BLE001
+                log.debug("model note could not be posted", exc_info=True)
+    try:
+        ent = _endpoint_facts(url) or {}
+        said = sorted(set(ent.get("notices_said") or []) | {k for k, _ in fresh})
+        _endpoint_note(url, notices_said=said)
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("could not mark the model notes said: %s", e)
+
+
 def _replay_reasoning_ok(url=None):
     """Whether assistant turns may carry `reasoning_content` back to the endpoint.
 
@@ -22957,6 +23007,9 @@ class Agent:
                     if e.not_a_stream:
                         _STREAM_UNSUPPORTED.add(url)
                         stream_on = False
+                        _model_notice(url, "stream_unsupported",
+                                      "this endpoint ignored stream=true; the harness "
+                                      "turned streaming off for it - nothing to set")
                     for k in ("stream", "stream_options", "return_progress",
                               "sse_ping_interval"):
                         payload.pop(k, None)
@@ -22997,6 +23050,9 @@ class Agent:
                         # both names going out (a request naming both can 400 too).
                         payload.pop("max_tokens", None)
                         cap_field = "max_completion_tokens"
+                        _model_notice(url, "max_tokens_field",
+                                      "this endpoint requires `max_completion_tokens`; "
+                                      "the harness switched the field - nothing to set")
                         _record_attempt(usage, url, "retry",
                                         f"400 named max_tokens: {body}", secs)
                         log.warning("LLM %s rejected max_tokens with a 400 - retrying "
@@ -23016,6 +23072,10 @@ class Agent:
                             responses_escalated = True
                             _from = url
                             _endpoint_note(_from, wire="responses")
+                            _model_notice(_from, "responses_wire",
+                                          "this endpoint needs the /responses wire for "
+                                          "tools with a reasoning effort; the harness "
+                                          "switched to it - nothing to set")
                             _record_attempt(usage, _from, "retry",
                                             f"400 named tools+reasoning_effort: {body}",
                                             secs)
@@ -23045,6 +23105,17 @@ class Agent:
                         # answer per endpoint - one call once, then never again.
                         handled_reasoning_400 = True
                         _endpoint_note(url, reasoning=_r400)
+                        _model_notice(url, "reasoning_%s" % _r400, {
+                            "on": ("this endpoint requires reasoning_content back; the "
+                                   "harness keeps and replays the complete assistant "
+                                   "message - nothing to set"),
+                            "off": ("this endpoint rejects reasoning_content; the harness "
+                                    "sends history without it - nothing to set"),
+                            "none": ("this endpoint cannot take tools and a reasoning "
+                                     "effort together; the harness drops the effort for "
+                                     "it - nothing to set"),
+                        }.get(_r400, "this endpoint set a reasoning rule; the harness "
+                                     "adjusted the request - nothing to set"))
                         if _r400 == "none":
                             # Cannot have tools AND an effort: the effort goes (when the
                             # /responses escalation above applied, that already retried).
@@ -23098,6 +23169,11 @@ class Agent:
                                 # sending it to this host again.
                                 _endpoint_note(url, drop=["prompt_cache_key"])
                             dropped_optional = True
+                            _model_notice(url, "drop:" + ",".join(sorted(named)),
+                                          "this endpoint rejected %s; the harness "
+                                          "stopped sending %s - nothing to set"
+                                          % (", ".join(named),
+                                             "it" if len(named) == 1 else "them"))
                             _record_attempt(usage, url, "retry",
                                             f"400 named {', '.join(named)}: {body}",
                                             secs)
@@ -23226,6 +23302,10 @@ class Agent:
                     # none of it flipped the fact back every turn, so the echo 400 was
                     # paid again and again (off -> rc -> on -> 400 -> off ...).
                     _endpoint_note(url, reasoning="on")
+                    _model_notice(url, "reasoning_on",
+                                  "this endpoint carries reasoning; the complete "
+                                  "assistant message is kept and replayed in the turn - "
+                                  "nothing to set")
                 if usage is not None:
                     usage["calls"] = usage.get("calls", 0) + 1
                     usage["llm_secs"] = usage.get("llm_secs", 0.0) + secs
@@ -23982,6 +24062,7 @@ class Agent:
                                            cancel_event=cancel_event,
                                            on_delta=_on_delta,
                                            session_key=session_key)
+                        _surface_model_notices(CONFIG["llm"].get("base_url"), say_cb)
                     except OperatorStop as e:
                         status = "cancelled"
                         log.info("[%s] stopped by the operator during the model call: %s",
@@ -24012,6 +24093,7 @@ class Agent:
                                 cancel_event=cancel_event,
                                 on_delta=_on_delta,
                                 session_key=session_key)
+                            _surface_model_notices(CONFIG["llm"].get("base_url"), say_cb)
                         except Exception as e2:
                             status = ("infra" if isinstance(e2, InfraError)
                                       else "error")
@@ -44531,6 +44613,10 @@ def _verb_doctor():
     _replay_line, _replay_cap = _replay_reasoning_state()
     print("  reasoning : %s (cap %s) - `/reasoning` changes it"
           % (_replay_line, "whole" if _replay_cap == 0 else _replay_cap))
+    _model_notes = dict((_endpoint_facts(CONFIG["llm"].get("base_url")) or {})
+                        .get("notices") or {})
+    for _note_key in sorted(_model_notes):
+        print("  model note: %s" % _model_notes[_note_key])
 
     # The persona is invisible state: nothing else in this output says whether the agent is
     # running the shipped identity or one somebody edited here. (`update` consumes the

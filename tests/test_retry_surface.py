@@ -521,6 +521,17 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
                   "the shipped default replays the complete reasoning", len(_got))
             fb.CONFIG["llm"]["replay_reasoning_max_chars"] = 100
 
+            # ---- a learned model need is said once, on the operator surface --------
+            _nurl = "https://notes.example.com/v1"
+            fb._model_notice(_nurl, "test_note", "the model needed something")
+            said = []
+            fb._surface_model_notices(_nurl, said.append)
+            check(said == ["Model note: the model needed something"],
+                  "a learned model need is posted once on the operator surface", said)
+            said2 = []
+            fb._surface_model_notices(_nurl, said2.append)
+            check(not said2, "...and not again on the next turn", said2)
+
             # ---- switch off: the field is gone
             fb.CONFIG["llm"]["replay_reasoning"] = False
             seen = []
@@ -630,6 +641,9 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
             check(fb._replay_reasoning_ok(rejecter) is False,
                   "'unsupported' stays learned after the retry's reply carries reasoning",
                   fb._endpoint_facts(rejecter))
+            _notes = dict((fb._endpoint_facts(rejecter) or {}).get("notices") or {})
+            check(any("rejects reasoning_content" in t for t in _notes.values()),
+                  "the 400 that taught the echo also recorded the model note", _notes)
             fb.CONFIG["llm"]["base_url"], fb.AGENT.llm_url = _saved_urls
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
