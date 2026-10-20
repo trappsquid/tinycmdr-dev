@@ -3805,6 +3805,17 @@
       },
       "detail": "docs/model-contracts.md records what each endpoint family demands - append-only history, which field binds thinking or effort, how the output cap behaves, where cached tokens appear, whether malformed calls are refused or ignored - plus the four cheap requests that answer whether an untested model supports something, so the answer is a persona row rather than a new branch.",
       "gate": "tests/test_wording.py keeps it public-safe"
+    },
+    {
+      "id": "k3-complete-reasoning-replay",
+      "title": "Kimi K3's complete assistant message is replayed whole",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "31153fa",
+        "expect": "untagged"
+      },
+      "detail": "Kimi K3's README requires the assistant message returned by the API to be passed back as-is - `reasoning_content` and `tool_calls`, not just `content` - but a completed turn was sliced at `replay_reasoning_max_chars`, which shipped as 4,000 and could not be disabled because 0 was read as \"or 4,000\"; the default is now 0 (replay whole, and let the context envelope bound the prompt), a positive value remains the opt-in cost bound, and a remote endpoint still receives the field only after it proves it takes the echo or when `llm.replay_reasoning` is \"always\".",
+      "gate": "tests/test_retry_surface.py grades 0, the shipped default and the in-flight turn whole; RED on v1.1.33"
     }
   ]
 }
