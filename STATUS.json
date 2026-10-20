@@ -3904,6 +3904,17 @@
       },
       "detail": "A cut finished through `maintenance/finish-release.sh` attached the release object without waiting for the install surface's own tests, which is the check `release.sh` makes before it publishes; the tail now waits on the tree the tag points at, with the same `TINYCMDR_SKIP_PRODUCT_CI` override.",
       "gate": "pending - the next cut is the proof; `bash -n` and tests/test_contracts.py pass"
+    },
+    {
+      "id": "cut-answer-continued",
+      "title": "a cut answer is continued, not delivered half",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "70b1790",
+        "expect": "untagged"
+      },
+      "detail": "A reply that ends `finish_reason: \"length\"` with text was delivered as final, so a long answer silently stopped mid-sentence; the run asks for the rest once per turn with the partial turn it continues from still in the transcript, joins the pieces at a marked seam, and reports a second cut with the lever named.",
+      "gate": "tests/test_checkin.py grades the continuation call, the kept partial turn, the marked join, the one-per-turn bound and the second cut's note"
     }
   ]
 }
