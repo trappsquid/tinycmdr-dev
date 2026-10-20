@@ -2091,11 +2091,12 @@
     {
       "id": "secret-refusal-log-1-0-83",
       "title": "a file log that cannot write must say so",
-      "state": "open",
+      "state": "closed",
       "anchor": {
         "file": "tinycmdr.py"
       },
-      "detail": "run 10: NOT reproduced on macOS (the verb line IS written there, value redacted), but the target box is Windows and the shape has two Windows-specific mechanisms worth keeping this open for: a rollover RENAMES the log and an open handle (the running bot holds tinycmdr.log) makes the rename fail, and the QueueListener thread reports nothing when a handler raises. Both are now visible instead of silent: _LoudRotatingFileHandler falls back to a plain append when the rollover is blocked (losing the rotation is fine, losing the record is not) and writes one stderr line naming the file and the error (2026-10-06, tests/test_file_log.py). To settle it on that box: run a refused verb and look for the WARNING line, then compare tinycmdr.log against tinycmdr.log.1 - the dropped line may be in the predecessor."
+      "detail": "Settled on the Windows box (1.1.37, 2026-10-20), where the shape lives: a short verb's lines reached tinycmdr.log through the exit drain, and with the log past its 5 MB cap while a second handle held it open the rollover failed with WinError 32, one WARNING named the file and the error, the record still landed through the append fallback, and no .1 was created.",
+      "gate": "closed by measurement on the target platform; tests/test_log_config_surface.py (Windows tier) grades the blocked rollover and the dead-handle write"
     },
     {
       "id": "responses-wire-1-0-83",
