@@ -261,8 +261,9 @@ Three deliberate overrides exist, and each says so in the notes: `TINYCMDR_SKIP_
 `bash maintenance/finish-release.sh [<notes-file>] [--dry-run]` - the release body comes from the
 version's own CHANGELOG section when no file is given. `release.sh` refuses to re-enter once its tag
 exists (a published number is never rebuilt), so this is the tail on its own: build every shape,
-check it, attach it to the release on the install surface, read the result back. `--dry-run` stops
-before the two `gh release` calls.
+check it, wait for the install surface's tests on the tree the tag points at, attach it to the
+release on the install surface, read the result back. `--dry-run` stops before the two `gh release`
+calls.
 
 **Publishing the product tree alone** is a normal operation and needs no "ship it" - it is what a
 reader clones; only cutting a release number does. It is the way a workflow fix, a README fix or a
