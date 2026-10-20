@@ -64,9 +64,14 @@ same `/props` reply the vision and slot probes already ask for. Nothing branches
 `llm.replay_reasoning_max_chars` shipped as 4,000, which sliced a completed assistant turn's
 `reasoning_content` before sending it back; K3's contract is the complete message, so the default is
 now 0 (replay whole, and let the context envelope bound the prompt). A positive value is the opt-in
-cost bound. A remote endpoint receives the field only after it proves it takes the echo (a 400
-naming it) or when `llm.replay_reasoning` is `"always"` - set that before the first K3 request rather
-than relying on a 400 to teach it. The two sides of the same rule: the compat wire does not return
+cost bound. A remote endpoint receives the field once it has proved it takes the echo - a 400
+naming the field, or a reply that carries `reasoning_content`. K3 always thinks, so its first reply
+teaches the harness and a fresh conversation needs **no switch at all**; the session history keeps
+the reasoning with the answer, so the next user message replays the complete assistant turn.
+`llm.replay_reasoning: "always"` is the override for a conversation whose first reply carries none,
+and it is a chat command on every surface (`/config set llm.replay_reasoning always`), not a file
+edit. `tinycmdr doctor` and the `/model add` result say which state the endpoint is in and that
+nothing needs setting. The two sides of the same rule: the compat wire does not return
 thinking blocks (vendor doc), so Claude-direct preserved thinking cannot bind there; the doctor note
 names the cache and reasoning-effort losses, and a translating gateway that does preserve thinking
 must keep the system prompt, tools and earlier messages byte-stable.

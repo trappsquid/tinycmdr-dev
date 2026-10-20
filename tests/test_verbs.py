@@ -466,6 +466,8 @@ def _body():
         rc, out, err = call(fb, ["doctor"])
         check("doctor exits 0 on a healthy chat install", rc == 0, (rc, err[:300]))
         check("doctor says so plainly", "no problems found" in out, out[-200:])
+        check("doctor says reasoning is learned from the endpoint, not a config edit",
+              "reasoning :" in out and "nothing to set" in out, out[-600:])
         # An install that predates the page has no token; doctor is where that state is
         # named (it is a note, not a problem - the next start mints one).
         check("doctor names the page and its token state",

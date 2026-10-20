@@ -3137,6 +3137,22 @@ def _normalize_assistant_message(msg):
     return msg
 
 
+def _history_assistant(reply, text):
+    """The assistant message the SESSION keeps for the next run.
+
+    The per-run `messages` list dies with the run; `self.histories` is what the next
+    user message is built from. Kimi K3 requires the complete assistant message, so the
+    reasoning travels with the saved answer instead of being dropped at this boundary -
+    measured 2026-10-20 with a K3-shaped endpoint: the second user message replayed an
+    assistant turn without `reasoning_content` and the endpoint answered 400.
+    """
+    msg = {"role": "assistant", "content": text}
+    rc = (reply or {}).get("reasoning_content") if isinstance(reply, dict) else None
+    if isinstance(rc, str) and rc:
+        msg["reasoning_content"] = rc
+    return msg
+
+
 def _one_json_object(text):
     """The LAST complete JSON object in `text`, when more than one was accumulated.
 
@@ -24382,7 +24398,7 @@ class Agent:
                             # composed answers ride WITH the final one rather than
                             # being dropped on the floor.
                             answer = "\n\n".join(_dropped_answers + [answer])
-                        hist.append({"role": "assistant", "content": scrub(answer)})
+                        hist.append(_history_assistant(reply, scrub(answer)))
                         return scrub(answer)
 
                     # The model's own narration ("Checking what holds the lock:")
@@ -24995,6 +25011,7 @@ class Agent:
                             "UNFINISHED: <what is left, or `nothing`>\n"
                             "Then one last line `VERIFIED: ` naming what you "
                             "actually checked (or `VERIFIED: nothing`)." + hint)})
+                        reply = None
                         try:
                             # A wrap-up is ONE generation, so it is clamped the way every
                             # other call is: the window's quarter AND the same time budget
@@ -25038,7 +25055,7 @@ class Agent:
                                       else "error")
                         status = status if status != "ok" else "budget"
                         answer = _annotate_evidence(answer, muts, calls)
-                        hist.append({"role": "assistant", "content": scrub(answer)})
+                        hist.append(_history_assistant(reply, scrub(answer)))
                         if spun:
                             _why = ((f"repeated the same `{spun_tool}` call with "
                                      f"identical arguments and results {loop_stop} "
@@ -44482,6 +44499,22 @@ def _verb_doctor():
     if _declared:
         print("  template  : the endpoint declares %s" % ", ".join(_declared))
 
+    # Whether the ENDPOINT has taught this box how to replay its reasoning. This is the
+    # one model-support setting a user might be sent to config.json for; say the state
+    # here, on a surface every chat lane already has (`doctor` is a chat verb), and say
+    # that nothing needs setting when the first reply has not taught it yet.
+    _echo = str((_endpoint_facts(CONFIG["llm"].get("base_url")) or {})
+                .get("reasoning") or "")
+    if _echo == "on":
+        print("  reasoning : the endpoint's replies carry reasoning_content; the complete "
+              "assistant message is replayed (learned - nothing to set)")
+    elif _echo == "off":
+        print("  reasoning : the endpoint refused reasoning_content; history is sent "
+              "without it (learned - nothing to set)")
+    else:
+        print("  reasoning : no reply has carried reasoning_content yet; the first one "
+              "teaches the echo - nothing to set")
+
     # The persona is invisible state: nothing else in this output says whether the agent is
     # running the shipped identity or one somebody edited here. (`update` consumes the
     # release artifact - no git - and never overwrites an edited soul.md; a copy is kept
@@ -46732,6 +46765,8 @@ def _verb_model_add(opts, positional):
         print(err, file=sys.stderr)
         return 1
     print(line)
+    print("reasoning: nothing to set - the first reply (or its 400) teaches this box "
+          "whether to replay reasoning_content")
     if not opts.get("primary"):
         print("reach it with `/model %s`" % (alias or want))
     if key_env and key_env not in _env_file_keys():

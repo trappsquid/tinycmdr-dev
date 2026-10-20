@@ -32,11 +32,18 @@ The rows, in the order they grade what would hurt most:
   9. weak model      an 8,192-token window, malformed tool calls every third request,
                      and a turn cut off at finish_reason=length. The run survives with
                      an answer and the length path is pinned by what it actually does.
+ 10. Kimi K3-ish     the first reply carries reasoning_content (which teaches the echo
+                     with no configuration); a completed assistant turn must come back
+                     COMPLETE, not sliced at the old 4,000-char cap.
 
     python tests/test_endpoint_personas.py     [TINYCMDR_SRC=/path/to/other/tinycmdr.py]
 """
 import os
 import sys
+
+# K3 always thinks, and the complete assistant message must come back. Longer than the
+# old 4,000-char replay cap so a sliced turn is visible in the row.
+K3_THINK = ("I am thinking about the complete assistant message, turn after turn. " * 150)
 
 
 def _run(name, fn):
@@ -379,6 +386,27 @@ def _suite_personas():
                 else:
                     self._post(path, body, "answer")
                     self._json(self._completion("mistral says hi"))
+
+            elif persona == "k3":
+                # K3 always thinks: the reply carries reasoning_content, and every
+                # assistant history turn MUST carry the complete message back. A turn
+                # without the field is a 400; a sliced copy is accepted (the client
+                # cannot know), so the row pins the length it gets back.
+                missing = [m for m in assistants
+                           if not (isinstance(m.get("reasoning_content"), str)
+                                   and m.get("reasoning_content"))]
+                if missing:
+                    text = ("reasoning_content in the thinking mode must be passed "
+                            "back to the API")
+                    rec["last_400"] = text
+                    self._post(path, body, "400-on")
+                    self._json({"error": {"message": text,
+                                          "type": "invalid_request_error"}}, 400)
+                else:
+                    self._post(path, body, "answer")
+                    out = self._completion("k3 says hi")
+                    out["choices"][0]["message"]["reasoning_content"] = K3_THINK
+                    self._json(out)
 
             elif persona == "vllm":
                 if not path.endswith("/chat/completions"):
@@ -851,6 +879,38 @@ def _suite_personas():
               % (len(nudges), caps))
 
 
+    def row_k3(fb, base_url, rec):
+        """K3 with NO configuration: the first reply teaches the echo, and the completed
+        assistant turn must replay complete. The old 4,000-char cap fails the length."""
+        # K3 is a hosted endpoint; the stub is loopback, so override the locality test
+        # the way the DeepSeek row does - otherwise the LOCAL replay default answers
+        # and the learned-from-emission path this row grades is never exercised.
+        fb._is_local_url = lambda url=None: False
+        answer = fb.AGENT.run("k3-run", "hello")
+        check(isinstance(answer, str) and "k3 says hi" in answer,
+              "k3-ish: the run answered (%r)" % (answer,))
+        check(fb._endpoint_facts(base_url).get("reasoning") == "on",
+              "k3-ish: the reply's own reasoning_content taught the echo, no config "
+              "(%r)" % (fb._endpoint_facts(base_url).get("reasoning"),))
+        hist = fb.AGENT.histories.get("k3-run") or []
+        saved = [m for m in hist if m.get("role") == "assistant"]
+        check(bool(saved) and saved[0].get("reasoning_content") == K3_THINK,
+              "k3-ish: the session history keeps the complete reasoning for the next "
+              "message (%d of %d chars)"
+              % (len((saved[0].get("reasoning_content") or "") if saved else ""),
+                 len(K3_THINK)))
+        answer2 = fb.AGENT.run("k3-run", "and again")
+        check(isinstance(answer2, str) and "k3 says hi" in answer2,
+              "k3-ish: the second run answered (%r)" % (answer2,))
+        body = rec["posts"][-1]["body"]
+        assistants = [m for m in messages(body)
+                      if m.get("role") == "assistant" and m.get("reasoning_content")]
+        got = (assistants[0].get("reasoning_content") if assistants else "") or ""
+        check(got == K3_THINK,
+              "k3-ish: the completed assistant turn replays COMPLETE, not sliced "
+              "(%d of %d chars)" % (len(got), len(K3_THINK)))
+
+
     def row_anonymous_note(fb, base_url, rec):
         """None for the anonymous persona: it serves chat/completions, so nothing is
         lost and the doctor note must stay silent."""
@@ -886,6 +946,7 @@ def _suite_personas():
             persona("vllm", row_vllm, stream=True)
             persona("anthropic", row_anthropic)
             persona("weak", row_weak)
+            persona("k3", row_k3)
             # The anonymous module is still running; compare the doctor note to it.
             work, fb, base_url, rec, server = anon
             if fb is not None:
