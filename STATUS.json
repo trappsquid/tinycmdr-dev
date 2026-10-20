@@ -3873,6 +3873,17 @@
       "gate": "tests/test_webui_page.py grades the host in the title, the active row, the return row and the rejected non-http address"
     },
     {
+      "id": "webui-cohort-way-back-survives",
+      "title": "a cohort tab keeps the way back across a reload",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "36e2dec",
+        "expect": "untagged"
+      },
+      "detail": "The HUB row lived only in the fragment, which that page scrubs on purpose and a version-change reload discards, so one reload left the cohort stranded with no way back; the return address is kept in the tab's sessionStorage and re-validated on every load, and the cohort tab is opened with replace so its Back button reaches the cohort's own page instead of the blank tab it started as.",
+      "gate": "tests/test_webui_page.py grades the stored address, the reload that still draws the row, the rejected stored value and the tab's single history entry"
+    },
+    {
       "id": "model-profile-picker",
       "title": "a known model is pre-set when it is added",
       "state": "shipped",
