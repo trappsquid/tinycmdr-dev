@@ -170,8 +170,10 @@ const store = { fb_token: 'test-token' };
 store.removeItem = (k) => { delete store[k]; };
 globalThis.localStorage = store;
 // the page remembers a reload attempt per version in sessionStorage; a plain object
-// carries property reads and writes the same way the browser object does
+// carries property reads and writes the same way the browser object does. `removeItem`
+// is what the HUB link and an explicit empty `from` use to consume the way back.
 globalThis.sessionStorage = {};
+globalThis.sessionStorage.removeItem = (k) => { delete globalThis.sessionStorage[k]; };
 // a reload of the same tab keeps its sessionStorage: `scenario.session` is what a
 // second run of this page sees after the first run of it stored something
 Object.assign(globalThis.sessionStorage, scenario.session || {});
@@ -704,12 +706,15 @@ async function main() {
         return null;
       };
       const el = root ? find(root) : null;
+      // `meta` is a modified click (cmd/ctrl/shift): the page keeps the new-tab door
+      // for it, so the shim hands the handler the modifier the browser would.
+      const ev = { preventDefault() {}, metaKey: !!step.meta };
       if (!el) {
         errors.push('clickrow step: nothing in #' + step.id + ' matches ' + JSON.stringify(step.text));
       } else if (typeof el.onclick === 'function') {
-        await el.onclick({ preventDefault() {} });
+        await el.onclick(ev);
       } else {
-        for (const fn of el.listeners.click) { await fn({ preventDefault() {} }); }
+        for (const fn of el.listeners.click) { await fn(ev); }
       }
       for (let i = 0; i < (step.polls || 2); i++) { await tick(); }
     } else if (step.kind === 'copy') {

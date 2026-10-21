@@ -825,9 +825,12 @@ def main():
     check(has(res, "answer after the card"),
           "and the rest of the run still renders")
 
-    # -- the legion: linked boxes, each row opens that box's own page -----------------
-    # The rail is a launcher: a row is another tinycmdr page, and clicking it opens
-    # that page in a new tab. Nothing is relayed, so the stage here never changes.
+    # -- the legion: the rail IS the selector ----------------------------------------
+    # His report (2026-10-21): whatever row he picked, the centre stayed on the box
+    # that served the page - a cohort row only ever opened a new tab, PRAETORIUM did
+    # nothing, and the HUB row could point back at the page it was drawn on. A plain
+    # click now selects that box in THIS tab (its own page, token in the fragment),
+    # the stage header names what is opening, and a modified click keeps the tab door.
     cohorts = [
         {"name": "storage", "numeral": 2, "host": "storage:8790",
          "url": "http://storage:8790", "state": "ready",
@@ -836,15 +839,13 @@ def main():
          "url": "http://office:8790", "state": "silent",
          "error": "connection refused", "version": ""},
     ]
-    sc = {"runs": [], "legion_cohorts": cohorts,
-          "steps": [{"kind": "polls", "n": 3},
-                    {"kind": "clickrow", "id": "cohorts", "text": "storage",
-                     "polls": 3}]}
-    res = run_page(sc, script)
+    # before a pick: the rail names the box this page is, and the stage header does too
+    res = run_page({"runs": [], "legion_cohorts": cohorts,
+                    "steps": [{"kind": "polls", "n": 3}]}, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
     check(not res["errors"], f"the legion page runs clean ({res['errors'][:1]})")
     check(res.get("legionHidden") is False,
           "a box with cohorts shows the legion rail section")
-    names = [c["text"] for c in (res.get("cohorts") or [])]
     check(len(names) == 4 and "PRAETORIUM" in names[0] and "storage" in names[1]
           and "office" in names[2] and "ADD COHORT" in names[3],
           f"the rail pins the praetorium, one row per linked box, then ADD COHORT "
@@ -853,35 +854,67 @@ def main():
           f"the silent box wears the bad dot, numbered ({names[2]!r})")
     check("connection refused" in ((res["cohorts"][2] or {}).get("title") or ""),
           f"...and its error is one hover away ({(res['cohorts'][2] or {}).get('title')!r})")
-    check(res.get("legionOpens") == [{"name": "storage"}],
-          f"clicking a linked box asks the hub for its own address "
-          f"({res.get('legionOpens')})")
-    check(res.get("opened") == ["http://storage:8790/#token=tok-storage"
-                                "&from=http%3A%2F%2F127.0.0.1%3A8790"],
-          f"...and opens that page with its token in the fragment and this page's "
-          f"address as the way back ({res.get('opened')})")
-    check(res.get("openedHow") == ["replace"]
-          and res.get("openedHistory") == [["http://storage:8790/#token=tok-storage"
-                                            "&from=http%3A%2F%2F127.0.0.1%3A8790"]],
-          f"...replacing the blank tab it was opened in, so Back has no empty page "
-          f"behind it ({res.get('openedHow')}, {res.get('openedHistory')})")
-    check(res.get("chan") == "COMMAND CHANNEL",
-          f"the hub's own stage is untouched - the other page is a real tab "
+    check(res.get("chan") == "COMMAND CHANNEL \u00b7 harness",
+          f"the stage header names the box this page is talking to "
           f"({res.get('chan')!r})")
     check("harness" in (res.get("title") or "")
           and (res.get("title") or "").endswith("tinycmdr")
           and "active" in ((res["cohorts"][0] or {}).get("cls") or "")
           and "harness" in (names[0] or ""),
-          f"the tab and the rail name the box THIS page is "
+          f"the tab and the active row name the box THIS page is "
           f"({res.get('title')!r}, {res['cohorts'][0].get('cls')!r}, {names[0]!r})")
 
-    # -- a cohort page carries the way back to the hub that opened it ------------------
-    # His report (2026-10-20): once a cohort is linked, its page has no way back - its
-    # praetorium IS itself and the hub is not one of its cohorts. The hub now hands the
-    # new tab this page's address as `from` in the same fragment as the token, and that
-    # page draws it above PRAETORIUM as a plain link (the browser already holds the
-    # hub's cookie). Only a bare http(s) origin is accepted, so a fragment cannot put a
-    # javascript: URL in the rail.
+    # a PLAIN click selects storage: this tab moves to its page, nothing is relayed
+    sc = {"runs": [], "legion_cohorts": cohorts,
+          "steps": [{"kind": "polls", "n": 3},
+                    {"kind": "clickrow", "id": "cohorts", "text": "storage",
+                     "polls": 3}]}
+    res = run_page(sc, script)
+    check(res.get("legionOpens") == [{"name": "storage"}],
+          f"clicking a linked box asks the hub for its own address "
+          f"({res.get('legionOpens')})")
+    check(res.get("opened") == [],
+          f"...in THIS tab, not a new window ({res.get('opened')})")
+    check(res.get("href") == "http://storage:8790/#token=tok-storage"
+                              "&from=http%3A%2F%2F127.0.0.1%3A8790",
+          f"...navigating here with its token in the fragment and this page's "
+          f"address as the way back ({res.get('href')!r})")
+    check(res.get("chan") == "OPENING STORAGE \u2026",
+          f"the pick answers in the centre at once ({res.get('chan')!r})")
+    check("active" in ((res["cohorts"][1] or {}).get("cls") or "")
+          and "active" not in ((res["cohorts"][0] or {}).get("cls") or ""),
+          f"and the picked row is the selected one "
+          f"({(res['cohorts'][1] or {}).get('cls')!r}, "
+          f"{(res['cohorts'][0] or {}).get('cls')!r})")
+
+    # a MODIFIED click keeps the old door: that page in a new tab, this one untouched
+    sc = {"runs": [], "legion_cohorts": cohorts,
+          "steps": [{"kind": "polls", "n": 3},
+                    {"kind": "clickrow", "id": "cohorts", "text": "storage",
+                     "meta": True, "polls": 3}]}
+    res = run_page(sc, script)
+    check(res.get("opened") == ["http://storage:8790/#token=tok-storage"
+                                "&from=http%3A%2F%2F127.0.0.1%3A8790"],
+          f"cmd/ctrl-click still opens that page in a new tab ({res.get('opened')})")
+    check(res.get("openedHow") == ["replace"]
+          and res.get("openedHistory") == [["http://storage:8790/#token=tok-storage"
+                                            "&from=http%3A%2F%2F127.0.0.1%3A8790"]],
+          f"...replacing the blank tab it was opened in, so Back has no empty page "
+          f"behind it ({res.get('openedHow')}, {res.get('openedHistory')})")
+    check(res.get("href") == "http://127.0.0.1:8790/"
+          and res.get("chan") == "COMMAND CHANNEL \u00b7 harness",
+          f"and this page neither moves nor changes its centre "
+          f"({res.get('href')!r}, {res.get('chan')!r})")
+
+    # -- the way back: the box whose rail opened this page ----------------------------
+    # His report (2026-10-20): a linked box's page had no way back - its praetorium IS
+    # itself and the hub is not one of its cohorts. The hub hands the page this page's
+    # address as `from` in the same fragment as the token, and that page draws it above
+    # PRAETORIUM. Only a bare http(s) origin is accepted, so a fragment cannot put a
+    # javascript: URL in the rail. His report (2026-10-21): the HUB row was drawn when
+    # it led nowhere (the page itself, or a box already in the rail) and clicking it
+    # changed nothing - so it is drawn only when it leads somewhere else, and using it
+    # consumes the address instead of leaving the destination with one.
     sc = {"runs": [], "legion_cohorts": [],
           "hash": "#from=http%3A%2F%2Fhub.test%3A8790",
           "steps": [{"kind": "polls", "n": 2},
@@ -892,11 +925,11 @@ def main():
     check(len(names) == 3 and "HUB" in names[0] and "hub.test:8790" in names[0]
           and "PRAETORIUM" in names[1] and "ADD COHORT" in names[2],
           f"a page opened from a hub draws the way back above PRAETORIUM ({names})")
-    check(res.get("href") == "http://hub.test:8790",
+    check(res.get("href") == "http://hub.test:8790/#from=",
           f"...and clicking it returns to that hub ({res.get('href')!r})")
-    check((res.get("session") or {}).get("fb_from") == "http://hub.test:8790",
-          f"...and the tab keeps that address for its own later loads "
-          f"({(res.get('session') or {}).get('fb_from')!r})")
+    check(res.get("session") is not None and "fb_from" not in res["session"],
+          f"...consuming the return address, so the hub draws no row back "
+          f"({res.get('session')!r})")
     # A reload of that tab: the fragment is scrubbed on purpose and this page reloads
     # itself on a version change, so the address has to come back from the tab's
     # sessionStorage or the cohort is stranded after one reload (his report, second
@@ -908,8 +941,36 @@ def main():
     names = [c["text"] for c in (res.get("cohorts") or [])]
     check(not res["errors"] and "HUB" in (names[0] or ""),
           f"a reload of that tab still draws the way back ({names})")
-    check(res.get("href") == "http://hub.test:8790",
+    check(res.get("href") == "http://hub.test:8790/#from=",
           f"...and it still returns to the hub ({res.get('href')!r})")
+    # ...but a page that WOULD return to itself or to a box already in the rail draws
+    # no HUB row: a row that changes nothing is not a way back.
+    res = run_page({"runs": [], "hash": "#from=http%3A%2F%2F127.0.0.1%3A8790",
+                    "steps": [{"kind": "polls", "n": 2}]}, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 2 and not any("HUB" in (n or "") for n in names),
+          f"a return address naming THIS page draws no HUB row ({names})")
+    res = run_page({"runs": [], "legion_cohorts": [
+                        {"name": "hub", "numeral": 2, "host": "hub.test:8790",
+                         "url": "http://hub.test:8790", "state": "ready",
+                         "error": "", "version": "1.0.88"}],
+                    "hash": "#from=http%3A%2F%2Fhub.test%3A8790",
+                    "steps": [{"kind": "polls", "n": 2}]}, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 3 and not any((n or "").startswith("HUB") for n in names)
+          and "hub" in names[1],
+          f"a return address that is already a row in this rail draws no second one "
+          f"({names})")
+    # ...and an EXPLICIT empty `from` (the HUB link) clears a stored address, so the
+    # box you return to does not grow a row back to the page you just left.
+    res = run_page({"runs": [], "hash": "#from=",
+                    "session": {"fb_from": "http://hub.test:8790"},
+                    "steps": [{"kind": "polls", "n": 2}]}, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 2 and not any("HUB" in (n or "") for n in names)
+          and "fb_from" not in (res.get("session") or {}),
+          f"an explicit empty from clears the stored way back ({names}, "
+          f"{res.get('session')!r})")
     # ...and what is read back is held to the same rule as the fragment: a stored value
     # is a URL this page will navigate to, so it is re-validated on every load.
     res = run_page({"runs": [], "session": {"fb_from": "javascript:alert(1)"},
@@ -923,6 +984,31 @@ def main():
     names = [c["text"] for c in (res.get("cohorts") or [])]
     check(len(names) == 2 and not any("HUB" in (n or "") for n in names),
           f"a return address that is not an http(s) origin is ignored ({names})")
+
+    # -- a cohort that points at THIS page is not a box to open ------------------------
+    # His report (2026-10-21): a row named like the box he was on ("wtf is the hub, it
+    # does nothing") opened a second copy of the page and its way back pointed at
+    # itself. The server marks such a row `self`; it says so, does not navigate, and
+    # keeps the x that unlinks it.
+    self_cohorts = [{"name": "workstation", "numeral": 2, "host": "workstation:8790",
+                     "url": "http://workstation:8790", "state": "ready",
+                     "error": "", "version": "1.1.41", "self": True}]
+    res = run_page({"runs": [], "legion_cohorts": self_cohorts,
+                    "steps": [{"kind": "polls", "n": 3},
+                              {"kind": "clickrow", "id": "cohorts",
+                               "text": "workstation", "polls": 2}]}, script)
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 3 and "this box" in names[1]
+          and "remove this row" in names[1] and "self" in res["cohorts"][1]["cls"],
+          f"a row naming this page reads as this box, not a cohort ({names[1]!r})")
+    check(res.get("legionOpens") == [] and res.get("href") == "http://127.0.0.1:8790/",
+          f"...clicking it opens nothing ({res.get('legionOpens')!r}, "
+          f"{res.get('href')!r})")
+    check("workstation is this box" in (res.get("note") or {}).get("text", ""),
+          f"...and says why ({res.get('note')!r})")
+    check(res["cohorts"][1]["del"] is True and res["cohorts"][1]["edit"] is False,
+          f"...keeping the x that removes it and no pencil "
+          f"({res['cohorts'][1]!r})")
 
     # ...and a box with NO cohorts: the rail still shows - praetorium and the ADD
     # COHORT invitation - and no /api/legion read is paid

@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -164,8 +165,8 @@ def test_probe_and_overview(mod, srv, state):
     ov = mod.legion_overview()
     check(ov["cohorts"] == [{
               "name": "storage", "host": "127.0.0.1:%d" % srv.server_address[1],
-              "url": url, "state": "ready", "error": "", "version": "9.9.9",
-              "numeral": 2}],
+              "url": url, "state": "ready", "error": "", "self": False,
+              "version": "9.9.9", "numeral": 2}],
           "the overview names the row, its host, its version and its numeral",
           ov["cohorts"])
     check(ov["praetorium"]["host"] and ov["praetorium"]["version"],
@@ -185,6 +186,46 @@ def test_probe_and_overview(mod, srv, state):
           "an unreachable box reads silent with its error", row)
 
 
+def test_self_cohort(mod, srv):
+    """A row that names the page being viewed is marked self, and refused as a cohort.
+
+    His report (2026-10-21): a row pointing at the box he was already on opened a
+    second copy of the page, and its HUB row pointed at itself - a row that did
+    nothing. A cohort is another machine.
+    """
+    port = srv.server_address[1]
+    here = "127.0.0.1:%d" % port
+    url = "http://" + here
+    own_name = "http://%s:%d" % (socket.gethostname(), port)
+    mod.CONFIG["agent"]["a2a_remotes"] = {
+        "storage": {"url": url, "token_env": "LEGION_TEST_TOKEN"},
+        "me": {"url": own_name},
+    }
+    mod._LEGION_CARDS.clear()
+    # the same authority the browser used IS this page
+    rows = {r["name"]: r for r in mod.legion_overview(here)["cohorts"]}
+    check(rows["storage"]["self"] is True,
+          "a row at the page's own address is marked self", rows["storage"])
+    # the box's own host name is caught without a Host too
+    check(rows["me"]["self"] is True,
+          "and so is one under this box's own host name", rows["me"])
+    # ...while a loopback cohort on another port is another door, not this page
+    rows = {r["name"]: r for r in mod.legion_overview("127.0.0.1:%d" % (port + 1))["cohorts"]}
+    check(rows["storage"]["self"] is False,
+          "a loopback cohort on another port is not this page", rows["storage"])
+    # ADD/UPDATE refuse the same address before anything is written
+    before = json.dumps(mod.CONFIG.get("agent", {}).get("a2a_remotes"), sort_keys=True)
+    payload, code = mod.legion_add_remote("me2", url, "tok-self-suite-0123456789", here)
+    check(code == 400 and "this box" in (payload.get("error") or ""),
+          "ADD COHORT refuses the page's own address", (code, payload))
+    payload, code = mod.legion_add_remote("me3", own_name, "tok-self-suite-0123456789",
+                                          "127.0.0.1:1")
+    check(code == 400 and "this box" in (payload.get("error") or ""),
+          "...and this box's own host name", (code, payload))
+    check(json.dumps(mod.CONFIG.get("agent", {}).get("a2a_remotes"), sort_keys=True) == before,
+          "...with nothing written", mod.CONFIG.get("agent", {}).get("a2a_remotes"))
+
+
 def main():
     mod, _stage = stage_module("tinycmdr_legion", "links")
     srv, state = make_card_peer()
@@ -192,6 +233,7 @@ def main():
         test_cohort_list(mod)
         test_egress_warning(mod)
         test_probe_and_overview(mod, srv, state)
+        test_self_cohort(mod, srv)
     finally:
         srv.shutdown()
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all legion checks passed'}")

@@ -31567,6 +31567,38 @@ def _legion_host(url):
         return str(url)
 
 
+def _legion_same_page(url, page_host=""):
+    """True when `url` is the page being viewed: the authority the browser used, or a
+    name this box answers to.
+
+    A self entry is not a cohort. Clicking it opened a second copy of the page it was
+    already on, and the HUB row on that copy pointed at itself, so the rail read as a
+    selector that never moved (reported 2026-10-21). Loopback is judged ONLY by the
+    authority compare: from a LAN browser 127.0.0.1 is that browser's machine, and a
+    page served on loopback is already named by the Host it was reached with.
+    """
+    try:
+        parts = urllib.parse.urlsplit(str(url))
+        host = (parts.hostname or "").strip().lower().rstrip(".")
+        port = parts.port
+    except Exception:                                            # noqa: BLE001
+        return False
+    if not host:
+        return False
+    try:
+        here_host, here_port = _web_authority(page_host)
+    except Exception:                                            # noqa: BLE001
+        here_host, here_port = "", ""
+    if here_host and host == here_host and str(port or "") == here_port:
+        return True
+    if host in ("127.0.0.1", "localhost", "::1") or host.startswith("127."):
+        return False
+    try:
+        return host in _web_local_hosts()
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
 def _legion_cgnat(host):
     """True for 100.64.0.0/10 - the CGNAT range the recommended overlay hands out.
 
@@ -31659,11 +31691,12 @@ def _legion_census_loop():
         time.sleep(LEGION_CENSUS_SECONDS)
 
 
-def legion_add_remote(name, url, token):
+def legion_add_remote(name, url, token, page_host=""):
     """(payload, status) for ADD COHORT: write a box the operator runs into this
     hub's own config, by URL + token - the values they would otherwise edit in by
     hand. Nothing is written until the card is read, so a name, URL or token that
-    cannot work is refused before it touches disk."""
+    cannot work is refused before it touches disk. `page_host` is the Host the
+    browser used, so an address naming this page is refused as a self-link."""
     name = str(name or "").strip()
     url = str(url or "").strip().rstrip("/")
     token = str(token or "")
@@ -31679,6 +31712,9 @@ def legion_add_remote(name, url, token):
     if not url.startswith(("http://", "https://")) \
             or not urllib.parse.urlsplit(url).netloc:
         return {"error": "an http:// or https:// address is required"}, 400
+    if _legion_same_page(url, page_host):
+        return {"error": "that address is this box's own page - a cohort is another "
+                         "machine. Enter the other box's address."}, 400
     if not token.strip():
         return {"error": "a token is required - the cohort's page token (the "
                          "TINYCMDR_WEB_TOKEN in its .env)"}, 400
@@ -31778,7 +31814,7 @@ def legion_remove_remote(name):
             "token_removed": token_removed}, 200
 
 
-def legion_update_remote(name, url, token):
+def legion_update_remote(name, url, token, page_host=""):
     """(payload, status) for RECONFIGURE COHORT: change a box's address or token.
 
     ADD COHORT had no edit path, so a rotated page token on a peer left the hub with
@@ -31798,6 +31834,9 @@ def legion_update_remote(name, url, token):
     if not url.startswith(("http://", "https://")) \
             or not urllib.parse.urlsplit(url).netloc:
         return {"error": "an http:// or https:// address is required"}, 400
+    if _legion_same_page(url, page_host):
+        return {"error": "that address is this box's own page - a cohort is another "
+                         "machine. Enter the other box's address."}, 400
     supplied = str(token or "")
     token_env = str(entry.get("token_env") or "")
     if not token_env and supplied:
@@ -31869,7 +31908,7 @@ def legion_update_remote(name, url, token):
             "card": {"name": card.get("name"), "version": card.get("version")}}, 200
 
 
-def _legion_row(name):
+def _legion_row(name, page_host=""):
     """One cohort as the rail reads it: LOCAL state only."""
     card = _LEGION_CARDS.get(name) or {}
     err = str(card.get("error") or "")
@@ -31878,16 +31917,19 @@ def _legion_row(name):
     return {"name": name, "host": _legion_host(entry.get("url") or ""),
             "url": str(entry.get("url") or ""),
             "state": state, "error": err,
+            "self": _legion_same_page(entry.get("url") or "", page_host),
             "version": str((card.get("card") or {}).get("version") or "")}
 
 
-def legion_overview():
+def legion_overview(page_host=""):
     """What the rail needs, from LOCAL state only.
 
     No cohort is contacted on this path (the census thread pays those calls on its
-    own clock), so a hung box cannot stall the page's refresh.
+    own clock), so a hung box cannot stall the page's refresh. `page_host` is the
+    Host the browser used: a row naming that page is marked `self`, so the rail can
+    say so instead of offering a link to where the reader already is.
     """
-    rows = [(_legion_row(name), name) for name in legion_cohorts()]
+    rows = [(_legion_row(name, page_host), name) for name in legion_cohorts()]
     for i, (row, _name) in enumerate(rows):
         row["numeral"] = i + 2            # the hub itself is Cohort I
     return {"cohorts": [row for row, _n in rows],
@@ -32494,6 +32536,14 @@ function refreshTitle(){
  document.title=(pageDown?'CHAT LANE DOWN - ':'')
   +(pageHost?pageHost+' \u00b7 ':'')+'tinycmdr';
 }
+// The stage header names the BOX this page is talking to, so a rail full of boxes
+// cannot leave the centre reading like a channel with no owner (his report,
+// 2026-10-21: the centre stayed on the old box after a rail pick). `opening` is the
+// row being selected right now - the click answers in the centre before the page moves.
+function paintChan(opening){
+ if(opening){chanEl.textContent='OPENING '+String(opening).toUpperCase()+' \u2026';return;}
+ chanEl.textContent='COMMAND CHANNEL'+(pageHost?' \u00b7 '+pageHost:'');
+}
 // The token comes from the link first (the installer prints one that contains it), then from
 // last time. The old prompt said "leave empty if loopback", which was wrong the moment an
 // install HAD a token: empty means unauthorized, and nothing said where the token was.
@@ -32518,12 +32568,19 @@ try{
  // and this page reloads itself when the server's version differs, so an address that
  // lived only in the fragment vanished at the first reload and the cohort was left with
  // no way out. sessionStorage is per tab and per origin, so it ends with the tab - the
- // right lifetime for "the box that opened this one". A fragment that arrives wins and
- // is re-stored; an invalid one leaves the stored address alone, so a crafted fragment
- // cannot replace or clear the row.
- pageFrom=safeOrigin(frag.get('from'));
- if(pageFrom){try{sessionStorage.fb_from=pageFrom;}catch(e){}}
- else{try{pageFrom=safeOrigin(sessionStorage.fb_from||'');}catch(e){pageFrom='';}}
+ // right lifetime for "the box that opened this one".
+ // An explicit `from` in the fragment decides this tab's way back, even when it is
+ // EMPTY: the HUB row links with `#from=` so returning to a box clears the address
+ // the tab inherited, instead of that box drawing a HUB row back to the page you just
+ // left (the ping-pong the operator hit on 2026-10-21). A fragment without the key
+ // leaves the stored address alone, so a reload keeps it.
+ if(frag.has('from')){
+  pageFrom=safeOrigin(frag.get('from'));
+  try{if(pageFrom)sessionStorage.fb_from=pageFrom;else sessionStorage.removeItem('fb_from');}
+  catch(e){}
+ }else{
+  try{pageFrom=safeOrigin(sessionStorage.fb_from||'');}catch(e){pageFrom='';}
+ }
  if(pageFrom){
   try{pageFromHost=new URL(pageFrom).host;}catch(e){pageFromHost=pageFrom;}
  }
@@ -32959,11 +33016,12 @@ function renderRail(){
 }
 // ------------------------------------------------------------------- the legion
 // The linked boxes. A cohort is another tinycmdr page on the LAN: this rail lists
-// the ones this host was configured with, and clicking one opens that box's OWN
-// page in a new tab with its token in the URL fragment - the same page a browser
-// would get by navigating there, with every feature. Nothing is relayed. ADD COHORT
-// and the pencil are the operator's own writes into agent.a2a_remotes from the
-// authenticated page; the x takes an entry out again.
+// the ones this host was configured with, and clicking one SELECTS that box - this
+// tab becomes its OWN page, with its token in the URL fragment, so the centre is
+// that box's conversation and every feature is the page itself. Nothing is relayed.
+// A cmd/ctrl/shift click keeps the page in a new tab instead. ADD COHORT and the
+// pencil are the operator's own writes into agent.a2a_remotes from the authenticated
+// page; the x takes an entry out again.
 const NUMERALS=['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'];
 const SHIELD_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>';
 function legionOf(name){return legion.cohorts.filter(function(c){return c.name===name;})[0]||null;}
@@ -32971,6 +33029,13 @@ function dotFor(state){
  const d=document.createElement('span');
  d.className='dot'+(state==='silent'?' bad':'');
  return d;
+}
+function cohortOrigin(c){
+ try{return new URL(String(c.url||'')).origin;}catch(e){return '';}
+}
+function cohortAt(origin){
+ for(const c of legion.cohorts){if(c&&cohortOrigin(c)===origin)return true;}
+ return false;
 }
 function renderLegion(){
  // The rail is ALWAYS drawn: with no cohorts it holds the praetorium row and the
@@ -32980,11 +33045,11 @@ function renderLegion(){
  legionStatEl.textContent=n?n+(n===1?' linked box':' linked boxes'):'none yet';
  cohortsEl.textContent='';
  const rows=[];
- if(pageFrom){
-  // Opened from another box's rail: that box is the way back. Its cookie is already
-  // in this browser (the hub page is where the click happened), so a plain link works
-  // and no token rides a URL. Drawn FIRST, above the praetorium, because it is the
-  // navigation a reader reaches for after opening a cohort.
+ // The way back is drawn only when it leads SOMEWHERE ELSE and is not already a row
+ // in this rail: a return address that names this page (or one of the boxes listed
+ // below) made a HUB row that reloaded the page it was on, which is what the rail
+ // looked like doing nothing (his report, 2026-10-21).
+ if(pageFrom&&pageFrom!==location.origin&&!cohortAt(pageFrom)){
   rows.push({name:'hub',back:true,host:pageFromHost,
    state:'ready',numeral:0,version:'',error:''});
  }
@@ -32995,8 +33060,10 @@ function renderLegion(){
  for(const c of rows){
   const local=c.name==='praetorium';
   const back=!!c.back;
+  const self=!!c.self;
   const row=document.createElement('div');
-  row.className='campaign-item cohort '+(local?'local active ':'')+(back?'hub ':'');
+  row.className='campaign-item cohort '+(local?'local active ':'')+(back?'hub ':'')
+   +(self?'self ':'');
   row.dataset.key=c.name;
   if(local)row.setAttribute('aria-current','page');
   const ic=document.createElement('span');ic.className='campaign-icon';ic.innerHTML=SHIELD_ICON;
@@ -33011,38 +33078,62 @@ function renderLegion(){
   if(back){
    meta.textContent='return \u00b7 '+hostTxt;
    row.title='go back to '+pageFrom;
+  }else if(self){
+   meta.textContent='this box \u00b7 remove this row';
+   row.title='this address is the page you are on - the \u00d7 removes it';
   }else{
    meta.textContent='Cohort '+(NUMERALS[(c.numeral||2)-1]||c.numeral)
     +(local?' \u00b7 this host'+(hostTxt&&hostTxt!=='this host'?' \u00b7 '+hostTxt:'')
            :' \u00b7 '+hostTxt)
     +(c.version?' \u00b7 v'+c.version:'');
-   if(local)row.title='this page is served by '+(hostTxt||'this box');
+   if(local)row.title='you are talking to this box'+(hostTxt?' \u00b7 '+hostTxt:'');
   }
   m.appendChild(meta);
   tx.appendChild(m);row.appendChild(tx);
   if(back){
-   row.onclick=function(){location.href=pageFrom;};
+   row.onclick=function(){
+    try{sessionStorage.removeItem('fb_from');}catch(e){}
+    // `#from=` is an explicit EMPTY return address: the destination clears the one
+    // it stored, so the box you return to does not grow a row back to the page you
+    // just left (the hub/cohort ping-pong, his report 2026-10-21).
+    location.href=pageFrom+'/#from=';
+   };
    cohortsEl.appendChild(row);
    continue;
   }
   if(!local){
-   row.title="open "+c.name+"'s page in a new tab";
-   const edit=document.createElement('button');
-   edit.type='button';edit.className='campaign-edit';edit.id='cohort-edit-'+c.name;
-   edit.title='reconfigure this cohort (address or page token)';
-   edit.setAttribute('aria-label','Reconfigure '+c.name);
-   edit.innerHTML=PENCIL_ICON;
-   edit.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
-    openAddCohort(c);};
-   row.appendChild(edit);
+   if(!self){
+    const edit=document.createElement('button');
+    edit.type='button';edit.className='campaign-edit';edit.id='cohort-edit-'+c.name;
+    edit.title='reconfigure this cohort (address or page token)';
+    edit.setAttribute('aria-label','Reconfigure '+c.name);
+    edit.innerHTML=PENCIL_ICON;
+    edit.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
+     openAddCohort(c);};
+    row.appendChild(edit);
+   }
    const del=document.createElement('button');
    del.type='button';del.className='campaign-del';del.id='cohort-del-'+c.name;
    del.title='remove this cohort';del.setAttribute('aria-label','Remove '+c.name);
    del.innerHTML=X_ICON;
    del.onclick=function(ev){removeCohort(c.name,ev);};
    row.appendChild(del);
-   row.onclick=function(){openCohortPage(c.name);};
-   if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
+   if(self){
+    row.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
+     note(c.name+' is this box - the \u00d7 removes the row');};
+   }else{
+    row.onclick=function(ev){
+     if(ev&&ev.stopPropagation)ev.stopPropagation();
+     // The pick answers in the centre at once: the row goes active and the stage
+     // header says what is opening, then the page moves to that box.
+     row.classList.add('active');
+     [].forEach.call(cohortsEl.children,function(o){
+      if(o!==row)o.classList.remove('active');});
+     if(!(ev&&(ev.metaKey||ev.ctrlKey||ev.shiftKey)))paintChan(c.name);
+     openCohortPage(c.name,ev);
+    };
+    if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
+   }
   }
   cohortsEl.appendChild(row);
  }
@@ -33128,23 +33219,35 @@ function openAddCohort(existing){
  name.focus();
 }
 function openCohortPage(name,ev){
- if(ev&&ev.stopPropagation)ev.stopPropagation();
- // The parity door: the cohort's own page, in its own tab, with the token in the
- // fragment. The window opens on the CLICK - a popup blocker refuses one made
- // after an await - and the hub's answer then points it at the address.
- const w=window.open('','_blank');
- if(!w){note('the browser blocked the new tab - allow popups for this page');return;}
- try{w.opener=null;}catch(e){}
+ ev=ev||{};
+ // The parity door: the cohort's own page with its token in the fragment. A plain
+ // click SELECTS that box here - this tab navigates to its page, so the stage below
+ // is that box's conversation (his report, 2026-10-21: a new tab left the centre on
+ // the old box, so the rail read as a selector that never selected). A modified
+ // click keeps the old door: a new tab, opened on the CLICK because a popup blocker
+ // refuses one made after an await. The hub's answer then names the address.
+ const fresh=!!(ev.metaKey||ev.ctrlKey||ev.shiftKey);
+ const w=fresh?window.open('','_blank'):null;
+ if(fresh&&!w){note('the browser blocked the new tab - allow popups for this page');return;}
+ if(w){try{w.opener=null;}catch(e){}}
  post('/api/legion',{op:'open',remote:name}).then(function(res){
   const code=res&&res.status,j=(res&&res.j)||{};
-  if(code!==200||j.error){try{w.close();}catch(e){}
-   note(j.error||('the hub answered '+code));return;}
-  const back=j.url+(j.url.indexOf('#')>=0?'&':'#')
+  if(code!==200||j.error){
+   if(w){try{w.close();}catch(e){}}
+   renderLegion();paintChan();
+   note(j.error||('the hub answered '+code));return;
+  }
+  const url=j.url+(j.url.indexOf('#')>=0?'&':'#')
    +'from='+encodeURIComponent(location.origin||'');
-  // replace, not assign: this tab was opened blank, and assigning leaves that blank
-  // page as its only history entry, so the browser's Back button showed an empty page
-  // instead of the hub. One entry - the cohort's own page.
-  try{w.location.replace(back);}catch(e){w.location=back;}
+  if(w){
+   // replace, not assign: this tab was opened blank, and assigning leaves that blank
+   // page as its only history entry, so the browser's Back button showed an empty page
+   // instead of the hub. One entry - the cohort's own page.
+   try{w.location.replace(url);}catch(e){w.location=url;}
+  }else{
+   // The same tab, with a real history entry: Back returns to the box you left.
+   location.href=url;
+  }
  });
 }
 function removeCohort(name,ev){
@@ -33178,7 +33281,7 @@ async function loadSessions(){
  const j=await r.json();
  sessions=j.sessions||[];budget=j.budget||0;
  hostEl.textContent=(j.host||'');hostVerEl.textContent='tinycmdr \u00b7 v'+(j.version||'');
- pageHost=j.host||pageHost;refreshTitle();
+ pageHost=j.host||pageHost;refreshTitle();paintChan();
  // The legion rides this same 5-second clock: the count comes from this reply, and
  // only a box with cohorts configured pays the /api/legion read behind it. A box
  // with none still draws the rail - praetorium and the ADD COHORT invitation - and
@@ -33200,7 +33303,7 @@ async function loadSessions(){
 }
 async function openSession(key,quiet){
  if(!key)return;
- chanEl.textContent='COMMAND CHANNEL';
+ paintChan();
  sessionKey=key;localStorage.fb_session=key;runId=null;busy(false);
  clearLog();renderRail();
  // This generation owns the page now: an in-flight poll or an earlier open's reply
@@ -35304,7 +35407,7 @@ def run_webui():
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
                     return
-                self._json(legion_overview())
+                self._json(legion_overview(self.headers.get("Host") or ""))
             elif self.path.startswith("/api/commands"):
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
@@ -36061,21 +36164,23 @@ def run_webui():
                     return
                 if op == "add-remote":
                     added, code = legion_add_remote(name, body.get("url"),
-                                                    body.get("token"))
+                                                    body.get("token"),
+                                                    self.headers.get("Host") or "")
                     if code != 200:
                         self._json(added, code)
                         return
-                    out = legion_overview()
+                    out = legion_overview(self.headers.get("Host") or "")
                     out["added"] = added
                     self._json(out)
                     return
                 if op == "update-remote":
                     updated, code = legion_update_remote(name, body.get("url"),
-                                                         body.get("token"))
+                                                         body.get("token"),
+                                                         self.headers.get("Host") or "")
                     if code != 200:
                         self._json(updated, code)
                         return
-                    out = legion_overview()
+                    out = legion_overview(self.headers.get("Host") or "")
                     out["updated"] = updated
                     self._json(out)
                     return
@@ -36084,7 +36189,7 @@ def run_webui():
                     if code != 200:
                         self._json(removed, code)
                         return
-                    out = legion_overview()
+                    out = legion_overview(self.headers.get("Host") or "")
                     out["removed"] = removed
                     self._json(out)
                     return

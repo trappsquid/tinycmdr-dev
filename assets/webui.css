@@ -1474,9 +1474,8 @@ svg.lucide{width:18px;height:18px;flex:0 0 auto}
 .command-meta svg{width:12px;height:12px}
 #tabs svg{width:16px;height:16px}
 
-/* LEGION: the rail's cohort rows and the channel tab strip over the stage. Same
- * glass/bronze idiom as the archive's campaign rows - a cohort IS a campaign surface,
- * one whose work happens on another box. */
+/* LEGION: the rail's cohort rows. Same glass/bronze idiom as the archive's campaign
+ * rows - a cohort IS a campaign surface, one whose work happens on another box. */
 .legion-stat{margin-left:auto;color:var(--muted-2);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.62rem;font-weight:400;letter-spacing:.06em;text-transform:none}
 .campaign-item .dot.bad{background:var(--bad);box-shadow:0 0 12px color-mix(in srgb,var(--bad) 55%,transparent)}
 .campaign-item.cohort.local .campaign-icon{color:var(--gold-bright)}
@@ -1486,6 +1485,10 @@ svg.lucide{width:18px;height:18px;flex:0 0 auto}
 .campaign-item.cohort.hub{border-style:dashed;border-color:var(--line-soft)}
 .campaign-item.cohort.hub .campaign-icon{color:var(--muted);opacity:.75}
 .campaign-item.cohort.hub:hover .campaign-icon{color:var(--gold-bright);opacity:1}
+/* A row that names THIS page - an entry written before the self check existed, or by
+ * hand: it is not a box to open, so it reads muted and keeps only the x that removes it. */
+.campaign-item.cohort.self strong{color:var(--muted)}
+.campaign-item.cohort.self .campaign-icon{color:var(--muted);opacity:.6}
 /* ADD COHORT: the rail's invitation row and the dialog it opens - the page's own
  * write into agent.a2a_remotes, in the same glass/bronze idiom as the rows above. */
 .campaign-item.addcohort{border-style:dashed;border-color:var(--line-soft)}

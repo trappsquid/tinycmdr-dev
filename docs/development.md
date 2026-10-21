@@ -448,18 +448,21 @@ envelope and caps, and the page suite's shim the renderer.
   refuses `send_file` (a peer has no `/api/download`).
 - **The legion** (linked boxes): with `agent.a2a_remotes` set, this box's page shows a
   rail row per configured box, and `/api/legion` answers `{cohorts, praetorium}` from
-  LOCAL state. `open` is OPEN COHORT: the configured URL with its token in the URL
-  fragment (never the query), which the browser navigates to - the other box's own page,
-  every feature, with no relay. `add-remote` / `update-remote` / `remove-remote` are the
-  authenticated page's own writes into that config: a box the operator runs, by URL + its
-  page token (the card is probed before anything lands, the token is saved under a swept
-  `_TOKEN` name, and the running hub resolves it with no restart), a rotated token or
-  moved address probed with the typed values before anything is written (a blank token
-  keeps the stored one; the hub's own `TINYCMDR_WEB_TOKEN` and a token_env another entry
-  shares are refused), and an unlink that leaves a hand-written `token_env` alone. A
-  census thread refreshes each card for the row's version and liveness; an off-LAN URL
-  warns once at startup. Tests: `tests/test_legion.py`, the page shim's legion scenario,
-  and `tests/test_webui.py`'s ADD/UPDATE/REMOVE/OPEN COHORT block.
+  LOCAL state. `open` is SELECT COHORT: the configured URL with its token in the URL
+  fragment (never the query), which the browser navigates THIS tab to - the other box's
+  own page, every feature, with no relay (a modified click opens a new tab instead). A
+  row whose address is the page being viewed is marked `self` and refused by
+  `add-remote` / `update-remote`: a cohort is another machine. `add-remote` /
+  `update-remote` / `remove-remote` are the authenticated page's own writes into that
+  config: a box the operator runs, by URL + its page token (the card is probed before
+  anything lands, the token is saved under a swept `_TOKEN` name, and the running hub
+  resolves it with no restart), a rotated token or moved address probed with the typed
+  values before anything is written (a blank token keeps the stored one; the hub's own
+  `TINYCMDR_WEB_TOKEN` and a token_env another entry shares are refused), and an unlink
+  that leaves a hand-written `token_env` alone. A census thread refreshes each card for
+  the row's version and liveness; an off-LAN URL warns once at startup. Tests:
+  `tests/test_legion.py`, the page shim's legion scenario, and `tests/test_webui.py`'s
+  ADD/UPDATE/REMOVE/OPEN COHORT block.
 
 Verify by hand: restart, then
 `curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with

@@ -588,6 +588,11 @@ def main():
                     "token": _CTOK})
     check(code == 502 and "web.a2a" not in (j.get("error") or ""),
           "a box that is not tinycmdr keeps the plain sentence", (code, j.get("error")))
+    code, j = _add({"op": "add-remote", "remote": "this-page",
+                    "url": "http://127.0.0.1:%d" % port, "token": _CTOK})
+    check(code == 400 and "this box" in (j.get("error") or ""),
+          "an address that is this page's own is refused as a self-link",
+          (code, j.get("error")))
     check((STAGE / "config.json").read_text(encoding="utf-8") == _cfg_before,
           "the refused adds wrote nothing to config.json")
     check(req("POST", "/api/legion",
