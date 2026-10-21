@@ -3949,6 +3949,17 @@
       },
       "detail": "The pre-delivery checkpoint's path scan starts a token after a dot, so `https://host/2026/10/article.html` was read as `com/2026/10/article.html`, checked on the filesystem and reported as a missing deliverable, and the model spent a turn explaining that the harness read the article's URL as a local path instead of answering; URLs (http/https/ftp, `www.`) are removed before the scan.",
       "gate": "tests/test_stall.py grades a URL contributing no path, a real path beside one, a `www.` host and a bare filename (red on the pre-fix build)"
+    },
+    {
+      "id": "fetch-thin-page-says-so",
+      "title": "a script-rendered page says its body did not come back",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "52ce9cf",
+        "expect": "untagged"
+      },
+      "detail": "`fetch_url` returned only a page's `<title>` for script-rendered pages and presented it as the page - measured live 2026-10-20, two news/issue links came back as 84 and 119 characters and the model read them as the article - so a response past 20 KB of raw HTML with under 400 characters of text now says the body did not come back and to try another source.",
+      "gate": "tests/test_tool_args_surface.py fakes the responses and grades the thin page, a real body and a genuinely small page (red on the pre-fix build)"
     }
   ]
 }
