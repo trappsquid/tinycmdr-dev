@@ -655,6 +655,32 @@ print("bumped")
               "a global switch still replaces the whole map", st)
 
 
+    def test_new_keeps_the_conversations_model_choice():
+        """`/new` clears the conversation, not the model it runs on.
+
+        Measured 2026-10-20 on a fleet box: `/model deepseek-flash` was saved and the
+        next runs routed to that endpoint; `/new` then popped the in-memory choice (an
+        accident of 12d9d54), so every later run used the config default while
+        state.json still named the chosen model - and a restart would have switched the
+        model again. A derived key (sub-/bg-/sched-) is transient and still goes.
+        """
+        fb = load()
+        key = "mattermost:chan-7"
+        fb.AGENT.model_overrides[key] = "deepseek-flash"
+        fb._save_overrides()
+        fb.AGENT.reset(key)
+        check(fb.AGENT.model_overrides.get(key) == "deepseek-flash",
+              "a reset keeps the conversation's model choice",
+              fb.AGENT.model_overrides)
+        st = json.loads((STAGE / "state.json").read_text(encoding="utf-8"))
+        check((st.get("model_overrides") or {}).get(key) == "deepseek-flash",
+              "and memory and the saved copy still agree", st.get("model_overrides"))
+        fb.AGENT.model_overrides["sub-123"] = "deepseek-flash"
+        fb.AGENT.reset("sub-123")
+        check("sub-123" not in fb.AGENT.model_overrides,
+              "a derived key's choice still dies with it", fb.AGENT.model_overrides)
+
+
     # A second lane that just takes the instance lock and holds it until told to stop.
     WORKER_LOCK = r'''
 import importlib.util, sys, time

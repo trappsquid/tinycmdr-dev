@@ -25589,7 +25589,16 @@ class Agent:
         reset_scan_spend(session_key)
         _elided_reset(session_key)
         self.histories.pop(session_key, None)
-        self.model_overrides.pop(session_key, None)
+        # A DERIVED key is transient - a delegated child, a /bg task, a scheduled run -
+        # so its inherited model choice dies with it. A CONVERSATION's own `/model`
+        # choice SURVIVES `/new`: the key does, the operator made the choice explicitly,
+        # and `/model default` is the one revert. Dropping it here was an accident of
+        # 12d9d54 and it made memory disagree with the saved copy: measured 2026-10-20,
+        # `/model deepseek-flash` then `/new`, and every later run silently went back to
+        # the config default while state.json still named the chosen model (so a restart
+        # would have switched the model again). One state, or none.
+        if str(session_key or "").startswith(("sub-", "bg-", "sched-")):
+            self.model_overrides.pop(session_key, None)
         # A lock key was only ever set (self._lock), never removed, so every session key
         # this process touched - including the throwaway sub-<epoch> sessions delegate_task
         # mints and resets - left a Lock behind for the life of the process. Drop ours on
