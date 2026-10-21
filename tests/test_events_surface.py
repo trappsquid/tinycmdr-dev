@@ -655,26 +655,35 @@ print("bumped")
               "a global switch still replaces the whole map", st)
 
 
-    def test_new_keeps_the_conversations_model_choice():
-        """`/new` clears the conversation, not the model it runs on.
+    def test_new_session_names_the_model_and_reverts_the_choice():
+        """`/new` ends a conversation-scoped `/model` choice, says which model runs
+        now, and saves the revert.
 
-        Measured 2026-10-20 on a fleet box: `/model deepseek-flash` was saved and the
-        next runs routed to that endpoint; `/new` then popped the in-memory choice (an
-        accident of 12d9d54), so every later run used the config default while
-        state.json still named the chosen model - and a restart would have switched the
-        model again. A derived key (sub-/bg-/sched-) is transient and still goes.
+        The choice is conversation-scoped by design - `--global` is the one that
+        survives a new session. Measured 2026-10-20: the pop was memory-only, so
+        state.json kept the old choice (a restart would have resurrected it) and the
+        reply named no model - the operator believed the switch still held while every
+        run used the default.
         """
         fb = load()
         key = "mattermost:chan-7"
+        default = fb.CONFIG["llm"]["model"]
         fb.AGENT.model_overrides[key] = "deepseek-flash"
         fb._save_overrides()
-        fb.AGENT.reset(key)
-        check(fb.AGENT.model_overrides.get(key) == "deepseek-flash",
-              "a reset keeps the conversation's model choice",
+        reply = fb._web_command("/new", key)
+        text = reply[1] if isinstance(reply, tuple) else str(reply)
+        check(isinstance(reply, tuple) and reply[0] == "reply",
+              "the /new reply is a reply", reply)
+        check("Session cleared" in text, "the /new reply clears the session", text)
+        check("`%s`" % default in text,
+              "and names the model the conversation now runs", text)
+        check(fb.AGENT.model_overrides.get(key) is None,
+              "/new reverts the conversation's model choice",
               fb.AGENT.model_overrides)
         st = json.loads((STAGE / "state.json").read_text(encoding="utf-8"))
-        check((st.get("model_overrides") or {}).get(key) == "deepseek-flash",
-              "and memory and the saved copy still agree", st.get("model_overrides"))
+        check(key not in (st.get("model_overrides") or {}),
+              "and the saved copy no longer holds it (a restart cannot resurrect it)",
+              st.get("model_overrides"))
         fb.AGENT.model_overrides["sub-123"] = "deepseek-flash"
         fb.AGENT.reset("sub-123")
         check("sub-123" not in fb.AGENT.model_overrides,

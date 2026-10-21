@@ -25589,16 +25589,15 @@ class Agent:
         reset_scan_spend(session_key)
         _elided_reset(session_key)
         self.histories.pop(session_key, None)
-        # A DERIVED key is transient - a delegated child, a /bg task, a scheduled run -
-        # so its inherited model choice dies with it. A CONVERSATION's own `/model`
-        # choice SURVIVES `/new`: the key does, the operator made the choice explicitly,
-        # and `/model default` is the one revert. Dropping it here was an accident of
-        # 12d9d54 and it made memory disagree with the saved copy: measured 2026-10-20,
-        # `/model deepseek-flash` then `/new`, and every later run silently went back to
-        # the config default while state.json still named the chosen model (so a restart
-        # would have switched the model again). One state, or none.
-        if str(session_key or "").startswith(("sub-", "bg-", "sched-")):
-            self.model_overrides.pop(session_key, None)
+        # A `/model` choice is scoped to the CONVERSATION, so `/new` ends it and the
+        # config default (or the choice saved with `--global`) takes over. The REMOVAL
+        # is state too: popping only in memory left state.json naming the old choice,
+        # so the next runs used the default while a restart would have resurrected the
+        # old model (measured 2026-10-20). Derived keys are transient and never saved.
+        dropped = self.model_overrides.pop(session_key, None)
+        if dropped is not None and not str(session_key or "").startswith(
+                ("sub-", "bg-", "sched-")):
+            _save_overrides()
         # A lock key was only ever set (self._lock), never removed, so every session key
         # this process touched - including the throwaway sub-<epoch> sessions delegate_task
         # mints and resets - left a Lock behind for the life of the process. Drop ours on
@@ -29445,8 +29444,8 @@ def _model_help_text(cat, current):
     """`/model help`: the options and the words, on request only."""
     lines = ["Models this bot can run:"] + _model_menu_rows(cat, current)
     lines.append("")
-    lines.append("Switch: `/model <number|name>` · `--global` applies it to every "
-                 "conversation · `/model default` reverts.")
+    lines.append("Switch: `/model <number|name>` · `--global` saves it for every "
+                 "conversation and for new sessions · `/model default` reverts.")
     lines.append("Add: `/model add <link>` (a box on your network, e.g. "
                  "`http://<box>:8081/v1`) · `/model add cloud <link> --key-env MY_KEY` "
                  "(a hosted provider; its value is set on the host with "
@@ -29862,7 +29861,7 @@ def model_command(session_key, arg):
     is_global = any(t.lstrip("-").lower() in ("global", "g", "all")
                     for t in tokens if t.startswith("-"))
     name = " ".join(t for t in tokens if not t.startswith("-")).strip()
-    scope = "all conversations" if is_global else "this conversation"
+    scope = "all conversations" if is_global else "this conversation (until /new)"
     current = (AGENT.model_overrides.get(session_key)
                or CONFIG["llm"]["model"])
     cat = model_catalog(force=name.lower() in ("list", "ls", "models"))
@@ -29919,12 +29918,27 @@ def model_command(session_key, arg):
                   f"`/tinycmdr model default --global` to revert.")
     AGENT.model_overrides[session_key] = e["name"]
     _save_overrides()
-    return (f"Model for this conversation: `{e['name']}` → `{e['url']}`"
-            + (" (alias)" if e["alias"] else "")
-            + " · `/tinycmdr model default` to revert · add `--global` for all "
-              "conversations\n"
+    return (f"Model for this conversation (until `/new`): `{e['name']}` → "
+            f"`{e['url']}`" + (" (alias)" if e["alias"] else "")
+            + " · `/tinycmdr model default` to revert · add `--global` to save it "
+              "for every conversation and new session\n"
               "(sub-agents, `/bg` tasks and scheduled jobs made from this "
               "conversation now inherit it)")
+
+
+def new_session(session_key):
+    """Clear one conversation and return the line that names the model it now runs.
+
+    `/new` ends a conversation-scoped `/model` choice, so the config default (or the
+    one saved with `--global`) takes over - and the reply must SAY which model that is:
+    measured 2026-10-20, an operator switched models, typed `/new` after a stuck run,
+    and every later run silently used the default while they believed the switch still
+    held. Every door's `/new` prints this line; none of them hard-codes the sentence.
+    """
+    AGENT.reset(session_key)
+    current = AGENT.model_overrides.get(session_key) or CONFIG["llm"]["model"]
+    return ("Model for this conversation: `%s` → `%s`"
+            % (current, model_route_for(current)))
 
 
 def reasoning_command(session_key, arg, llm_url=""):
@@ -34194,8 +34208,7 @@ def _web_command(text, key="web"):
         if _wiz is not None:
             return ("reply", _wiz)
     if low in ("/new", "/reset"):
-        AGENT.reset(key)
-        return ("reply", "🔄 Session cleared. Fresh context.")
+        return ("reply", "🔄 Session cleared. Fresh context.\n" + new_session(key))
     if low == "/model" or low.startswith("/model "):
         parts = text.strip().split(maxsplit=1)
         return ("reply", model_command(key, parts[1] if len(parts) > 1 else ""))
@@ -38248,8 +38261,9 @@ class MattermostDispatcher:
         if _cmdr != stripped:
             stripped, low = _cmdr, _cmdr.lower()
         if low in ("/new", "/reset", "!reset", "new session"):
-            AGENT.reset(session_key)
-            self._post(channel_id, post_root, "🔄 Session cleared. Fresh context.")
+            self._post(channel_id, post_root,
+                       "🔄 Session cleared. Fresh context.\n"
+                       + new_session(session_key))
             return
         if low == "/stop":
             self._stop_channel(channel_id, post_root)
@@ -40624,7 +40638,7 @@ class TelegramPoller:
 
         if verb in ("/new", "/reset"):
 
-            AGENT.reset(key)
+            _new_line = new_session(key)
 
             # A FRESH conversation needs a fresh progress message: the live destination
             # kept the old run's steps on screen (A-172).
@@ -40638,7 +40652,7 @@ class TelegramPoller:
 
                 live._flush(force=True)
 
-            self._say(chat_id, "🔄 Session cleared. Fresh context.")
+            self._say(chat_id, "🔄 Session cleared. Fresh context.\n" + _new_line)
 
             return True
 
@@ -43563,8 +43577,9 @@ def _cli_command(text):
         print(HELP_TEXT)
         return True
     if verb in ("/new", "/reset"):
-        AGENT.reset(_cli_key())
+        _new_line = new_session(_cli_key())
         print(green("  (context cleared, this machine's notes stay)"))
+        print(dim("  " + _new_line))
         return True
     if verb == "/setup":
         run_setup()
@@ -44183,8 +44198,9 @@ def _cli_console_loop():
             continue
         if text.lower() in ("reset", "exit", "quit"):
             if text.lower() == "reset":
-                AGENT.reset(_cli_key())
+                _new_line = new_session(_cli_key())
                 print(green("  (context cleared)"))
+                print(dim("  " + _new_line))
                 continue
             return
         cancel = threading.Event()
