@@ -20614,6 +20614,13 @@ _REQUEST_PATH_RX = re.compile(
     r"|(?:~|\.{1,2})?[/\\][\w.@+-]+(?:[/\\][\w.@+-]+)*"
     r"|[\w.@+-]+(?:[\\/][\w.@+-]+)*\.[A-Za-z][A-Za-z0-9]{1,7})"
     r"(?![\w/\\])")
+# A URL is not a path. The scan above starts a token after a dot, so
+# `https://thehackernews.com/2026/10/article.html` was read as
+# `com/2026/10/article.html` and checked against the FILESYSTEM - the checkpoint then
+# told the model the request named a missing deliverable, and on 2026-10-20 a live run
+# spent a turn explaining "the harness is reading the article's URL as a local path"
+# instead of answering the operator's question about the link.
+_URL_IN_TEXT = re.compile(r"\b(?:https?://|ftps?://|www\.)\S+", re.I)
 
 
 def _request_paths(text):
@@ -20621,11 +20628,12 @@ def _request_paths(text):
 
     A bare word with no separator, no `~` and no file extension is prose; a dotted
     hostname carries an extension nobody writes files with, which is why the extension
-    list is what keeps it out. Cheap on purpose: this only decides whether ONE model
-    call is worth spending, never whether an answer ships.
+    list is what keeps it out. A URL is removed first: its path part is not a
+    deliverable (see _URL_IN_TEXT). Cheap on purpose: this only decides whether ONE
+    model call is worth spending, never whether an answer ships.
     """
     out = []
-    for tok in _REQUEST_PATH_RX.findall(str(text or "")):
+    for tok in _REQUEST_PATH_RX.findall(_URL_IN_TEXT.sub(" ", str(text or ""))):
         name = re.split(r"[/\\]", tok)[-1]
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
         if not (re.search(r"[/\\]", tok) or tok.startswith("~")

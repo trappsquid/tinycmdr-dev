@@ -4047,6 +4047,31 @@ def test_a_missing_request_path_earns_one_checkpoint():
           (calls, out[:200]))
 
 
+def test_a_url_in_the_request_is_not_a_local_path():
+    """A URL is not a deliverable (2026-10-20).
+
+    The request-path scan starts a token after a dot, so
+    `https://thehackernews.com/2026/10/article.html` was read as
+    `com/2026/10/article.html` and checked against the FILESYSTEM. The checkpoint then
+    told the model the request named a missing path, and a live run spent a turn
+    explaining "the harness is reading the article's URL as a local path" instead of
+    answering the operator's question about the link.
+    """
+    text = ("Are we affected by this?  https://thehackernews.com/2026/10/"
+            "go-issues-emergency-update-blocking.html?m=1")
+    check("paths: a URL contributes no path", fb._request_paths(text) == [],
+          fb._request_paths(text))
+    mixed = "see https://example.com/a/b.html and /tmp/report.md"
+    check("paths: a real path beside a URL still counts",
+          fb._request_paths(mixed) == ["/tmp/report.md"], fb._request_paths(mixed))
+    check("paths: a bare www host contributes no path",
+          fb._request_paths("read www.example.com/a/b.html") == [],
+          fb._request_paths("read www.example.com/a/b.html"))
+    check("paths: a bare filename in the request still counts",
+          fb._request_paths("write report.md") == ["report.md"],
+          fb._request_paths("write report.md"))
+
+
 def test_a_windows_drive_letter_path_earns_one_checkpoint():
     """Windows spells the same request with a drive letter (2026-10-17): the token
     must arrive whole, or the checkpoint names half a path. The Windows run of this
