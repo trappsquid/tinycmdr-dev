@@ -3929,15 +3929,15 @@
       "gate": "tests/test_retry_surface.py grades the newest-only rule and that a proved endpoint still gets the whole loop (red on the pre-fix build)"
     },
     {
-      "id": "new-keeps-the-model-choice",
-      "title": "a new session keeps the conversation's model",
+      "id": "new-session-names-the-model",
+      "title": "a new session names the model it reverted to",
       "state": "unreleased",
       "anchor": {
-        "commit": "9c59f4b",
+        "commit": "fade424",
         "expect": "untagged"
       },
-      "detail": "`/new` popped the conversation's `/model` choice from memory while the saved copy stayed on disk, so after the reset every run silently used the config default and a restart would have switched the model again; the choice now survives `/new` (a derived sub-/bg-/sched- key is still cleaned up), and `/model default` remains the one explicit revert.",
-      "gate": "tests/test_events_surface.py grades the kept choice, the memory/disk agreement and the derived-key cleanup (red on the pre-fix build)"
+      "detail": "A `/model` choice is scoped to the conversation and `/new` ends it (`--global` is the choice that persists), but the reset dropped it in memory only while the saved copy stayed on disk, so a restart could resurrect a model the user could not see and the reply named no model at all; `/new` now saves the revert and every door's reply names the model the conversation runs.",
+      "gate": "tests/test_events_surface.py grades the revert, the saved removal, the named model on `/new` and the derived-key cleanup (red on the 1.1.39 build)"
     }
   ]
 }
