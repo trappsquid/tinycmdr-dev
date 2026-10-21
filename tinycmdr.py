@@ -789,7 +789,10 @@ DEFAULT_CONFIG = {
         # restart does not replay an old table.
         "jobs_push_window_minutes": 240,
         "show_usage": True,       # token/time footer on the Done status line
-        "vision": False,          # set True only if your model accepts images
+        # auto: attach an image when the endpoint declares image input (llama.cpp's
+        # /props modalities, or /v1/models architecture.input_modalities); true forces
+        # it for an endpoint that says nothing; false never attaches.
+        "vision": "auto",
         "confirm_patterns": [
             # Commands that need a 'yes' first. Matched case-insensitively (like
             # blocked_patterns, because PowerShell cmdlets are capitalised) against
@@ -1380,6 +1383,12 @@ _RETIRED_CONFIG_KEYS = frozenset({
 # into _secret_values() so the mask covers the file even for keys nothing loads.
 _DROPPED_SECRET_VALUES = set()
 
+# Keys that ship as the tri-state word "auto" and whose other spellings are booleans:
+# `config set agent.vision true` must land a boolean, not the string "true". The verb
+# validates the word, so a typo cannot become a truthy string (the class the boolean
+# schema check closes for the plain boolean keys).
+_TRI_STATE_CONFIG_KEYS = {("agent", "vision")}
+
 
 def _config_key_known(section, key):
     """Is `section.key` a name something reads? ONE rule for `config set` and the
@@ -1650,34 +1659,135 @@ def image_tokens_est(w, h):
     return max(1, int((w * h) / 1000))
 
 
-def _endpoint_vision(url=None):
-    """(ok, why) - does this endpoint claim to take images?
-
-    llama.cpp answers /props with a `modalities` dict ({"vision": true, ...} on the
-    LAN box, measured 2026-09-28). Endpoints that say nothing - a cloud API, an
-    older build - do not veto the config: agent.vision is the operator's assertion
-    and only a positive "vision is false" overrides it.
-    """
-    try:
-        props = _llama_props(url or CONFIG["llm"]["base_url"])
-    except Exception:
-        props = None
-    if not isinstance(props, dict):
-        return True, ""
-    mods = props.get("modalities")
-    if isinstance(mods, dict) and "vision" in mods:
-        if not mods.get("vision"):
-            return False, "the endpoint's /props reports modalities.vision=false"
-        return True, ""
-    if props.get("media_marker"):
-        return True, ""
-    return True, ""
-
-
 _IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jpe": "image/jpeg",
                ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
                ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
                ".heic": "image/heic", ".heif": "image/heif", ".avif": "image/avif"}
+
+# Attach decisions are made per image door, so the endpoint's capability is asked once
+# per minute, not once per attachment. Bounded: a box talks to its primary and a short
+# fallback chain; more than a handful of roots is not a shape this build serves.
+_IMAGE_INPUT_CACHE = {}
+_IMAGE_INPUT_TTL = 60.0
+
+
+def _models_image_input(base_url, timeout=5):
+    """True/False/None from /v1/models `architecture.input_modalities`.
+
+    A server that declares what its model accepts (llama.cpp, vLLM, llama-swap) says it
+    here, and this is the one capability field an OpenAI-compatible endpoint publishes.
+    None means "it did not say", which is not a no: an auto-attach needs a yes.
+    """
+    base = str(base_url or "").rstrip("/")
+    if not base:
+        return None
+    want = str(CONFIG["llm"].get("model") or "").strip().lower()
+    key = _primary_api_key() or "none"
+    try:
+        got = requests.get(base + "/models",
+                           headers={"Authorization": "Bearer " + key,
+                                    "Content-Type": "application/json"},
+                           timeout=_probe_timeout(timeout)).json()
+    except Exception as e:                       # noqa: BLE001 - a probe must not break a run
+        log.debug("image probe: /models on %s did not answer: %s", base, e)
+        return None
+    rows = [m for m in (got.get("data") or []) if isinstance(m, dict)]
+    pick = None
+    for row in rows:
+        if str(row.get("id") or "").strip().lower() == want:
+            pick = row
+            break
+    if pick is None:
+        for row in rows:
+            if str(row.get("alias_of") or "").strip().lower() == want:
+                pick = row
+                break
+    if pick is None and len(rows) == 1:
+        pick = rows[0]               # a one-model server has no ambiguity to resolve
+    arch = pick.get("architecture") if isinstance(pick, dict) else None
+    mods = arch.get("input_modalities") if isinstance(arch, dict) else None
+    if not isinstance(mods, list):
+        return None
+    return any(str(m).strip().lower() in ("image", "images", "vision") for m in mods)
+
+
+def endpoint_image_input(url=None):
+    """(True/False/None, why) - what the endpoint says about taking images.
+
+    /props is the serving process's own declaration and wins; /v1/models is the generic
+    fallback. None (nothing said, or no answer) is not a no and not a yes: an auto
+    decision treats it as "cannot show", while an explicit agent.vision true overrides.
+    """
+    base = str(url or CONFIG["llm"].get("base_url") or "").rstrip("/")
+    hit = _IMAGE_INPUT_CACHE.get(base)
+    if hit and (time.time() - hit[2]) < _IMAGE_INPUT_TTL:
+        return hit[0], hit[1]
+    state, why = None, "the endpoint does not declare image input"
+    try:
+        props = _llama_props(base)
+    except Exception:                            # noqa: BLE001 - a probe must not break a run
+        props = None
+    if isinstance(props, dict):
+        mods = props.get("modalities")
+        if isinstance(mods, dict) and "vision" in mods:
+            state = bool(mods.get("vision"))
+            why = "" if state else "the endpoint's /props reports modalities.vision=false"
+        elif props.get("media_marker"):
+            state, why = True, ""
+    if state is None:
+        said = _models_image_input(base)
+        if said is not None:
+            state = said
+            why = ("" if state else
+                   "the endpoint's /v1/models declares no image input for this model")
+    if len(_IMAGE_INPUT_CACHE) > 32:
+        _IMAGE_INPUT_CACHE.clear()
+    _IMAGE_INPUT_CACHE[base] = (state, why, time.time())
+    return state, why
+
+
+def _endpoint_vision(url=None):
+    """(ok, why) - the veto form: only a positive "no" refuses.
+
+    Kept for callers that ask "would an assertion of yes be obeyed?" - the doctor and the
+    model-profile notes. The doors themselves ask image_switch(), which also reads the
+    operator's setting.
+    """
+    state, why = endpoint_image_input(url)
+    if state is False:
+        return False, why
+    return True, ""
+
+
+def image_switch(url=None):
+    """(attach, why-not) - the ONE decision every image door reads.
+
+    `agent.vision` is a tri-state: "auto" (the shipped value) attaches only when the
+    endpoint declares image input; true forces an attach and only a positive "no" still
+    vetoes; false never attaches. A model that says it takes images no longer needs an
+    operator to guess a flag, and an endpoint that says nothing is never guessed at.
+    """
+    raw = CONFIG["agent"].get("vision")
+    want = None                      # auto
+    if isinstance(raw, bool):
+        want = raw
+    elif isinstance(raw, str):
+        word = raw.strip().lower()
+        if word in ("true", "on", "yes", "1"):
+            want = True
+        elif word in ("false", "off", "no", "0"):
+            want = False
+    state, why = endpoint_image_input(url)
+    if want is False:
+        return False, "agent.vision is off"
+    if want is True:
+        return (False, why) if state is False else (True, "")
+    if state is True:
+        return True, ""
+    if state is False:
+        return False, why
+    return False, ("the endpoint does not declare image input (set agent.vision true "
+                   "to attach anyway)")
 
 
 def _image_spec(entry):
@@ -1731,14 +1841,11 @@ def stash_tool_images(session_key, images, tool_name=""):
         return ""
     if not isinstance(images, (list, tuple)):
         images = [images]
-    if not CONFIG["agent"].get("vision"):
-        return ("\n[the tool produced %d image(s); agent.vision is off, so they were "
-                "NOT attached. Turn agent.vision on and point the bot at a vision "
-                "endpoint to let the model see the screen.]" % len(images))
-    ok, why = _endpoint_vision()
+    ok, why = image_switch()
     if not ok:
-        return ("\n[the tool produced %d image(s) and %s, so they were NOT attached.]"
-                % (len(images), why))
+        return ("\n[the tool produced %d image(s) and %s, so they were NOT attached. "
+                "Tell the operator the image did not reach you; do not decode it as "
+                "text.]" % (len(images), why))
     kept, notes = [], []
     for entry in images:
         if len(kept) >= _IMAGE_MAX_PER_CALL:
@@ -12049,6 +12156,18 @@ def tool_read_file(args, ctx):
             return "\n".join(entries[:500])
         except Exception as e:
             return f"ERROR listing directory: {e}"
+    mime = _IMAGE_MIME.get(path.suffix.lower())
+    if mime:
+        # An image is not text. Reading one as a string is how a model ends up
+        # decoding a PNG by hand (measured 2026-10-20: a photo sent through a chat
+        # lane came back as binary and the run reached for OCR). The vision path
+        # takes it instead, and when the model cannot see, that path says why.
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        return {"text": "%s - image (%s, %d bytes)" % (path, mime, size),
+                "images": [{"path": str(path), "mime": mime}]}
     try:
         # Bounded on purpose: read_text() on a big file put 2-3x its size in RAM (the
         # string, then splitlines() as a second copy). a bot account died at its 32 GiB cgroup
@@ -37746,9 +37865,15 @@ class MattermostDispatcher:
             dest = (_uploads_dir()
                     / _upload_name(_web_safe_name(name)))
             _upload_write(dest, content)
-            if mime.startswith("image/") and CONFIG["agent"].get("vision"):
-                images.append((mime, base64.b64encode(content).decode()))
-                notes.append(f"[image attached; also saved to {dest}]")
+            if mime.startswith("image/"):
+                ok, why = image_switch()
+                if ok:
+                    images.append((mime, base64.b64encode(content).decode()))
+                    notes.append(f"[image attached; also saved to {dest}]")
+                else:
+                    notes.append(f"[image saved to {dest} ({mime}, {len(content)} bytes) "
+                                 f"but NOT attached: {why}. Do not read it as text - "
+                                 f"tell the operator the image did not reach you.]")
             else:
                 notes.append(f"[attachment saved to {dest} "
                              f"({mime or 'unknown'}, {len(content)} bytes) "
@@ -40491,9 +40616,15 @@ def tg_download_media(client, items):
         # A-2026-10-10-14 names at the Mattermost door.
         dest = _uploads_dir() / _upload_name(_web_safe_name(name))
         _upload_write(dest, content)
-        if str(mime).startswith("image/") and CONFIG["agent"].get("vision"):
-            images.append((mime, base64.b64encode(content).decode()))
-            notes.append("[image attached; also saved to %s]" % dest)
+        if str(mime).startswith("image/"):
+            ok, why = image_switch()
+            if ok:
+                images.append((mime, base64.b64encode(content).decode()))
+                notes.append("[image attached; also saved to %s]" % dest)
+            else:
+                notes.append("[image saved to %s (%s, %d bytes) but NOT attached: %s. "
+                             "Do not read it as text - tell the operator the image did "
+                             "not reach you.]" % (dest, mime, len(content), why))
         else:
             notes.append("[attachment saved to %s (%s, %d bytes) "
                          "- use read_file to inspect it]"
@@ -45081,23 +45212,27 @@ def _verb_doctor():
         problems.append("python %s is older than this build supports"
                         % sys.version.split()[0])
 
-    # The image switch: nothing else in doctor says whether a screenshot-returning
-    # tool's pictures can reach the model at all, and the enable path is otherwise
-    # buried in config.json. When it is on, the endpoint gets the last word (only a
-    # positive modalities.vision=false vetoes; an endpoint that says nothing does not).
-    _vision = bool(CONFIG["agent"].get("vision"))
-    if _vision:
-        _vok, _vwhy = _endpoint_vision()
-        if _vok:
-            print("  vision    : on - tool images (computer_use screenshots) ride one "
-                  "request")
-        else:
-            problems.append("agent.vision is on but %s; a screenshot would be sent to "
-                            "an endpoint that cannot see it" % _vwhy)
+    # The image switch: does an image the operator sends - a chat upload, a path
+    # read_file opens, a computer_use screenshot - reach the model? "auto" reads the
+    # endpoint's own declaration; true forces it for an endpoint that says nothing;
+    # false never attaches. A positive "no" always wins.
+    _vset = CONFIG["agent"].get("vision")
+    _vstate, _vwhy = endpoint_image_input()
+    _vok, _voff = image_switch()
+    if _vok:
+        print("  vision    : %s - images ride one request (%s)" % (
+            "on" if _vset is True else "auto",
+            "agent.vision forces it" if _vset is True
+            else "the endpoint declares image input"))
+    elif _vset is True and _vstate is False:
+        problems.append("agent.vision is on but %s; an image would be sent to an "
+                        "endpoint that cannot see it" % _vwhy)
+    elif _vset is False:
+        print("  vision    : off - images are saved, not shown; `tinycmdr config set "
+              "agent.vision auto` follows the endpoint's own answer")
     else:
-        print("  vision    : off - tool screenshots are NOT sent; set agent.vision true "
-              "(`tinycmdr config set agent.vision true` + restart) if the endpoint "
-              "accepts images")
+        print("  vision    : auto - %s; images are saved, not shown (set agent.vision "
+              "true to attach anyway)" % _vwhy)
 
     # What this endpoint speaks, said once where it can be read. This build sends the
     # OpenAI-compatible wire; an endpoint whose only chat path is `messages` still
@@ -46128,7 +46263,23 @@ def _verb_config(rest):
                   "would be stored as a string, and every non-empty string reads as true"
                   % (path, json.dumps(value)), file=sys.stderr)
             return 2
-        if isinstance(value, bool) and isinstance(schema, dict) and key in schema \
+        if (section, key) in _TRI_STATE_CONFIG_KEYS:
+            # A tri-state key ships as the word "auto" and still takes true/false: the
+            # boolean is the natural spelling, and a typo must not become a truthy
+            # string (the class the checks above close for boolean keys).
+            if isinstance(value, str):
+                word = value.strip().lower()
+                if word in ("true", "on", "yes", "1"):
+                    value = word if as_str else True
+                elif word in ("false", "off", "no", "0"):
+                    value = word if as_str else False
+                elif word != "auto":
+                    print("%s takes true, false or auto: %s is none of them"
+                          % (path, json.dumps(value)), file=sys.stderr)
+                    return 2
+                else:
+                    value = "auto"
+        elif isinstance(value, bool) and isinstance(schema, dict) and key in schema \
                 and not isinstance(schema.get(key), bool):
             # The mirror of the boolean check above, and a crash rather than a nit:
             # `config set llm.base_url true` wrote the boolean and the NEXT start died at

@@ -1753,6 +1753,31 @@ try:
           (_notes, _images))
 finally:
     fb.CONFIG["agent"]["vision"] = _vision_saved
+
+_cap = getattr(fb, "endpoint_image_input", None)
+if _download:
+    check("the telegram lane reads the endpoint's image declaration",
+          bool(_cap), "no endpoint image capability probe on this build")
+if _download and _cap:
+    _cap_saved = fb.endpoint_image_input
+    fb.CONFIG["agent"]["vision"] = "auto"
+    try:
+        fb.endpoint_image_input = lambda url=None: (True, "")
+        _an, _ai = _download(_GetFileClient(),
+                             [("big", "photo-big.jpg", "image/jpeg")])
+        check("the shipped auto attaches a photo when the endpoint declares vision",
+              bool(_ai) and "image attached" in _an[0], (_an, _ai))
+        fb.endpoint_image_input = lambda url=None: (
+            None, "the endpoint does not declare image input")
+        _an2, _ai2 = _download(_GetFileClient(),
+                               [("big", "photo-big.jpg", "image/jpeg")])
+        check("...and silence says the image did not reach the model",
+              not _ai2 and "NOT attached" in _an2[0]
+              and "Do not read it as text" in _an2[0], _an2)
+    finally:
+        fb.endpoint_image_input = _cap_saved
+        fb.CONFIG["agent"]["vision"] = _vision_saved
+
 _notes2, _images2 = _download(_GetFileClient(),
                               [("doc1", "notes.txt", "text/plain")]) if _download \
     else ([], [])

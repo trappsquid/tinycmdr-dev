@@ -358,10 +358,12 @@ most if it broke:
 
   1. the run's `messages` list must NEVER hold base64 - `_conversation_token_est`
      counts it as ~300k fake tokens and `_compact` slices content by character;
-  2. an install with `agent.vision` off (the shipped default) must attach nothing
-     and say why, so the path is dormant unless it is switched on;
+  2. the shipped `agent.vision: "auto"` attaches only when the endpoint declares
+     image input; an explicit false attaches nothing and says why, and silence is
+     not consent;
   3. an endpoint that reports `modalities.vision = false` is a veto, not a hint;
-  4. the token estimate matches what the server actually charges
+  4. `read_file` on an image hands it to this path instead of returning bytes;
+  5. the token estimate matches what the server actually charges
      .
 
     python tests/test_delivery_surface.py
@@ -415,9 +417,11 @@ most if it broke:
 
     def main():
         keep_flag = fb.CONFIG["agent"].get("vision")
+        real_props = fb._llama_props
+        real_models = getattr(fb, "_models_image_input", None)
         img = _png(TMP / "screen.png")
 
-        # ---- 4. the estimate is the measured cost -----------------------
+        # ---- 5. the estimate is the measured cost -----------------------
         check("a 0.68 MP frame lands within 10% of its measured 696 tokens",
               abs(fb.image_tokens_est(1024, 666) - 696) / 696 < 0.10,
               fb.image_tokens_est(1024, 666))
@@ -447,6 +451,9 @@ most if it broke:
         # ---- 1 + 3. vision on: accepted, attached once, never in the run list ----
         try:
             fb.CONFIG["agent"]["vision"] = True
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+            fb._llama_props = lambda *a, **k: {"modalities": {"vision": True}, "total_slots": 1}
+            fb._models_image_input = lambda *a, **k: None
             fb._TOOL_IMAGES.clear()
             note = fb.stash_tool_images("on", [{"path": img, "w": 1024, "h": 666}], "t")
             check("with vision on the image is accepted", note == "" and len(fb.peek_tool_images("on")) == 1,
@@ -475,14 +482,53 @@ most if it broke:
 
             # ---- 3. an endpoint that says vision=false is a veto ----------------
             fb._TOOL_IMAGES.clear()
-            real_props = fb._llama_props
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
             fb._llama_props = lambda *a, **k: {"modalities": {"vision": False}, "total_slots": 1}
-            try:
-                note = fb.stash_tool_images("veto", [{"path": img, "w": 8, "h": 8}], "t")
-            finally:
-                fb._llama_props = real_props
+            note = fb.stash_tool_images("veto", [{"path": img, "w": 8, "h": 8}], "t")
             check("an endpoint reporting no vision is obeyed, not overridden",
                   fb.peek_tool_images("veto") == [] and "vision=false" in note, note)
+
+            # ---- 2. the shipped auto: only the endpoint's yes attaches ----------
+            fb.CONFIG["agent"]["vision"] = "auto"
+            fb._TOOL_IMAGES.clear()
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+            fb._llama_props = lambda *a, **k: {"modalities": {"vision": True}, "total_slots": 1}
+            note = fb.stash_tool_images("auto", [{"path": img, "w": 8, "h": 8}], "t")
+            check("auto attaches when the endpoint declares image input",
+                  note == "" and len(fb.peek_tool_images("auto")) == 1,
+                  (note, fb.peek_tool_images("auto")))
+            fb._TOOL_IMAGES.clear()
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+            fb._llama_props = lambda *a, **k: None
+            note = fb.stash_tool_images("silent", [{"path": img, "w": 8, "h": 8}], "t")
+            check("...and an endpoint that says nothing is not consent",
+                  fb.peek_tool_images("silent") == []
+                  and "does not declare image input" in note, note)
+            fb._TOOL_IMAGES.clear()
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+            fb._models_image_input = lambda *a, **k: False
+            note = fb.stash_tool_images("said-no", [{"path": img, "w": 8, "h": 8}], "t")
+            check("...and a /models entry naming text only is a no",
+                  fb.peek_tool_images("said-no") == []
+                  and "declares no image input" in note, note)
+            fb._models_image_input = lambda *a, **k: None
+
+            # ---- 4. read_file on an image is a look, not bytes ------------------
+            fb.CONFIG["agent"]["vision"] = "auto"
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+            fb._llama_props = lambda *a, **k: {"modalities": {"vision": True}, "total_slots": 1}
+            fb._TOOL_IMAGES.clear()
+            out = fb.tool_read_file({"path": img}, {"session_key": "rf"})
+            check("read_file hands an image to the vision path, not to the model as text",
+                  isinstance(out, dict) and out.get("images")
+                  and out["images"][0]["mime"] == "image/png"
+                  and "image/png" in out.get("text", ""), out)
+            _name, _args, _out = fb.AGENT._exec_tool(
+                {"function": {"name": "read_file",
+                              "arguments": '{"path": %s}' % fb.json.dumps(img)}},
+                {"session_key": "rf2", "tool_images": True, "config": fb.CONFIG})
+            check("...and the run's next request carries it",
+                  len(fb.peek_tool_images("rf2")) == 1, fb.peek_tool_images("rf2"))
 
             # ---- limits ---------------------------------------------------------
             fb._TOOL_IMAGES.clear()
@@ -531,6 +577,9 @@ most if it broke:
                   fb.pending_image_tokens("budget"))
         finally:
             fb.CONFIG["agent"]["vision"] = keep_flag
+            fb._llama_props = real_props
+            fb._models_image_input = real_models
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
             fb._TOOL_IMAGES.clear()
 
         print("\n%d passed, %d failed" % (len(PASSES), len(FAILS)))

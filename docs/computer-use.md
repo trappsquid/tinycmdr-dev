@@ -79,20 +79,22 @@ not stop at the checkbox:
 Today screenshots travel to the SAME endpoint as the conversation, in the same request as
 the text:
 
-- `agent.vision: true` is the operator's assertion that the endpoint accepts images
-  (`tinycmdr config set agent.vision true`, then restart). It is off by default.
-- With it on, the endpoint gets the last word: `tinycmdr doctor` probes `/props` and only
-  a positive `modalities.vision=false` vetoes - an endpoint that says nothing (a cloud
-  API, an older llama.cpp) does not override the config.
-- With it off, or vetoed, a tool that produced images says so in its result text ("the
-  tool produced N image(s); agent.vision is off, so they were NOT attached") instead of
-  sending pixels nowhere. Per call, the frames that survive dedup are capped; the dedup
-  digest is computed before any of this.
+- `agent.vision: "auto"` (the shipped value) attaches an image only when the endpoint
+  declares image input - `/props` `modalities.vision`, or `/v1/models`
+  `architecture.input_modalities`. A model that says it takes images needs no flag.
+- `agent.vision: true` is the operator's assertion for an endpoint that says nothing (a
+  cloud API, an older server), and a positive `modalities.vision=false` still vetoes;
+  `agent.vision: false` never attaches.
+- One decision (`image_switch`) is read by every door: a chat upload (Mattermost,
+  Telegram), any image path `read_file` opens, and a tool that returns images. When an
+  image cannot be attached, the run's text says why and tells the model not to read the
+  file as text, instead of sending pixels nowhere. Per call, the frames that survive
+  dedup are capped; the dedup digest is computed before any of this.
 
 The gap: a text-only main model cannot use screenshots at all, because the images are
 attached to a request that model cannot see. The intended shape, not implemented:
 
-1. **Config**: keep `agent.vision: true` as the switch, add
+1. **Config**: keep `agent.vision` as the switch, add
    `agent.vision_endpoint: <base_url>` (and optional `agent.vision_model`). The existing
    `_endpoint_vision(url)` already takes a URL, so the aux endpoint is probed with the
    same veto rules.

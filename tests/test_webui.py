@@ -3018,6 +3018,42 @@ def main():
           "the chat lane stores the SANITISED name the page door would (ledger A-10-14)",
           (_mm_saved, _mm_notes))
 
+    # ---- a photo reaches a model that says it takes images ---------------------
+    class _ImageFilesStub:
+        @staticmethod
+        def get_file(fid):
+            return b"\x89PNG\r\n\x1a\n" + b"\x00" * 24
+
+    _ImageDispatcherStub = type("_ID", (), {
+        "driver": type("_D2", (), {"files": _ImageFilesStub()})()})
+    _img_post = {"file_ids": ["p1"],
+                 "metadata": {"files": [{"id": "p1", "name": "photo.png",
+                                         "mime_type": "image/png"}]}}
+    _cap_saved = getattr(fb, "endpoint_image_input", None)
+    _vis_saved = fb.CONFIG["agent"].get("vision")
+    if _proc:
+        check(bool(_cap_saved),
+              "the chat lane reads the endpoint's image declaration, not a guessed flag",
+              "no endpoint image capability probe on this build")
+    if _proc and _cap_saved:
+        try:
+            fb.CONFIG["agent"]["vision"] = "auto"
+            fb.endpoint_image_input = lambda url=None: (True, "")
+            _in, _iimgs = _proc(_ImageDispatcherStub(), _img_post)
+            check(len(_iimgs) == 1 and "image attached" in _in[0],
+                  "auto attaches a chat image when the endpoint declares image input",
+                  (_in, _iimgs))
+            fb.endpoint_image_input = lambda url=None: (
+                None, "the endpoint does not declare image input")
+            _in2, _iimgs2 = _proc(_ImageDispatcherStub(), _img_post)
+            check(not _iimgs2 and "NOT attached" in _in2[0]
+                  and "Do not read it as text" in _in2[0],
+                  "...and a model that cannot see is not told to read the PNG as text",
+                  _in2)
+        finally:
+            fb.endpoint_image_input = _cap_saved
+            fb.CONFIG["agent"]["vision"] = _vis_saved
+
     _tg_dl = getattr(fb, "tg_download_media", None)
     try:
         _tg_notes = _tg_dl(_FilesStub(), [("f1", "voix*3.ogg", "audio/ogg")]) \

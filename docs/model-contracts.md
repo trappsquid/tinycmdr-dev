@@ -114,7 +114,8 @@ Four requests, none of which generates more than a few tokens:
 1. `GET /models` - does it list the configured id, and does the entry carry a context length
    (`max_model_len`, `n_ctx`, `context_window`, or `meta.n_ctx` - all four are in the wild)?
 2. `GET /props` (root, not under `/v1`) - is this llama.cpp, how many slots, does the template
-   declare `chat_template_caps`, `modalities.vision`?
+   declare `chat_template_caps`, does the model declare image input (`modalities.vision`, or the
+   `/models` entry's `architecture.input_modalities`)? The image doors read the latter.
 3. `POST /chat/completions` with `tools` + `reasoning_effort` + `stream_options` + 1 token - the
    400 text names the field, and the field names the family. A 400 naming BOTH `tools` and
    `reasoning_effort` means the server wants `/responses`.

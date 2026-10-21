@@ -1467,16 +1467,23 @@ def _body():
 
         rc, out, err = call(fb, ["config", "set", "agent.vision", "treu"])
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
-        check("a boolean key refuses a bare word (a string is always truthy)",
-              rc == 2 and "true or false" in err and "vision" not in written["agent"],
+        check("a tri-state key refuses a bare word (a string is always truthy)",
+              rc == 2 and "true, false or auto" in err and "vision" not in written["agent"],
               (rc, err[:160]))
         rc, out, err = call(fb, ["config", "set", "agent.vision", "true"])
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
         check("...and takes the JSON boolean", rc == 0 and written["agent"]["vision"] is True,
               written["agent"].get("vision"))
+        rc, out, err = call(fb, ["config", "set", "agent.vision", "auto"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("...and the auto word the shipped config carries",
+              rc == 0 and written["agent"]["vision"] == "auto",
+              written["agent"].get("vision"))
         rc, out, err = call(fb, ["config", "set", "agent.vision", "false", "--str"])
-        check("--str cannot hide a truthy string under a boolean key",
-              rc == 2 and "true or false" in err, (rc, err[:160]))
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("--str keeps a spelling the switch reads as off",
+              rc == 0 and written["agent"]["vision"] == "false",
+              (rc, written["agent"].get("vision")))
         call(fb, ["config", "unset", "agent.vision"])
         # A-2026-10-05-68: a 3+ segment path whose parent was missing wrote a LITERAL
         # top-level dotted key ("agent.mcp_servers.demo.cmd" became the key
