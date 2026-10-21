@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.43] - 2026-10-21
+
+### Fixed
+- **The legion rail selects the box you pick:** a linked box's row only opened a new tab, so the stage never left the box that served the page - a plain click now moves this page to that box's own page, the stage header names the box, the HUB row appears only when it leads somewhere else and is consumed when used, and a row naming this page is marked as this box and refused as a cohort (tests/test_webui_page.py, tests/test_legion.py, tests/test_webui.py).
+
 ## [1.1.42] - 2026-10-20
 
 ### Fixed
