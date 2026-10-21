@@ -876,7 +876,7 @@ def main():
     check(res.get("opened") == [],
           f"...in THIS tab, not a new window ({res.get('opened')})")
     check(res.get("href") == "http://storage:8790/#token=tok-storage"
-                              "&from=http%3A%2F%2F127.0.0.1%3A8790",
+                              "&from=http%3A%2F%2F127.0.0.1%3A8790&fromhost=harness",
           f"...navigating here with its token in the fragment and this page's "
           f"address as the way back ({res.get('href')!r})")
     check(res.get("chan") == "OPENING STORAGE \u2026",
@@ -894,11 +894,11 @@ def main():
                      "meta": True, "polls": 3}]}
     res = run_page(sc, script)
     check(res.get("opened") == ["http://storage:8790/#token=tok-storage"
-                                "&from=http%3A%2F%2F127.0.0.1%3A8790"],
+                                "&from=http%3A%2F%2F127.0.0.1%3A8790&fromhost=harness"],
           f"cmd/ctrl-click still opens that page in a new tab ({res.get('opened')})")
     check(res.get("openedHow") == ["replace"]
           and res.get("openedHistory") == [["http://storage:8790/#token=tok-storage"
-                                            "&from=http%3A%2F%2F127.0.0.1%3A8790"]],
+                                            "&from=http%3A%2F%2F127.0.0.1%3A8790&fromhost=harness"]],
           f"...replacing the blank tab it was opened in, so Back has no empty page "
           f"behind it ({res.get('openedHow')}, {res.get('openedHistory')})")
     check(res.get("href") == "http://127.0.0.1:8790/"
@@ -916,73 +916,76 @@ def main():
     # changed nothing - so it is drawn only when it leads somewhere else, and using it
     # consumes the address instead of leaving the destination with one.
     sc = {"runs": [], "legion_cohorts": [],
-          "hash": "#from=http%3A%2F%2Fhub.test%3A8790",
+          "hash": "#from=http%3A%2F%2Fhub.test%3A8790&fromhost=hub.test",
           "steps": [{"kind": "polls", "n": 2},
-                    {"kind": "clickrow", "id": "cohorts", "text": "HUB"}]}
+                    {"kind": "clickrow", "id": "cohorts", "text": "hub.test"}]}
     res = run_page(sc, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
     check(not res["errors"], f"the linked page runs clean ({res['errors'][:1]})")
-    check(len(names) == 3 and "HUB" in names[0] and "hub.test:8790" in names[0]
+    check(len(names) == 3 and "hub.test" in names[0]
+          and "the box you came from" in names[0]
           and "PRAETORIUM" in names[1] and "ADD COHORT" in names[2],
-          f"a page opened from a hub draws the way back above PRAETORIUM ({names})")
+          f"a page opened from a hub names that box on the way back ({names})")
     check(res.get("href") == "http://hub.test:8790/#from=",
           f"...and clicking it returns to that hub ({res.get('href')!r})")
-    check(res.get("session") is not None and "fb_from" not in res["session"],
+    check("fb_hub" not in (res.get("local") or {}),
           f"...consuming the return address, so the hub draws no row back "
-          f"({res.get('session')!r})")
-    # A reload of that tab: the fragment is scrubbed on purpose and this page reloads
-    # itself on a version change, so the address has to come back from the tab's
-    # sessionStorage or the cohort is stranded after one reload (his report, second
-    # shape: the row was there, then gone).
-    sc = {"runs": [], "session": {"fb_from": "http://hub.test:8790"},
+          f"({res.get('local')!r})")
+    # A reload of that box: the fragment is scrubbed on purpose and this page reloads
+    # itself on a version change, so the address has to come back from the browser's
+    # storage or the box is stranded after one reload (his report, second shape).
+    sc = {"runs": [], "store": {"fb_hub": "http://hub.test:8790",
+                                "fb_hub_name": "hub.test"},
           "steps": [{"kind": "polls", "n": 2},
-                    {"kind": "clickrow", "id": "cohorts", "text": "HUB"}]}
+                    {"kind": "clickrow", "id": "cohorts", "text": "hub.test"}]}
     res = run_page(sc, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(not res["errors"] and "HUB" in (names[0] or ""),
-          f"a reload of that tab still draws the way back ({names})")
+    check(not res["errors"] and "hub.test" in (names[0] or ""),
+          f"a reload of that box still draws the way back ({names})")
     check(res.get("href") == "http://hub.test:8790/#from=",
           f"...and it still returns to the hub ({res.get('href')!r})")
     # ...but a page that WOULD return to itself or to a box already in the rail draws
-    # no HUB row: a row that changes nothing is not a way back.
+    # no return row: a row that changes nothing is not a way back.
     res = run_page({"runs": [], "hash": "#from=http%3A%2F%2F127.0.0.1%3A8790",
                     "steps": [{"kind": "polls", "n": 2}]}, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(len(names) == 2 and not any("HUB" in (n or "") for n in names),
-          f"a return address naming THIS page draws no HUB row ({names})")
+    check(len(names) == 2 and not any("the box you came from" in (n or "") for n in names),
+          f"a return address naming THIS page draws no return row ({names})")
     res = run_page({"runs": [], "legion_cohorts": [
                         {"name": "hub", "numeral": 2, "host": "hub.test:8790",
                          "url": "http://hub.test:8790", "state": "ready",
-                         "error": "", "version": "1.0.88"}],
-                    "hash": "#from=http%3A%2F%2Fhub.test%3A8790",
+                         "error": "", "version": "1.0.88", "self": False,
+                         "host_name": "hub.test", "sessions": []}],
+                    "hash": "#from=http%3A%2F%2Fhub.test%3A8790&fromhost=hub.test",
                     "steps": [{"kind": "polls", "n": 2}]}, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(len(names) == 3 and not any((n or "").startswith("HUB") for n in names)
+    check(len(names) == 3 and not any("the box you came from" in (n or "") for n in names)
           and "hub" in names[1],
           f"a return address that is already a row in this rail draws no second one "
           f"({names})")
-    # ...and an EXPLICIT empty `from` (the HUB link) clears a stored address, so the
+    # ...and an EXPLICIT empty `from` (the return link) clears a stored address, so the
     # box you return to does not grow a row back to the page you just left.
     res = run_page({"runs": [], "hash": "#from=",
-                    "session": {"fb_from": "http://hub.test:8790"},
+                    "store": {"fb_hub": "http://hub.test:8790",
+                              "fb_hub_name": "hub.test"},
                     "steps": [{"kind": "polls", "n": 2}]}, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(len(names) == 2 and not any("HUB" in (n or "") for n in names)
-          and "fb_from" not in (res.get("session") or {}),
+    check(len(names) == 2 and not any("the box you came from" in (n or "") for n in names)
+          and "fb_hub" not in (res.get("local") or {}),
           f"an explicit empty from clears the stored way back ({names}, "
-          f"{res.get('session')!r})")
+          f"{res.get('local')!r})")
     # ...and what is read back is held to the same rule as the fragment: a stored value
     # is a URL this page will navigate to, so it is re-validated on every load.
-    res = run_page({"runs": [], "session": {"fb_from": "javascript:alert(1)"},
+    res = run_page({"runs": [], "store": {"fb_hub": "javascript:alert(1)"},
                     "steps": [{"kind": "polls", "n": 2}]}, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(len(names) == 2 and not any("HUB" in (n or "") for n in names),
+    check(len(names) == 2 and not any("the box you came from" in (n or "") for n in names),
           f"a stored return address that is not an http(s) origin is ignored too "
           f"({names})")
     res = run_page({"runs": [], "hash": "#from=javascript%3Aalert(1)",
                     "steps": [{"kind": "polls", "n": 2}]}, script)
     names = [c["text"] for c in (res.get("cohorts") or [])]
-    check(len(names) == 2 and not any("HUB" in (n or "") for n in names),
+    check(len(names) == 2 and not any("the box you came from" in (n or "") for n in names),
           f"a return address that is not an http(s) origin is ignored ({names})")
 
     # -- a cohort that points at THIS page is not a box to open ------------------------
@@ -1009,6 +1012,69 @@ def main():
     check(res["cohorts"][1]["del"] is True and res["cohorts"][1]["edit"] is False,
           f"...keeping the x that removes it and no pencil "
           f"({res['cohorts'][1]!r})")
+
+    # -- the archive groups conversations by host ------------------------------------
+    # His report (2026-10-21): the rail never said which machine a conversation belonged
+    # to. The census reads each linked box's campaign list; the archive draws one group
+    # per host (this box first), and a row in another group selects that box and opens
+    # that conversation there (#session=).
+    fleet = [dict(cohorts[0], host_name="STORAGE", sessions=[
+        {"key": "s1", "title": "a storage conversation", "last_active": 0,
+         "exchanges": 2, "model": "main", "live": None}])]
+    res = run_page({"runs": [], "legion_cohorts": fleet,
+                    "conversations": [{"key": "mine", "title": "a local conversation",
+                                       "last_active": 0, "exchanges": 1,
+                                       "owner": "mine", "model": "main"}],
+                    "steps": [{"kind": "polls", "n": 3}]}, script)
+    groups = res.get("groups") or []
+    archive = res.get("archive") or []
+    check(len(groups) == 2 and "harness \u00b7 this host" in groups[0]
+          and "STORAGE \u00b7 storage:8790" in groups[1],
+          f"the archive heads this box's conversations with its name, then each linked "
+          f"box's ({groups})")
+    local_row = [r for r in archive if r["key"] == "mine"]
+    fleet_row = [r for r in archive if r["key"] == "s1"]
+    check(local_row and fleet_row
+          and "a local conversation" in local_row[0]["text"]
+          and "other" not in (local_row[0]["cls"] or "")
+          and "a storage conversation" in fleet_row[0]["text"]
+          and "other" in (fleet_row[0]["cls"] or ""),
+          f"...and every conversation sits under its own host "
+          f"({[(r['key'], r['cls']) for r in archive]})")
+    # a pick in the other host's group takes this tab there, on that conversation
+    res = run_page({"runs": [], "legion_cohorts": fleet,
+                    "steps": [{"kind": "polls", "n": 3},
+                              {"kind": "clickrow", "id": "sessions",
+                               "text": "a storage conversation", "polls": 3}]}, script)
+    check(res.get("legionOpens") == [{"name": "storage"}]
+          and res.get("href") == "http://storage:8790/#token=tok-storage"
+                                   "&from=http%3A%2F%2F127.0.0.1%3A8790"
+                                   "&fromhost=harness&session=s1",
+          f"a linked box's conversation opens that box AT that conversation "
+          f"({res.get('legionOpens')!r}, {res.get('href')!r})")
+    # the host heading does the same without a conversation
+    res = run_page({"runs": [], "legion_cohorts": fleet,
+                    "steps": [{"kind": "polls", "n": 3},
+                              {"kind": "clickrow", "id": "sessions",
+                               "text": "STORAGE", "polls": 3}]}, script)
+    check(res.get("legionOpens") == [{"name": "storage"}]
+          and res.get("href") == "http://storage:8790/#token=tok-storage"
+                                   "&from=http%3A%2F%2F127.0.0.1%3A8790"
+                                   "&fromhost=harness",
+          f"a linked box's heading selects that box, no conversation "
+          f"({res.get('legionOpens')!r}, {res.get('href')!r})")
+    # ...and the destination opens the conversation it was handed
+    res = run_page({"runs": [], "conversations": [
+                        {"key": "conv2", "title": "the hinted conversation",
+                         "last_active": 0, "exchanges": 0, "owner": "mine",
+                         "model": "main"}],
+                    "store": {"fb_session": "web"},
+                    "hash": "#session=conv2",
+                    "steps": [{"kind": "polls", "n": 3}]}, script)
+    check(res.get("sessionOpens", [])[-1:] == ["conv2"]
+          and res.get("stitle") == "the hinted conversation",
+          f"a session hint opens that conversation, not the tab's last one "
+          f"({res.get('sessionOpens')!r}, {res.get('stitle')!r})")
 
     # ...and a box with NO cohorts: the rail still shows - praetorium and the ADD
     # COHORT invitation - and no /api/legion read is paid

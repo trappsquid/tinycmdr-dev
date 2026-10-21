@@ -452,15 +452,20 @@ envelope and caps, and the page suite's shim the renderer.
   fragment (never the query), which the browser navigates THIS tab to - the other box's
   own page, every feature, with no relay (a modified click opens a new tab instead). A
   row whose address is the page being viewed is marked `self` and refused by
-  `add-remote` / `update-remote`: a cohort is another machine. `add-remote` /
-  `update-remote` / `remove-remote` are the authenticated page's own writes into that
-  config: a box the operator runs, by URL + its page token (the card is probed before
-  anything lands, the token is saved under a swept `_TOKEN` name, and the running hub
-  resolves it with no restart), a rotated token or moved address probed with the typed
-  values before anything is written (a blank token keeps the stored one; the hub's own
-  `TINYCMDR_WEB_TOKEN` and a token_env another entry shares are refused), and an unlink
-  that leaves a hand-written `token_env` alone. A census thread refreshes each card for
-  the row's version and liveness; an off-LAN URL warns once at startup. Tests:
+  `add-remote` / `update-remote`: a cohort is another machine. The census thread also
+  reads each cohort's `/api/sessions` (bounded, no secrets) into the overview, so the
+  archive is grouped by host and a pick from another box's group adds `session=<key>`
+  (the destination opens it on boot); `fromhost` names this box on the destination's
+  return row, and the return address is kept for the browser (not just the tab).
+  `/api/legion` never contacts a cohort; the census pays those calls on its own clock.
+  `add-remote` / `update-remote` / `remove-remote` are the authenticated page's own
+  writes into that config: a box the operator runs, by URL + its page token (the card is
+  probed before anything lands, the token is saved under a swept `_TOKEN` name, and the
+  running hub resolves it with no restart), a rotated token or moved address probed with
+  the typed values before anything is written (a blank token keeps the stored one; the
+  hub's own `TINYCMDR_WEB_TOKEN` and a token_env another entry shares are refused), and
+  an unlink that leaves a hand-written `token_env` alone. A census thread refreshes each
+  card for the row's version and liveness; an off-LAN URL warns once at startup. Tests:
   `tests/test_legion.py`, the page shim's legion scenario, and `tests/test_webui.py`'s
   ADD/UPDATE/REMOVE/OPEN COHORT block.
 

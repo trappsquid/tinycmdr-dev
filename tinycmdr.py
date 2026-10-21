@@ -31537,13 +31537,16 @@ def _web_drive(run, text, scripted=False):
 # ------------------------------------------------------------------- the LEGION
 # One page, several boxes. A cohort is a tinycmdr page on another LAN box: this
 # rail lists the configured ones (agent.a2a_remotes), reports whether each answers,
-# and opens its OWN page in a new tab with its token in the URL fragment - exactly
-# as if the browser had navigated there. Nothing is relayed: every feature of that
-# box (slash commands, uploads, its conversation rail, its own model picker) is the
-# page itself. The card read is public metadata; it carries no order.
+# and SELECTS one - this tab becomes that box's own page with its token in the URL
+# fragment, so every feature is the page itself. Nothing is relayed. The census also
+# reads each box's campaign list, so the hub's archive can group conversations by
+# host and a pick can open one (#session=).
 LEGION_CARD_TTL = 60.0                 # a cohort's card is re-read this often
+LEGION_SESSIONS_TTL = 15.0             # ...and its campaign list this often
+LEGION_SESSIONS_MAX = 20               # rows kept per cohort (the rail's bound)
 LEGION_CENSUS_SECONDS = 15.0           # the probe thread's tick
 _LEGION_CARDS = {}                     # name -> {"ok", "card", "error", "at"}
+_LEGION_SESSIONS = {}                  # name -> {"ok", "sessions", "host", "error", "at"}
 _LEGION_EGRESS_WARNED = set()          # entries the off-LAN warning has been said for
 _LEGION_PROBING = False                # one census pass at a time
 _LEGION_NAME_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")  # a cohort name (ADD COHORT)
@@ -31556,6 +31559,63 @@ def legion_cohorts():
         if isinstance(entry, dict) and str(entry.get("url") or "").strip():
             out[str(name)] = entry
     return out
+
+
+def _legion_sessions_of(rows):
+    """The rail's view of a peer's sessions: newest-first, bounded, no secrets.
+
+    The peer's own reply carries more (tokens, owners, live runs); the hub keeps only
+    what the grouped archive draws. A row without a key or a title is skipped rather
+    than drawn as a blank line.
+    """
+    out = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "").strip()
+        title = str(row.get("title") or "").strip()
+        if not key or not title:
+            continue
+        live = row.get("live")
+        out.append({"key": key, "title": title,
+                    "last_active": row.get("last_active") or 0,
+                    "exchanges": int(row.get("exchanges") or 0),
+                    "model": str(row.get("model") or ""),
+                    "live": ({"steps": int((live or {}).get("steps") or 0)}
+                             if isinstance(live, dict) else None)})
+        if len(out) >= LEGION_SESSIONS_MAX:
+            break
+    return out
+
+
+def _legion_probe_sessions(name):
+    """Refresh one cohort's campaign list. Never raises; returns the fresh entry."""
+    url, token, err = a2a_remote_target(name)
+    now = now_mono()
+    if err or not token:
+        entry = {"ok": False, "sessions": [], "host": "",
+                 "error": err or "no page token", "at": now}
+        _LEGION_SESSIONS[name] = entry
+        return entry
+    try:
+        timeout = min(float((CONFIG.get("agent") or {}).get("a2a_timeout") or 120),
+                      5.0)
+        req = urllib.request.Request(
+            url + "/api/sessions?all=1",
+            headers={"Accept": "application/json",
+                     "X-Tinycmdr-Token": token})
+        with urllib.request.urlopen(req, timeout=max(1.0, timeout)) as reply:
+            body = json.loads(reply.read(1_000_000) or b"{}")
+        entry = {"ok": True,
+                 "sessions": _legion_sessions_of(body.get("sessions")),
+                 "host": str(body.get("host") or ""),
+                 "version": str(body.get("version") or ""),
+                 "error": "", "at": now}
+    except Exception as e:                                       # noqa: BLE001
+        entry = {"ok": False, "sessions": [], "host": "",
+                 "error": str(e) or e.__class__.__name__, "at": now}
+    _LEGION_SESSIONS[name] = entry
+    return entry
 
 
 def _legion_host(url):
@@ -31659,10 +31719,12 @@ def _legion_probe_card(name):
 
 
 def _legion_census_pass():
-    """One pass: card probes and the off-LAN warning.
+    """One pass: card probes, the campaign lists, and the off-LAN warning.
 
     Runs on its own thread on a slow clock - never on a request - so a hung cohort
-    can hold neither a page's poll nor a hub handler thread.
+    can hold neither a page's poll nor a hub handler thread. The session read is what
+    lets the hub's archive group conversations by host (his report, 2026-10-21: the
+    rail never said which box a conversation belonged to).
     """
     global _LEGION_PROBING
     if not legion_cohorts() or _LEGION_PROBING:
@@ -31677,6 +31739,13 @@ def _legion_census_pass():
                     _legion_probe_card(name)
                 except Exception:                                # noqa: BLE001
                     log.debug("legion: card probe for %s failed", name, exc_info=True)
+            sess = _LEGION_SESSIONS.get(name)
+            if not isinstance(sess, dict) or now - sess.get("at", 0.0) > LEGION_SESSIONS_TTL:
+                try:
+                    _legion_probe_sessions(name)
+                except Exception:                                # noqa: BLE001
+                    log.debug("legion: session read for %s failed", name,
+                              exc_info=True)
     finally:
         _LEGION_PROBING = False
 
@@ -31755,6 +31824,10 @@ def legion_add_remote(name, url, token, page_host=""):
         return {"error": err}, 500
     _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "", "at": now_mono()}
     _legion_egress_check(name, url)
+    try:
+        _legion_probe_sessions(name)          # the archive's first paint names its box
+    except Exception:                                        # noqa: BLE001
+        log.debug("legion: first session read for %s failed", name, exc_info=True)
     log.info("legion: ADD COHORT wrote agent.a2a_remotes.%s -> %s (its token in %s)",
              name, url, ENV_FILE.name)
     return {"ok": True, "name": name,
@@ -31794,6 +31867,7 @@ def legion_remove_remote(name):
     # Caches keyed by the name would otherwise answer for a cohort that is gone (the
     # census only refreshes names still configured, so a stale entry would be forever).
     _LEGION_CARDS.pop(name, None)
+    _LEGION_SESSIONS.pop(name, None)
     _LEGION_EGRESS_WARNED.discard(name)
     minted = "TINYCMDR_COHORT_%s_TOKEN" % name.upper()
     shared = any(str((e or {}).get("token_env") or "") == token_env
@@ -31901,6 +31975,11 @@ def legion_update_remote(name, url, token, page_host=""):
     _LEGION_CARDS[name] = {"ok": True, "card": card, "error": "", "at": now_mono()}
     _LEGION_EGRESS_WARNED.discard(name)      # a new address gets its own warning
     _legion_egress_check(name, url)
+    try:
+        _legion_probe_sessions(name)          # a moved box's archive follows it
+    except Exception:                                        # noqa: BLE001
+        log.debug("legion: session read after reconfigure for %s failed", name,
+                  exc_info=True)
     log.info("legion: RECONFIGURE COHORT set agent.a2a_remotes.%s -> %s%s",
              name, url, (" and rewrote " + token_env) if supplied else "")
     return {"ok": True, "name": name, "url": url, "token_env": token_env,
@@ -31914,10 +31993,14 @@ def _legion_row(name, page_host=""):
     err = str(card.get("error") or "")
     state = "silent" if (err and not card.get("ok")) else "ready"
     entry = legion_cohorts().get(name) or {}
+    sess = _LEGION_SESSIONS.get(name) or {}
     return {"name": name, "host": _legion_host(entry.get("url") or ""),
             "url": str(entry.get("url") or ""),
             "state": state, "error": err,
             "self": _legion_same_page(entry.get("url") or "", page_host),
+            "host_name": str(sess.get("host") or ""),
+            "sessions": list(sess.get("sessions") or []),
+            "sessions_error": str(sess.get("error") or ""),
             "version": str((card.get("card") or {}).get("version") or "")}
 
 
@@ -31927,7 +32010,9 @@ def legion_overview(page_host=""):
     No cohort is contacted on this path (the census thread pays those calls on its
     own clock), so a hung box cannot stall the page's refresh. `page_host` is the
     Host the browser used: a row naming that page is marked `self`, so the rail can
-    say so instead of offering a link to where the reader already is.
+    say so instead of offering a link to where the reader already is. Each row also
+    carries the cohort's own campaign list (`sessions`) and host name, so the archive
+    can group conversations by host and say which box each one belongs to.
     """
     rows = [(_legion_row(name, page_host), name) for name in legion_cohorts()]
     for i, (row, _name) in enumerate(rows):
@@ -32547,11 +32632,13 @@ function paintChan(opening){
 // The token comes from the link first (the installer prints one that contains it), then from
 // last time. The old prompt said "leave empty if loopback", which was wrong the moment an
 // install HAD a token: empty means unauthorized, and nothing said where the token was.
-let token='',pageFrom='',pageFromHost='';
+let token='',pageFrom='',pageFromHost='',pageFromName='',pageSession='';
 // A page opened from another box's rail carries that box's address as `from` in the
-// same fragment that carried the token. It is a RETURN ADDRESS, not an instruction:
-// only a bare http(s) origin is accepted, because the rail turns it into a link and a
-// javascript: URL there would run in this page.
+// same fragment that carried the token, its host name as `fromhost`, and - when a
+// conversation was picked from the hub's archive - that conversation's key as
+// `session`. They are HINTS, not instructions: only a bare http(s) origin and a plain
+// name/key are accepted, because the rail turns them into a link and a javascript:
+// URL there would run in this page.
 function safeOrigin(raw){
  try{
   const u=new URL(String(raw||'').trim());
@@ -32560,30 +32647,42 @@ function safeOrigin(raw){
  }catch(e){}
  return '';
 }
+function safeName(raw){
+ const s=String(raw||'').trim();
+ return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/.test(s)?s:'';
+}
+function rememberHub(origin,name){
+ try{
+  if(origin){localStorage.fb_hub=origin;localStorage.fb_hub_name=safeName(name);}
+  else{localStorage.removeItem('fb_hub');localStorage.removeItem('fb_hub_name');}
+ }catch(e){}
+}
 try{
  // The FRAGMENT first: it never reaches the server, its logs, or a Referer header.
  const frag=new URLSearchParams(location.hash.replace(/^#/,''));
  token=frag.get('token')||new URLSearchParams(location.search).get('token')||'';
- // The way back belongs to the TAB, not to the load: the fragment is scrubbed below
- // and this page reloads itself when the server's version differs, so an address that
- // lived only in the fragment vanished at the first reload and the cohort was left with
- // no way out. sessionStorage is per tab and per origin, so it ends with the tab - the
- // right lifetime for "the box that opened this one".
- // An explicit `from` in the fragment decides this tab's way back, even when it is
- // EMPTY: the HUB row links with `#from=` so returning to a box clears the address
- // the tab inherited, instead of that box drawing a HUB row back to the page you just
- // left (the ping-pong the operator hit on 2026-10-21). A fragment without the key
- // leaves the stored address alone, so a reload keeps it.
+ // The way back belongs to the BROWSER, not to the tab: the fragment is scrubbed
+ // below, this page reloads itself on a version change, and a box the reader visits
+ // again later must still know where it came from - a tab-scoped address vanished
+ // with its tab and left the box unreachable (reported 2026-10-21: stuck on the
+ // linked box, only its own archive worked). The suppression rules keep it sane: a
+ // hub that lists the return address as one of its own cohorts draws no return row.
+ // An explicit `from` in the fragment still decides, even when EMPTY: the return row
+ // links with `#from=` so coming back CLEARS the address instead of the destination
+ // growing a row back to the page just left. A fragment without the key reads the
+ // stored one, so a reload keeps it.
  if(frag.has('from')){
   pageFrom=safeOrigin(frag.get('from'));
-  try{if(pageFrom)sessionStorage.fb_from=pageFrom;else sessionStorage.removeItem('fb_from');}
-  catch(e){}
+  rememberHub(pageFrom,safeName(frag.get('fromhost')));
  }else{
-  try{pageFrom=safeOrigin(sessionStorage.fb_from||'');}catch(e){pageFrom='';}
+  try{pageFrom=safeOrigin(localStorage.fb_hub||sessionStorage.fb_from||'');}
+  catch(e){pageFrom='';}
  }
  if(pageFrom){
   try{pageFromHost=new URL(pageFrom).host;}catch(e){pageFromHost=pageFrom;}
+  try{pageFromName=safeName(localStorage.fb_hub_name);}catch(e){pageFromName='';}
  }
+ pageSession=safeName(frag.get('session'));
 }catch(e){}
 if(!token){token=localStorage.fb_token||'';}
 function askToken(retry){
@@ -32972,7 +33071,25 @@ const TERMINAL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" view
 const X_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 const PENCIL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></svg>';
 function renderRail(){
+ // The archive is the FLEET's conversations, GROUPED BY HOST: this box first, then one
+ // group per linked box, each headed by that box's name. A row in another box's group
+ // selects that box and opens that conversation there - the rail never left the reader
+ // guessing which machine a conversation belongs to (reported 2026-10-21).
  sessEl.textContent='';
+ const group=function(name,meta,cohort){
+  const head=document.createElement('div');
+  head.className='campaign-group'+(cohort?' cohortgroup':'');
+  const h=document.createElement('strong');h.textContent=name;
+  const m=document.createElement('small');m.textContent=meta;
+  head.appendChild(h);head.appendChild(m);
+  if(cohort){
+   head.title='open '+name+"'s page";
+   head.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
+    paintChan(name);openCohortPage(cohort.name,ev);};
+  }
+  sessEl.appendChild(head);
+ };
+ group((pageHost||'this host')+' \u00b7 this host','',null);
  for(const s of sessions){
   const row=document.createElement('div');
   row.className='campaign-item'+(s.key===sessionKey?' active':'')+(s.owner==='other'?' other':'');
@@ -32999,6 +33116,35 @@ function renderRail(){
   row.appendChild(del);
   row.onclick=function(){openSession(s.key);};
   sessEl.appendChild(row);
+ }
+ // One group per linked box that answered with a campaign list. Its rows are that
+ // box's own conversations; a click takes this tab there, on that conversation.
+ for(const c of legion.cohorts){
+  if(c.self||!c.sessions||!c.sessions.length)continue;
+  const cname=c.host_name||c.name;
+  group(cname+' \u00b7 '+(c.host||'')+(c.version?' \u00b7 v'+c.version:''),'',c);
+  for(const s of c.sessions){
+   const row=document.createElement('div');
+   row.className='campaign-item other';
+   row.dataset.key=s.key;
+   const ic=document.createElement('span');ic.className='campaign-icon';ic.innerHTML=TERMINAL_ICON;
+   row.appendChild(ic);
+   const tx=document.createElement('span');
+   const t=document.createElement('strong');t.textContent=s.title;tx.appendChild(t);
+   const m=document.createElement('small');
+   if(s.live){const d=document.createElement('span');d.className='dot work';m.appendChild(d);}
+   const a=document.createElement('span');a.textContent=age(s.last_active);m.appendChild(a);
+   if(s.exchanges){const e=document.createElement('span');
+    e.textContent=s.exchanges+' exchange'+(s.exchanges===1?'':'s');m.appendChild(e);}
+   if(s.live){const l=document.createElement('span');
+    l.textContent='working '+s.live.steps+' steps';m.appendChild(l);}
+   else if(s.model){const mo=document.createElement('span');mo.textContent=s.model;m.appendChild(mo);}
+   tx.appendChild(m);row.appendChild(tx);
+   row.title='open this conversation on '+cname;
+   row.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
+    paintChan(cname);openCohortPage(c.name,ev,s.key);};
+   sessEl.appendChild(row);
+  }
  }
  const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
  titleEl.textContent=cur?cur.title:'';
@@ -33050,7 +33196,7 @@ function renderLegion(){
  // below) made a HUB row that reloaded the page it was on, which is what the rail
  // looked like doing nothing (his report, 2026-10-21).
  if(pageFrom&&pageFrom!==location.origin&&!cohortAt(pageFrom)){
-  rows.push({name:'hub',back:true,host:pageFromHost,
+  rows.push({name:'hub',back:true,host:pageFromHost,hostName:pageFromName,
    state:'ready',numeral:0,version:'',error:''});
  }
  rows.push({name:'praetorium',host:(legion.praetorium.host||'this host'),
@@ -33070,14 +33216,18 @@ function renderLegion(){
   row.appendChild(ic);
   const tx=document.createElement('span');
   const t=document.createElement('strong');
-  t.textContent=back?'HUB':(local?'PRAETORIUM':c.name);tx.appendChild(t);
+  // The way back is NAMED with the machine, not "HUB": a reader looking for the box
+  // they came from should see its name on the row (reported 2026-10-21 - "wtf is the
+  // hub, it does nothing").
+  t.textContent=back?(c.hostName||c.host||'return'):(local?'PRAETORIUM':c.name);
+  tx.appendChild(t);
   const m=document.createElement('small');
   m.appendChild(dotFor(c.state));
   const meta=document.createElement('span');
   const hostTxt=String(c.host||'').trim();
   if(back){
-   meta.textContent='return \u00b7 '+hostTxt;
-   row.title='go back to '+pageFrom;
+   meta.textContent='the box you came from \u00b7 return';
+   row.title='go back to '+(c.hostName||pageFrom)+(c.hostName?' ('+pageFrom+')':'');
   }else if(self){
    meta.textContent='this box \u00b7 remove this row';
    row.title='this address is the page you are on - the \u00d7 removes it';
@@ -33092,6 +33242,7 @@ function renderLegion(){
   tx.appendChild(m);row.appendChild(tx);
   if(back){
    row.onclick=function(){
+    rememberHub('','');
     try{sessionStorage.removeItem('fb_from');}catch(e){}
     // `#from=` is an explicit EMPTY return address: the destination clears the one
     // it stored, so the box you return to does not grow a row back to the page you
@@ -33218,7 +33369,7 @@ function openAddCohort(existing){
  legion.dialog=ov;
  name.focus();
 }
-function openCohortPage(name,ev){
+function openCohortPage(name,ev,session){
  ev=ev||{};
  // The parity door: the cohort's own page with its token in the fragment. A plain
  // click SELECTS that box here - this tab navigates to its page, so the stage below
@@ -33226,6 +33377,8 @@ function openCohortPage(name,ev){
  // the old box, so the rail read as a selector that never selected). A modified
  // click keeps the old door: a new tab, opened on the CLICK because a popup blocker
  // refuses one made after an await. The hub's answer then names the address.
+ // `fromhost` names this box on the destination's return row; `session` makes the
+ // destination open that conversation (the archive's cross-host pick).
  const fresh=!!(ev.metaKey||ev.ctrlKey||ev.shiftKey);
  const w=fresh?window.open('','_blank'):null;
  if(fresh&&!w){note('the browser blocked the new tab - allow popups for this page');return;}
@@ -33234,11 +33387,13 @@ function openCohortPage(name,ev){
   const code=res&&res.status,j=(res&&res.j)||{};
   if(code!==200||j.error){
    if(w){try{w.close();}catch(e){}}
-   renderLegion();paintChan();
+   renderLegion();renderRail();paintChan();
    note(j.error||('the hub answered '+code));return;
   }
-  const url=j.url+(j.url.indexOf('#')>=0?'&':'#')
-   +'from='+encodeURIComponent(location.origin||'');
+  let url=j.url+(j.url.indexOf('#')>=0?'&':'#')
+   +'from='+encodeURIComponent(location.origin||'')
+   +'&fromhost='+encodeURIComponent(pageHost||'');
+  if(session)url+='&session='+encodeURIComponent(session);
   if(w){
    // replace, not assign: this tab was opened blank, and assigning leaves that blank
    // page as its only history entry, so the browser's Back button showed an empty page
@@ -33273,6 +33428,7 @@ async function refreshLegion(){
   legion.cohorts=j.cohorts||[];
   legion.on=legion.cohorts.length>0;
   renderLegion();
+  renderRail();                 // the fleet's conversation groups follow the read
  }catch(e){}
 }
 async function loadSessions(){
@@ -33868,7 +34024,11 @@ emptyLast.onclick=function(){
  await versionCheck();
  await loadCommands();
  await loadSessions();
- const want=localStorage.fb_session;
+ // A pick from the hub's archive hands this page `session=<key>`: that conversation
+ // wins over the tab's last one, but only when this box really has it. Otherwise the
+ // last conversation (or the shared one) opens as before.
+ let want=(pageSession&&sessions.some(function(s){return s.key===pageSession;}))
+   ? pageSession : localStorage.fb_session;
  const have=sessions.some(function(s){return s.key===want;});
  if(want&&have){await openSession(want,true);}
  else{await openSession(sessionKey||'web',true);}

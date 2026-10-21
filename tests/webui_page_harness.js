@@ -167,6 +167,9 @@ globalThis.document = {
   body: new El('body'),
 };
 const store = { fb_token: 'test-token' };
+// scenario.store seeds what the browser remembers for THIS origin (the way-back
+// address, a session key); scenario.no_token deletes the token below.
+Object.assign(store, scenario.store || {});
 store.removeItem = (k) => { delete store[k]; };
 globalThis.localStorage = store;
 // the page remembers a reload attempt per version in sessionStorage; a plain object
@@ -234,6 +237,7 @@ const legionAdds = [];                 // every add-remote POST body the page se
 const legionUpdates = [];              // every update-remote POST body the page sent
 const legionRemovals = [];             // every remove-remote POST body the page sent
 const legionOpens = [];                // every open POST body the page sent
+const sessionOpens = [];               // every conversation the page opened on the host
 const modelPosts = [];                 // every model switch the header control sent
 let modelCurrent = null;               // what /api/models calls current (the POST moves it)
 const ROSTER_MAIN = { name: 'main', url: 'http://127.0.0.1:1/v1', local: true,
@@ -329,6 +333,12 @@ let convSeq = 0;
 const sessions = [{ key: 'web', title: 'the shared conversation', created: 0,
                     last_active: 0, exchanges: 0, tokens: 0, model: 'main',
                     owner: 'shared', live: null }];
+// scenario.conversations adds rows to the host's list (the boot/session-hint checks
+// need a conversation that is not the shared one).
+for (const c of (scenario.conversations || [])) {
+  sessions.push(Object.assign({ created: 0, last_active: 0, exchanges: 0,
+                                tokens: 0, model: 'main', owner: 'other', live: null }, c));
+}
 
 // ---------------------------------------------------------------- the legion
 function fetchShim(url, opts) {
@@ -377,7 +387,8 @@ function fetchShim(url, opts) {
                            owner: 'mine', live: null });
         return jres({ key: k, sessions: sessions });
       }
-      if (body.op === 'open') { return jres({ open: body.key }); }
+      if (body.op === 'open') { sessionOpens.push(body.key);
+                               return jres({ open: body.key }); }
       if (body.op === 'rename') { return jres({ ok: true, sessions: sessions }); }
       if (body.op === 'delete') { return jres({ deleted: body.key, sessions: [] }); }
       return jres({ error: 'unknown op' });
@@ -766,6 +777,7 @@ async function main() {
     // the legion surfaces: what the rail's linked-box section and the stage
     // header actually show, and the page each row opened
     chan: byId.chan ? byId.chan.textContent : null,
+    stitle: byId.title ? byId.title.textContent : null,
     legionHidden: !!(byId.legion || {}).hidden,
     legionStat: byId.legionstat ? byId.legionstat.textContent : '',
     legionFetches: legionFetches,
@@ -773,10 +785,19 @@ async function main() {
     legionUpdates: legionUpdates,
     legionRemovals: legionRemovals,
     legionOpens: legionOpens,
+    sessionOpens: sessionOpens,
+    groups: (byId.sessions ? byId.sessions.children : [])
+      .filter((c) => (c.className || '').indexOf('campaign-group') >= 0)
+      .map((c) => c.textContent),
+    archive: (byId.sessions ? byId.sessions.children : [])
+      .filter((c) => (c.className || '').indexOf('campaign-group') < 0)
+      .map((c) => ({ key: c.dataset.key || '', cls: c.className || '',
+                     text: c.textContent || '' })),
     opened: openedPages.map((w) => w.location.href),
     openedHow: openedPages.map((w) => w.location.how),
     openedHistory: openedPages.map((w) => w.location.history),
     session: Object.assign({}, globalThis.sessionStorage),
+    local: Object.assign({}, store),
     addcohort: (globalThis.document.body.children || [])
       .filter((c) => c.id === 'addcohort').map((c) => c.textContent),
     addcohortFields: (() => {

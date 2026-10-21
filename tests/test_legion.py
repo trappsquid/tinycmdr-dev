@@ -92,6 +92,26 @@ def make_card_peer(version="9.9.9"):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if self.path.startswith("/api/sessions"):
+                # the census's session read: the box's own campaign list, newest first
+                state["auth"].append(self.headers.get("X-Tinycmdr-Token") or "")
+                data = json.dumps({
+                    "host": "STORAGE", "version": version, "open": "web",
+                    "sessions": [
+                        {"key": "web", "title": "a storage conversation",
+                         "last_active": 1792600000, "exchanges": 2,
+                         "model": "main", "tokens": 10, "owner": "shared",
+                         "live": None},
+                        {"key": "web-2", "title": "an older one",
+                         "last_active": 1792500000, "exchanges": 0,
+                         "model": "main", "tokens": 0, "owner": "mine",
+                         "live": {"steps": 3}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             self.send_response(404)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -161,13 +181,24 @@ def test_probe_and_overview(mod, srv, state):
           "the probe caches the card and its version", entry)
     check(state["auth"] and state["auth"][-1] == "Bearer " + TOKEN,
           "the probe carries the token from token_env", state["auth"][-1:])
+    sess = mod._legion_probe_sessions("storage")
+    check(sess["ok"] and sess["host"] == "STORAGE"
+          and [r["key"] for r in sess["sessions"]] == ["web", "web-2"]
+          and sess["sessions"][1]["live"] == {"steps": 3}
+          and "tokens" not in sess["sessions"][0],
+          "the census reads the box's campaign list, bounded and without secrets",
+          sess)
+    check(state["auth"][-1] == TOKEN,
+          "...with that box's own page token", state["auth"][-1:])
     before = state["gets"]
     ov = mod.legion_overview()
     check(ov["cohorts"] == [{
               "name": "storage", "host": "127.0.0.1:%d" % srv.server_address[1],
               "url": url, "state": "ready", "error": "", "self": False,
+              "host_name": "STORAGE",
+              "sessions": sess["sessions"], "sessions_error": "",
               "version": "9.9.9", "numeral": 2}],
-          "the overview names the row, its host, its version and its numeral",
+          "the overview names the row, its host, its version and its conversations",
           ov["cohorts"])
     check(ov["praetorium"]["host"] and ov["praetorium"]["version"],
           "the hub's own row is always present", ov["praetorium"])

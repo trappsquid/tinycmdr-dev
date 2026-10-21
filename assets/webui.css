@@ -1363,6 +1363,17 @@ box-shadow:0 .9rem 2.4rem var(--shadow);text-align:center}
    scrolling - the section had no height of its own). The class, not nth-of-type: the
    legion section joined the rail above the archive and moved the count. */
 .sidebar-archive{display:flex;min-height:0;flex:1 1 auto;flex-direction:column}
+/* LEGION ARCHIVE: one group header per host, so which machine a conversation belongs
+ * to is read, not guessed. The current box's header is a label; a linked box's header
+ * is also the control that selects that box. */
+.campaign-group{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;
+  margin:.5rem .2rem .15rem;padding:.22rem .1rem .3rem;border-bottom:1px solid var(--line-soft);
+  color:var(--muted-2);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.58rem;
+  letter-spacing:.1em;text-transform:uppercase}
+.campaign-group strong{color:var(--gold);font-weight:650;letter-spacing:.12em}
+.campaign-group small{color:var(--muted-2);font:inherit}
+.campaign-group.cohortgroup{cursor:pointer}
+.campaign-group.cohortgroup:hover strong{color:var(--gold-bright)}
 .campaign-item{position:relative}
 .campaign-del,.campaign-edit{position:absolute;top:6px;display:grid;width:22px;height:22px;
 place-items:center;border:1px solid var(--line-soft);border-radius:3px;
