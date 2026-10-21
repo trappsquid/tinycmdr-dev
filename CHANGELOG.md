@@ -5,6 +5,12 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.41] - 2026-10-20
+
+### Fixed
+- **An image reaches a model that declares vision:** a photo sent through a chat lane, or a path `read_file` opened, was handed to the model as bytes because `agent.vision` shipped false and nothing read the endpoint's declaration - the switch now ships `auto`, reads `/props modalities.vision` or `/v1/models architecture.input_modalities`, and every door (chat upload, `read_file`, tool images) uses it (tests/test_delivery_surface.py, tests/test_webui.py, tests/test_telegram.py).
+- **A refused image names the install, not the model:** the refusal note made a model tell the operator that its model could not see screenshots - every note now says the cause is the install's setting, not the model's ability, and forbids decoding the file as text (tests/test_delivery_surface.py, tests/test_webui.py, tests/test_telegram.py).
+
 ## [1.1.40] - 2026-10-20
 
 ### Fixed
