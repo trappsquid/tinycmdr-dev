@@ -3896,6 +3896,17 @@
       "gate": "tests/test_webui_page.py grades the in-tab pick, the modified click, the header, the one-shot HUB row and the self row; tests/test_legion.py grades the self mark and the refusal; tests/test_webui.py grades the route's self refusal"
     },
     {
+      "id": "webui-archive-groups-by-host",
+      "title": "the archive groups conversations by host",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "acbe633",
+        "expect": "untagged"
+      },
+      "detail": "The rail listed only the page's own conversations with no machine named on them and the way back was a row called HUB that vanished with its tab, so a reader could not tell which box a conversation belonged to or find the box they came from; the census now reads each linked box's campaign list into the overview, the archive draws one group per host (this box first) and a pick in another group selects that box at that conversation (`session=`), and the return row is named with the hub's host and kept for the browser rather than the tab.",
+      "gate": "tests/test_webui_page.py grades the host groups, the cross-host pick and the session hint; tests/test_legion.py grades the census's bounded session read; the page shim and a staged pair of boxes were driven in a browser"
+    },
+    {
       "id": "model-profile-picker",
       "title": "a known model is pre-set when it is added",
       "state": "shipped",
