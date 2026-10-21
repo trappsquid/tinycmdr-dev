@@ -76,6 +76,15 @@ class El {
     this.parent = null;
   }
   addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); }
+  // the page asks whether a click landed on a link (a row's text is an <a>)
+  closest(sel) {
+    let n = this;
+    while (n) {
+      if (sel === 'a' && n.tagName === 'a') { return n; }
+      n = n.parent;
+    }
+    return null;
+  }
   getAttribute(name) { return this._attrs ? this._attrs[name] : undefined; }
   setAttribute(name, value) { (this._attrs = this._attrs || {})[name] = String(value); }
   focus() {}
@@ -238,6 +247,8 @@ const legionUpdates = [];              // every update-remote POST body the page
 const legionRemovals = [];             // every remove-remote POST body the page sent
 const legionOpens = [];                // every open POST body the page sent
 const sessionOpens = [];               // every conversation the page opened on the host
+const navigations = [];                // every in-tab link followed
+const openedLinks = [];                // every link opened in a new tab (cmd/ctrl-click)
 const modelPosts = [];                 // every model switch the header control sent
 let modelCurrent = null;               // what /api/models calls current (the POST moves it)
 const ROSTER_MAIN = { name: 'main', url: 'http://127.0.0.1:1/v1', local: true,
@@ -708,24 +719,41 @@ async function main() {
       // click a dynamically drawn row: the first descendant of #<id> whose text
       // contains <text> and which carries a handler (a rail cohort row, a tab)
       const root = byId[step.id];
+      // A row or its real <a> (the rib's SELECT door): either carries the click.
+      const isLink = (n) => n && n.tagName === 'a' && typeof n.href === 'string' && n.href;
       const find = (n) => {
         if (!n) { return null; }
         const live = (typeof n.onclick === 'function')
-          || (n.listeners && n.listeners.click && n.listeners.click.length);
+          || (n.listeners && n.listeners.click && n.listeners.click.length)
+          || isLink(n);
         if (live && String(n.textContent || '').indexOf(step.text) >= 0) { return n; }
         for (const k of (n.children || [])) { const hit = find(k); if (hit) { return hit; } }
         return null;
       };
+      const linkIn = (n) => {
+        if (!n) { return null; }
+        if (isLink(n)) { return n; }
+        for (const k of (n.children || [])) { const hit = linkIn(k); if (hit) { return hit; } }
+        return null;
+      };
       const el = root ? find(root) : null;
-      // `meta` is a modified click (cmd/ctrl/shift): the page keeps the new-tab door
-      // for it, so the shim hands the handler the modifier the browser would.
-      const ev = { preventDefault() {}, metaKey: !!step.meta };
+      // `meta` is a modified click (cmd/ctrl/shift): an anchor opens a NEW tab and
+      // leaves this page alone; anything else follows the link like the browser.
+      const ev = { preventDefault() {}, metaKey: !!step.meta,
+                   target: el ? (linkIn(el) || el) : null };
       if (!el) {
         errors.push('clickrow step: nothing in #' + step.id + ' matches ' + JSON.stringify(step.text));
-      } else if (typeof el.onclick === 'function') {
-        await el.onclick(ev);
       } else {
-        for (const fn of el.listeners.click) { await fn(ev); }
+        if (typeof el.onclick === 'function') {
+          await el.onclick(ev);
+        } else {
+          for (const fn of (el.listeners.click || [])) { await fn(ev); }
+        }
+        const link = linkIn(el);
+        if (link) {
+          if (step.meta) { openedLinks.push(link.href); }
+          else { navigations.push(link.href); globalThis.location.href = link.href; }
+        }
       }
       for (let i = 0; i < (step.polls || 2); i++) { await tick(); }
     } else if (step.kind === 'copy') {
@@ -786,6 +814,8 @@ async function main() {
     legionRemovals: legionRemovals,
     legionOpens: legionOpens,
     sessionOpens: sessionOpens,
+    navigations: navigations,
+    openedLinks: openedLinks,
     groups: (byId.sessions ? byId.sessions.children : [])
       .filter((c) => (c.className || '').indexOf('campaign-group') >= 0)
       .map((c) => c.textContent),

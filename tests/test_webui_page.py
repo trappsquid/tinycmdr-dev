@@ -870,22 +870,15 @@ def main():
                     {"kind": "clickrow", "id": "cohorts", "text": "storage",
                      "polls": 3}]}
     res = run_page(sc, script)
-    check(res.get("legionOpens") == [{"name": "storage"}],
-          f"clicking a linked box asks the hub for its own address "
-          f"({res.get('legionOpens')})")
+    check(res.get("navigations", [])[-1:] == ["/api/legion/open?remote=storage"],
+          f"clicking a linked box follows the SELECT door ({res.get('navigations')!r})")
     check(res.get("opened") == [],
           f"...in THIS tab, not a new window ({res.get('opened')})")
-    check(res.get("href") == "http://storage:8790/#token=tok-storage"
-                              "&from=http%3A%2F%2F127.0.0.1%3A8790&fromhost=harness",
-          f"...navigating here with its token in the fragment and this page's "
-          f"address as the way back ({res.get('href')!r})")
-    check(res.get("chan") == "OPENING STORAGE \u2026",
-          f"the pick answers in the centre at once ({res.get('chan')!r})")
-    check("active" in ((res["cohorts"][1] or {}).get("cls") or "")
-          and "active" not in ((res["cohorts"][0] or {}).get("cls") or ""),
-          f"and the picked row is the selected one "
-          f"({(res['cohorts'][1] or {}).get('cls')!r}, "
-          f"{(res['cohorts'][0] or {}).get('cls')!r})")
+    check(res.get("href") == "/api/legion/open?remote=storage",
+          f"...so the chosen tab changes on the click itself ({res.get('href')!r})")
+    check("active" in ((res["cohorts"][0] or {}).get("cls") or ""),
+          f"...the row is a link, so the current box is not repainted on the way out "
+          f"({(res['cohorts'][0] or {}).get('cls')!r})")
 
     # a MODIFIED click keeps the old door: that page in a new tab, this one untouched
     sc = {"runs": [], "legion_cohorts": cohorts,
@@ -893,14 +886,8 @@ def main():
                     {"kind": "clickrow", "id": "cohorts", "text": "storage",
                      "meta": True, "polls": 3}]}
     res = run_page(sc, script)
-    check(res.get("opened") == ["http://storage:8790/#token=tok-storage"
-                                "&from=http%3A%2F%2F127.0.0.1%3A8790&fromhost=harness"],
-          f"cmd/ctrl-click still opens that page in a new tab ({res.get('opened')})")
-    check(res.get("openedHow") == ["replace"]
-          and res.get("openedHistory") == [["http://storage:8790/#token=tok-storage"
-                                            "&from=http%3A%2F%2F127.0.0.1%3A8790&fromhost=harness"]],
-          f"...replacing the blank tab it was opened in, so Back has no empty page "
-          f"behind it ({res.get('openedHow')}, {res.get('openedHistory')})")
+    check(res.get("openedLinks") == ["/api/legion/open?remote=storage"],
+          f"cmd/ctrl-click opens the same door in a new tab ({res.get('openedLinks')})")
     check(res.get("href") == "http://127.0.0.1:8790/"
           and res.get("chan") == "COMMAND CHANNEL \u00b7 harness",
           f"and this page neither moves nor changes its centre "
@@ -926,11 +913,11 @@ def main():
           and "the box you came from" in names[0]
           and "PRAETORIUM" in names[1] and "ADD COHORT" in names[2],
           f"a page opened from a hub names that box on the way back ({names})")
-    check(res.get("href") == "http://hub.test:8790/#from=",
+    check(res.get("href") == "http://hub.test:8790/#from="
+          and res.get("navigations", [])[-1:] == ["http://hub.test:8790/#from="],
           f"...and clicking it returns to that hub ({res.get('href')!r})")
-    check("fb_hub" not in (res.get("local") or {}),
-          f"...consuming the return address, so the hub draws no row back "
-          f"({res.get('local')!r})")
+    # the destination clears the stored address from the explicit empty `from` (the
+    # scenario below); the link itself only has to lead there
     # A reload of that box: the fragment is scrubbed on purpose and this page reloads
     # itself on a version change, so the address has to come back from the browser's
     # storage or the box is stranded after one reload (his report, second shape).
@@ -1046,23 +1033,18 @@ def main():
                     "steps": [{"kind": "polls", "n": 3},
                               {"kind": "clickrow", "id": "sessions",
                                "text": "a storage conversation", "polls": 3}]}, script)
-    check(res.get("legionOpens") == [{"name": "storage"}]
-          and res.get("href") == "http://storage:8790/#token=tok-storage"
-                                   "&from=http%3A%2F%2F127.0.0.1%3A8790"
-                                   "&fromhost=harness&session=s1",
+    check(res.get("navigations", [])[-1:]
+          == ["/api/legion/open?remote=storage&session=s1"],
           f"a linked box's conversation opens that box AT that conversation "
-          f"({res.get('legionOpens')!r}, {res.get('href')!r})")
+          f"({res.get('navigations')!r})")
     # the host heading does the same without a conversation
     res = run_page({"runs": [], "legion_cohorts": fleet,
                     "steps": [{"kind": "polls", "n": 3},
                               {"kind": "clickrow", "id": "sessions",
                                "text": "STORAGE", "polls": 3}]}, script)
-    check(res.get("legionOpens") == [{"name": "storage"}]
-          and res.get("href") == "http://storage:8790/#token=tok-storage"
-                                   "&from=http%3A%2F%2F127.0.0.1%3A8790"
-                                   "&fromhost=harness",
+    check(res.get("navigations", [])[-1:] == ["/api/legion/open?remote=storage"],
           f"a linked box's heading selects that box, no conversation "
-          f"({res.get('legionOpens')!r}, {res.get('href')!r})")
+          f"({res.get('navigations')!r})")
     # ...and the destination opens the conversation it was handed
     res = run_page({"runs": [], "conversations": [
                         {"key": "conv2", "title": "the hinted conversation",

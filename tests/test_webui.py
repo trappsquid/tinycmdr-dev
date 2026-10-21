@@ -529,6 +529,44 @@ def main():
     check(code == 404 and j.get("error"),
           "OPEN COHORT for a name this hub does not have: 404", (code, j))
 
+    # ---- SELECT COHORT: the rail's real link -------------------------------------
+    # His report (2026-10-21): clicking the chosen box did not change the tab. The rail's
+    # rows are links to this door, which answers a redirect - no script has to run for
+    # the click to take effect. (The POST `open` above stays for older pages.)
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **k):                 # keep the 302 visible
+            return None
+    _raw = urllib.request.build_opener(_NoRedirect)
+
+    def _get_open(path, headers=None):
+        r = urllib.request.Request(base + path, headers=headers or {})
+        try:
+            with _raw.open(r, timeout=10) as resp:
+                return resp.status, resp.read(200), dict(resp.headers)
+        except urllib.error.HTTPError as e:
+            return e.code, e.read(200), dict(e.headers)
+
+    code, _b, h = _get_open("/api/legion/open?remote=storage", TOK)
+    loc = h.get("Location") or ""
+    check(code == 302 and loc.startswith(cohort_url + "/#token=")
+          and ("from=http%%3A%%2F%%2F127.0.0.1%%3A%d" % port) in loc
+          and "fromhost=" in loc and "session=" not in loc,
+          "the SELECT door redirects to the cohort's page, token in the fragment",
+          (code, loc))
+    code, _b, h = _get_open("/api/legion/open?remote=storage&session=web-2", TOK)
+    check(code == 302 and "&session=web-2" in (h.get("Location") or ""),
+          "...and carries a conversation key when one was picked",
+          (code, h.get("Location")))
+    code, _b, h = _get_open("/api/legion/open?remote=storage&session=bad%20key", TOK)
+    check(code == 302 and "session=" not in (h.get("Location") or ""),
+          "...dropping a key that is not a plain name", (code, h.get("Location")))
+    code, _b, h = _get_open("/api/legion/open?remote=storage")
+    check(code == 302 and (h.get("Location") or "") == "/",
+          "without a token the door sends the browser to the page, which can ask",
+          (code, h.get("Location")))
+    code, _b, h = _get_open("/api/legion/open?remote=ghost", TOK)
+    check(code == 404, "the SELECT door refuses an unknown cohort", code)
+
     # every refusal keeps the disk as it was: a name, the hub's own channel, a dupe,
     # a non-http address, a missing token, and a box nothing answers at
     _cfg_before = (STAGE / "config.json").read_text(encoding="utf-8")

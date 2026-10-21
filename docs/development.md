@@ -450,9 +450,12 @@ envelope and caps, and the page suite's shim the renderer.
   rail row per configured box, and `/api/legion` answers `{cohorts, praetorium}` from
   LOCAL state. `open` is SELECT COHORT: the configured URL with its token in the URL
   fragment (never the query), which the browser navigates THIS tab to - the other box's
-  own page, every feature, with no relay (a modified click opens a new tab instead). A
-  row whose address is the page being viewed is marked `self` and refused by
-  `add-remote` / `update-remote`: a cohort is another machine. The census thread also
+  own page, every feature, with no relay (a modified click opens a new tab instead). The
+  rail's rows are REAL LINKS to `GET /api/legion/open?remote=<name>[&session=<key>]`,
+  which answers a 302 with the token minted into the fragment: the click changes the
+  tab even when no page script can run. A row whose address is the page being viewed is
+  marked `self` and refused by `add-remote` / `update-remote`: a cohort is another
+  machine. The census thread also
   reads each cohort's `/api/sessions` (bounded, no secrets) into the overview, so the
   archive is grouped by host and a pick from another box's group adds `session=<key>`
   (the destination opens it on boot); `fromhost` names this box on the destination's

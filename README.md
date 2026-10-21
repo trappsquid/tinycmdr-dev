@@ -48,10 +48,11 @@ One process serves whichever are configured; same sessions, notes, skills, model
 
 The page lists other tinycmdr boxes as a **legion**. A cohort is another box's own page: the rail
 grows one row per linked box, shows its version and whether it answers, and clicking the row
-**selects that box** — this tab becomes its page, with its token in the URL fragment, so the stage
-below is that box's own conversation and every feature is the page itself (cmd- or ctrl-click opens
-it in a new tab instead). The conversation rail is grouped **by host**: this box's conversations
-first, then each linked box's, read from that box on a slow clock; clicking another box's
+**selects that box** — the row is a link, so the click itself changes this tab to that box's page
+with its token in the URL fragment; the stage below is that box's own conversation and every
+feature is the page itself (cmd- or ctrl-click opens it in a new tab instead). The conversation
+rail is grouped **by host**: this box's conversations first, then each linked box's, read from that
+box on a slow clock; clicking another box's
 conversation takes this tab there and opens that conversation. A page opened from another box's rail
 names that box on a return row above PRAETORIUM. Every one of those pages carries the same rail, so
 a fleet of boxes is one click apart.

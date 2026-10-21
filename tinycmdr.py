@@ -31550,6 +31550,7 @@ _LEGION_SESSIONS = {}                  # name -> {"ok", "sessions", "host", "err
 _LEGION_EGRESS_WARNED = set()          # entries the off-LAN warning has been said for
 _LEGION_PROBING = False                # one census pass at a time
 _LEGION_NAME_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")  # a cohort name (ADD COHORT)
+_LEGION_SESSION_RX = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")  # a conversation key
 
 
 def legion_cohorts():
@@ -33077,16 +33078,13 @@ function renderRail(){
  // guessing which machine a conversation belongs to (reported 2026-10-21).
  sessEl.textContent='';
  const group=function(name,meta,cohort){
-  const head=document.createElement('div');
+  const head=document.createElement(cohort?'a':'div');
   head.className='campaign-group'+(cohort?' cohortgroup':'');
+  if(cohort)head.href=openUrl(cohort.name);
   const h=document.createElement('strong');h.textContent=name;
   const m=document.createElement('small');m.textContent=meta;
   head.appendChild(h);head.appendChild(m);
-  if(cohort){
-   head.title='open '+name+"'s page";
-   head.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
-    paintChan(name);openCohortPage(cohort.name,ev);};
-  }
+  if(cohort)head.title='open '+name+"'s page";
   sessEl.appendChild(head);
  };
  group((pageHost||'this host')+' \u00b7 this host','',null);
@@ -33129,7 +33127,8 @@ function renderRail(){
    row.dataset.key=s.key;
    const ic=document.createElement('span');ic.className='campaign-icon';ic.innerHTML=TERMINAL_ICON;
    row.appendChild(ic);
-   const tx=document.createElement('span');
+   const tx=document.createElement('a');
+   tx.className='rowlink';tx.href=openUrl(c.name,s.key);
    const t=document.createElement('strong');t.textContent=s.title;tx.appendChild(t);
    const m=document.createElement('small');
    if(s.live){const d=document.createElement('span');d.className='dot work';m.appendChild(d);}
@@ -33141,8 +33140,11 @@ function renderRail(){
    else if(s.model){const mo=document.createElement('span');mo.textContent=s.model;m.appendChild(mo);}
    tx.appendChild(m);row.appendChild(tx);
    row.title='open this conversation on '+cname;
-   row.onclick=function(ev){if(ev&&ev.stopPropagation)ev.stopPropagation();
-    paintChan(cname);openCohortPage(c.name,ev,s.key);};
+   row.onclick=function(ev){
+    if(ev&&ev.target&&ev.target.closest&&ev.target.closest('a'))return;
+    if(ev&&ev.stopPropagation)ev.stopPropagation();
+    location.href=openUrl(c.name,s.key);
+   };
    sessEl.appendChild(row);
   }
  }
@@ -33214,13 +33216,11 @@ function renderLegion(){
   if(local)row.setAttribute('aria-current','page');
   const ic=document.createElement('span');ic.className='campaign-icon';ic.innerHTML=SHIELD_ICON;
   row.appendChild(ic);
-  const tx=document.createElement('span');
   const t=document.createElement('strong');
   // The way back is NAMED with the machine, not "HUB": a reader looking for the box
   // they came from should see its name on the row (reported 2026-10-21 - "wtf is the
   // hub, it does nothing").
   t.textContent=back?(c.hostName||c.host||'return'):(local?'PRAETORIUM':c.name);
-  tx.appendChild(t);
   const m=document.createElement('small');
   m.appendChild(dotFor(c.state));
   const meta=document.createElement('span');
@@ -33239,9 +33239,20 @@ function renderLegion(){
    if(local)row.title='you are talking to this box'+(hostTxt?' \u00b7 '+hostTxt:'');
   }
   m.appendChild(meta);
-  tx.appendChild(m);row.appendChild(tx);
+  // The row's text is a REAL LINK to the hub's SELECT door: the click changes this
+  // tab whether or not the page's script is in a state to run (his report,
+  // 2026-10-21: clicking the chosen box did not change the selected tab).
+  let tx;
+  if(back||(!local&&!self)){
+   tx=document.createElement('a');tx.className='rowlink';
+   tx.href=back?(pageFrom+'/#from='):openUrl(c.name);
+  }else{
+   tx=document.createElement('span');
+  }
+  tx.appendChild(t);tx.appendChild(m);row.appendChild(tx);
   if(back){
-   row.onclick=function(){
+   row.onclick=function(ev){
+    if(ev&&ev.target&&ev.target.closest&&ev.target.closest('a'))return;
     rememberHub('','');
     try{sessionStorage.removeItem('fb_from');}catch(e){}
     // `#from=` is an explicit EMPTY return address: the destination clears the one
@@ -33274,13 +33285,14 @@ function renderLegion(){
      note(c.name+' is this box - the \u00d7 removes the row');};
    }else{
     row.onclick=function(ev){
+     if(ev&&ev.target&&ev.target.closest&&ev.target.closest('a'))return;
      if(ev&&ev.stopPropagation)ev.stopPropagation();
      // The pick answers in the centre at once: the row goes active and the stage
      // header says what is opening, then the page moves to that box.
      row.classList.add('active');
      [].forEach.call(cohortsEl.children,function(o){
       if(o!==row)o.classList.remove('active');});
-     if(!(ev&&(ev.metaKey||ev.ctrlKey||ev.shiftKey)))paintChan(c.name);
+     paintChan(c.name);
      openCohortPage(c.name,ev);
     };
     if(c.state==='silent')row.title='unreachable: '+(c.error||'no answer');
@@ -33369,41 +33381,23 @@ function openAddCohort(existing){
  legion.dialog=ov;
  name.focus();
 }
+// The hub's own SELECT door: a redirect that mints the cohort's token into the
+// fragment and navigates THIS tab. A real link, so the click changes the tab before
+// any script runs (his report, 2026-10-21: the chosen tab did not change on click);
+// cmd/ctrl/shift-click opens the same door in a new tab, natively.
+function openUrl(name,session){
+ return '/api/legion/open?remote='+encodeURIComponent(name)
+  +(session?'&session='+encodeURIComponent(session):'');
+}
 function openCohortPage(name,ev,session){
- ev=ev||{};
- // The parity door: the cohort's own page with its token in the fragment. A plain
- // click SELECTS that box here - this tab navigates to its page, so the stage below
- // is that box's conversation (his report, 2026-10-21: a new tab left the centre on
- // the old box, so the rail read as a selector that never selected). A modified
- // click keeps the old door: a new tab, opened on the CLICK because a popup blocker
- // refuses one made after an await. The hub's answer then names the address.
- // `fromhost` names this box on the destination's return row; `session` makes the
- // destination open that conversation (the archive's cross-host pick).
- const fresh=!!(ev.metaKey||ev.ctrlKey||ev.shiftKey);
- const w=fresh?window.open('','_blank'):null;
- if(fresh&&!w){note('the browser blocked the new tab - allow popups for this page');return;}
- if(w){try{w.opener=null;}catch(e){}}
- post('/api/legion',{op:'open',remote:name}).then(function(res){
-  const code=res&&res.status,j=(res&&res.j)||{};
-  if(code!==200||j.error){
-   if(w){try{w.close();}catch(e){}}
-   renderLegion();renderRail();paintChan();
-   note(j.error||('the hub answered '+code));return;
+ const url=openUrl(name,session);
+ if(ev&&(ev.metaKey||ev.ctrlKey||ev.shiftKey)){
+  if(!window.open(url,'_blank')){
+   note('the browser blocked the new tab - allow popups for this page');
   }
-  let url=j.url+(j.url.indexOf('#')>=0?'&':'#')
-   +'from='+encodeURIComponent(location.origin||'')
-   +'&fromhost='+encodeURIComponent(pageHost||'');
-  if(session)url+='&session='+encodeURIComponent(session);
-  if(w){
-   // replace, not assign: this tab was opened blank, and assigning leaves that blank
-   // page as its only history entry, so the browser's Back button showed an empty page
-   // instead of the hub. One entry - the cohort's own page.
-   try{w.location.replace(url);}catch(e){w.location=url;}
-  }else{
-   // The same tab, with a real history entry: Back returns to the box you left.
-   location.href=url;
-  }
- });
+  return;
+ }
+ location.href=url;
 }
 function removeCohort(name,ev){
  if(ev&&ev.stopPropagation)ev.stopPropagation();
@@ -35173,6 +35167,14 @@ def run_webui():
             self.end_headers()
             self._write(data)
 
+        def _redirect(self, location, code=302):
+            """A redirect for a real navigation (the rail's SELECT door).
+
+            Body empty on purpose; no-store rides every reply, so a link that carries
+            a one-time address is never re-served from a cache."""
+            self._send("", code, "text/plain; charset=utf-8",
+                       extra=[("Location", location)])
+
         def _json(self, obj, code=200, extra=None):
             if code == 401 and self._cookie_given:
                 # A cookie was presented and did not authenticate - usually a token
@@ -35560,6 +35562,41 @@ def run_webui():
                     web_resolve_session(_web_client(self.headers),
                                         q.get("session")))
                 self._json({"run_id": live.id if live else None})
+            elif self.path.startswith("/api/legion/open"):
+                # SELECT a box in THIS tab: the rail's rows are real links to this door,
+                # so the click changes the tab even when the page's script is stale or
+                # a fetch would be refused. The token is minted into the redirect's
+                # FRAGMENT - the cohort's server never sees it and this box's request
+                # log carries only the cohort's name. `from` is this hub's own origin as
+                # the browser addressed it, so the way back cannot be aimed elsewhere.
+                if not self._auth_ok():
+                    # A browser that followed a link lands on a page that can ask,
+                    # instead of a JSON 401 it cannot act on.
+                    self._redirect("/")
+                    return
+                q = self._query()
+                name = str(q.get("remote") or "").strip()
+                if name not in legion_cohorts():
+                    self._json({"error": "no such cohort"}, 404)
+                    return
+                url, cohort_token, err = a2a_remote_target(name)
+                if err:
+                    self._json({"error": err}, 404)
+                    return
+                if not cohort_token:
+                    self._json({"error": "no token value is present for %s - "
+                                         "check its token_env" % name}, 500)
+                    return
+                frag = "token=" + urllib.parse.quote(cohort_token, safe="")
+                host = (self.headers.get("Host") or "").strip()
+                if host:
+                    frag += "&from=" + urllib.parse.quote("http://" + host, safe="")
+                    frag += "&fromhost=" + urllib.parse.quote(
+                        socket.gethostname(), safe="")
+                session = str(q.get("session") or "").strip()
+                if session and _LEGION_SESSION_RX.fullmatch(session):
+                    frag += "&session=" + urllib.parse.quote(session, safe="")
+                self._redirect(url + "/#" + frag)
             elif self.path.startswith("/api/legion"):
                 # The LEGION rail (see the legion block): the boxes this host was
                 # configured with. Every read here is LOCAL state - cohorts are
