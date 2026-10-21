@@ -5,6 +5,12 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.44] - 2026-10-21
+
+### Fixed
+- **A pick changes the tab on the click:** a box row only navigated after a POST answered, so a slow or refused round trip left the chosen tab unchanged - every box row and every other box's conversation is now a real link to a redirect that carries the token in the fragment, so the click itself switches the tab (tests/test_webui.py, tests/test_webui_page.py).
+- **The archive groups conversations by host:** the rail listed only the page's own conversations with no machine named on them and the way back was a row called HUB that died with its tab - the census reads each linked box's campaign list, the archive draws one group per host with a click-through to that box at that conversation, and the return row is named with the hub's host and kept per browser (tests/test_webui_page.py, tests/test_legion.py).
+
 ## [1.1.43] - 2026-10-21
 
 ### Fixed
