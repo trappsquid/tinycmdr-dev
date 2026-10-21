@@ -3887,10 +3887,10 @@
     {
       "id": "webui-legion-selects-the-box",
       "title": "a rail pick selects that box, in this page",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "c313d32",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A cohort row only opened a new tab, PRAETORIUM did nothing and the centre kept talking to the box that served the page, so the rail read as a selector that never selected; a plain click now navigates this tab to that box's own page with its token in the fragment, the stage header names the box it is talking to, the HUB row is drawn only when it leads to another box and is consumed on use, and an entry naming this page is marked self and refused by ADD/RECONFIGURE COHORT.",
       "gate": "tests/test_webui_page.py grades the in-tab pick, the modified click, the header, the one-shot HUB row and the self row; tests/test_legion.py grades the self mark and the refusal; tests/test_webui.py grades the route's self refusal"
