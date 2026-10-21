@@ -1628,8 +1628,8 @@ START_TIME = time.time()
 # next request and then gone. They are never stored in the run's `messages`, on
 # purpose - that list is measured by json.dumps (base64 would count as ~300k
 # fake tokens) and rewritten by _compact (which slices content by character).
-# The whole path is dormant unless agent.vision is true, and that ships false (see
-# DEFAULT_CONFIG), so no install gains a behaviour change from this existing.
+# The path is live when the image switch allows it (agent.vision ships "auto", so the
+# endpoint's own declaration decides) and dormant when it does not - see image_switch.
 _TOOL_IMAGES = {}                 # session_key -> [spec, ...]
 _TOOL_IMAGES_LOCK = threading.Lock()
 _IMAGE_MAX_PER_CALL = 2
@@ -1844,8 +1844,9 @@ def stash_tool_images(session_key, images, tool_name=""):
     ok, why = image_switch()
     if not ok:
         return ("\n[the tool produced %d image(s) and %s, so they were NOT attached. "
-                "Tell the operator the image did not reach you; do not decode it as "
-                "text.]" % (len(images), why))
+                "That is a harness setting, not the model's ability - tell the operator "
+                "the image did not reach you; do not decode it as text.]"
+                % (len(images), why))
     kept, notes = [], []
     for entry in images:
         if len(kept) >= _IMAGE_MAX_PER_CALL:
@@ -37872,7 +37873,8 @@ class MattermostDispatcher:
                     notes.append(f"[image attached; also saved to {dest}]")
                 else:
                     notes.append(f"[image saved to {dest} ({mime}, {len(content)} bytes) "
-                                 f"but NOT attached: {why}. Do not read it as text - "
+                                 f"but NOT attached: {why}. That is a harness setting, "
+                                 f"not this model's ability. Do not read it as text - "
                                  f"tell the operator the image did not reach you.]")
             else:
                 notes.append(f"[attachment saved to {dest} "
@@ -40623,8 +40625,9 @@ def tg_download_media(client, items):
                 notes.append("[image attached; also saved to %s]" % dest)
             else:
                 notes.append("[image saved to %s (%s, %d bytes) but NOT attached: %s. "
-                             "Do not read it as text - tell the operator the image did "
-                             "not reach you.]" % (dest, mime, len(content), why))
+                             "That is a harness setting, not this model's ability. Do "
+                             "not read it as text - tell the operator the image did not "
+                             "reach you.]" % (dest, mime, len(content), why))
         else:
             notes.append("[attachment saved to %s (%s, %d bytes) "
                          "- use read_file to inspect it]"

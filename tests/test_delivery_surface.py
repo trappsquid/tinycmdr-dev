@@ -443,8 +443,8 @@ most if it broke:
             check("with vision off nothing is stashed", fb.peek_tool_images("off") == [])
             base = [{"role": "user", "content": "hi"}]
             check("and no image message is built", fb.attach_tool_images(list(base), "off") == base)
-            check("and the tool is told why, so the model is not misled",
-                  "agent.vision is off" in note, note)
+            check("and the tool is told why, and that it is the install, not the model",
+                  "agent.vision is off" in note and "harness setting" in note, note)
         finally:
             fb.CONFIG["agent"]["vision"] = keep_flag
 

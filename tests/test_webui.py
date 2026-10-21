@@ -3047,8 +3047,9 @@ def main():
                 None, "the endpoint does not declare image input")
             _in2, _iimgs2 = _proc(_ImageDispatcherStub(), _img_post)
             check(not _iimgs2 and "NOT attached" in _in2[0]
+                  and "harness setting" in _in2[0]
                   and "Do not read it as text" in _in2[0],
-                  "...and a model that cannot see is not told to read the PNG as text",
+                  "...and the note blames the install, not the model, and forbids OCR",
                   _in2)
         finally:
             fb.endpoint_image_input = _cap_saved

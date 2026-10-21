@@ -87,9 +87,10 @@ the text:
   `agent.vision: false` never attaches.
 - One decision (`image_switch`) is read by every door: a chat upload (Mattermost,
   Telegram), any image path `read_file` opens, and a tool that returns images. When an
-  image cannot be attached, the run's text says why and tells the model not to read the
-  file as text, instead of sending pixels nowhere. Per call, the frames that survive
-  dedup are capped; the dedup digest is computed before any of this.
+  image cannot be attached, the run's text says why, says the cause is this install's
+  setting rather than the model's ability, and tells the model not to read the file as
+  text - instead of sending pixels nowhere. Per call, the frames that survive dedup are
+  capped; the dedup digest is computed before any of this.
 
 The gap: a text-only main model cannot use screenshots at all, because the images are
 attached to a request that model cannot see. The intended shape, not implemented:

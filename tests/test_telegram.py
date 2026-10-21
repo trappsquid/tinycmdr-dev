@@ -1771,8 +1771,9 @@ if _download and _cap:
             None, "the endpoint does not declare image input")
         _an2, _ai2 = _download(_GetFileClient(),
                                [("big", "photo-big.jpg", "image/jpeg")])
-        check("...and silence says the image did not reach the model",
+        check("...and silence says the install did not send it, not that the model is blind",
               not _ai2 and "NOT attached" in _an2[0]
+              and "harness setting" in _an2[0]
               and "Do not read it as text" in _an2[0], _an2)
     finally:
         fb.endpoint_image_input = _cap_saved
