@@ -3927,6 +3927,17 @@
       },
       "detail": "The in-flight replay covered every assistant call since the operator spoke, so a long tool loop fed each new call its own earlier reasoning and the thinking grew every turn (measured 2026-10-20 on the LAN server: 23.8k characters in one call, 62.5k by the third, 115k over a 25-call run); only the newest call is replayed whole now, because its `<think>` is what the server's prefix holds, and the older ones follow the completed policy.",
       "gate": "tests/test_retry_surface.py grades the newest-only rule and that a proved endpoint still gets the whole loop (red on the pre-fix build)"
+    },
+    {
+      "id": "new-keeps-the-model-choice",
+      "title": "a new session keeps the conversation's model",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "9c59f4b",
+        "expect": "untagged"
+      },
+      "detail": "`/new` popped the conversation's `/model` choice from memory while the saved copy stayed on disk, so after the reset every run silently used the config default and a restart would have switched the model again; the choice now survives `/new` (a derived sub-/bg-/sched- key is still cleaned up), and `/model default` remains the one explicit revert.",
+      "gate": "tests/test_events_surface.py grades the kept choice, the memory/disk agreement and the derived-key cleanup (red on the pre-fix build)"
     }
   ]
 }
