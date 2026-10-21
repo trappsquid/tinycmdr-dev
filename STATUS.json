@@ -3916,6 +3916,17 @@
       },
       "detail": "A reply that ends `finish_reason: \"length\"` with text was delivered as final, so a long answer silently stopped mid-sentence; the run asks for the rest once per turn with the partial turn it continues from still in the transcript, joins the pieces at a marked seam, and reports a second cut with the lever named.",
       "gate": "tests/test_checkin.py grades the continuation call, the kept partial turn, the marked join, the one-per-turn bound and the second cut's note"
+    },
+    {
+      "id": "replay-newest-thinking-only",
+      "title": "only the newest in-flight thinking is replayed",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "cbf6492",
+        "expect": "untagged"
+      },
+      "detail": "The in-flight replay covered every assistant call since the operator spoke, so a long tool loop fed each new call its own earlier reasoning and the thinking grew every turn (measured 2026-10-20 on the LAN server: 23.8k characters in one call, 62.5k by the third, 115k over a 25-call run); only the newest call is replayed whole now, because its `<think>` is what the server's prefix holds, and the older ones follow the completed policy.",
+      "gate": "tests/test_retry_surface.py grades the newest-only rule and that a proved endpoint still gets the whole loop (red on the pre-fix build)"
     }
   ]
 }
