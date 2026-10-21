@@ -307,6 +307,48 @@ pins:
     check("...and not a second time in the same session",
           "tool name inside a command's TEXT" not in out2, out2[-200:])
 
+    # ------------------------------------------------- a script-rendered page says so
+    # Measured live 2026-10-20: fetch_url returned 84-119 characters for two news/issue
+    # links - just the <title> - and the model read them as the article, then looped.
+    # The response is faked here so the check is offline and deterministic.
+    class _Resp:
+        status_code = 200
+        headers = {}
+        encoding = "utf-8"
+
+        def __init__(self, body):
+            self._body = body
+
+        def raise_for_status(self):
+            return None
+
+        def close(self):
+            pass
+
+        def iter_content(self, _n):
+            yield self._body
+
+    thin = (b"<html><head><title>Only a title</title></head><body><script>"
+            + b"x" * 30000 + b"</script></body></html>")
+    rich = (b"<html><head><title>Real</title></head><body><p>"
+            + b"word " * 1200 + b"</p></body></html>")
+    saved_get = fb.requests.get
+    try:
+        fb.requests.get = lambda *a, **k: _Resp(thin)
+        got = fb._fetch_page("http://127.0.0.1:9/post", 8000)
+        fb.requests.get = lambda *a, **k: _Resp(rich)
+        rich_got = fb._fetch_page("http://127.0.0.1:9/post", 8000)
+        fb.requests.get = lambda *a, **k: _Resp(b"<html><title>tiny page</title></html>")
+        tiny_got = fb._fetch_page("http://127.0.0.1:9/post", 8000)
+    finally:
+        fb.requests.get = saved_get
+    check("a script-rendered page says only its title came back",
+          "only its title" in got and "try another source" in got, got)
+    check("a page with a real body carries no note",
+          "only its title" not in rich_got, rich_got[-120:])
+    check("a genuinely small page carries no note",
+          "only its title" not in tiny_got, tiny_got[-120:])
+
     print()
     if FAILURES:
         print(f"{len(FAILURES)} check(s) failed")

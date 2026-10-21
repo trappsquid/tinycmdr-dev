@@ -12708,6 +12708,25 @@ def tool_fetch_url(args, ctx):
     return "\n\n".join(f"--- {url} ---\n{page}" for url, page in pages)
 
 
+# A page whose body is rendered by script (a React issue page, a mobile shell, a bot
+# wall) comes back as little more than its <title>. Returning that as "the page" is what
+# made a live run on 2026-10-20 loop: fetch_url gave the model 84-119 characters for two
+# news/issue links and it read them as the article. Past these bounds the result says so.
+_THIN_TEXT_CHARS = 400
+_THIN_RAW_BYTES = 20_000
+
+
+def _fetch_thin_note(raw_bytes, text):
+    """A sentence for a page that came back as (almost) only its title, else ""."""
+    if len(str(text or "")) >= _THIN_TEXT_CHARS:
+        return ""
+    if int(raw_bytes or 0) < _THIN_RAW_BYTES:
+        return ""
+    what = "only its title" if str(text or "").strip() else "nothing readable"
+    return ("\n\n[fetch_url got %s back: this page renders its text with script "
+            "(or refused a plain fetch) - try another source]" % what)
+
+
 def _fetch_page(url, max_chars, session=None):
     try:
         # stream=True and a BOUNDED read. resp.text materialised the whole body before
@@ -12771,6 +12790,7 @@ def _fetch_page(url, max_chars, session=None):
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
+    text += _fetch_thin_note(len(_raw), text)
     return cap_output("fetch_url", text, "page", limit=max_chars, session=session)
 
 
