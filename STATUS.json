@@ -3960,6 +3960,17 @@
       },
       "detail": "`fetch_url` returned only a page's `<title>` for script-rendered pages and presented it as the page - measured live 2026-10-20, two news/issue links came back as 84 and 119 characters and the model read them as the article - so a response past 20 KB of raw HTML with under 400 characters of text now says the body did not come back and to try another source.",
       "gate": "tests/test_tool_args_surface.py fakes the responses and grades the thin page, a real body and a genuinely small page (red on the pre-fix build)"
+    },
+    {
+      "id": "images-follow-the-endpoint",
+      "title": "an image reaches a model that declares vision",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "71b11df",
+        "expect": "untagged"
+      },
+      "detail": "A photo sent through a chat lane was saved and the model was told to `read_file` it because `agent.vision` shipped false, so a vision-capable endpoint got base64 as text (measured 2026-10-20: a GLM 5.3 Flash run decoded the PNG by hand and reached for OCR while the server's `/props` said `modalities.vision=true`); `agent.vision` now ships auto, attaches when `/props` or `/v1/models` declares image input, keeps true as the override for an endpoint that says nothing and false as off, and `read_file` hands an image to the same path instead of returning bytes.",
+      "gate": "tests/test_delivery_surface.py, tests/test_webui.py and tests/test_telegram.py grade auto/yes/no/silence, the veto and read_file (red on the pre-fix build); tests/test_verbs.py grades the tri-state config value"
     }
   ]
 }
