@@ -3975,10 +3975,10 @@
     {
       "id": "read-file-is-the-image-door",
       "title": "the model is told to open an image with read_file",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "be09ca5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The image path worked, but the model never used it: `read_file`'s description said only `Read a file (or list a directory). Use tail for logs.`, so `find_tools` for image analysis surfaced nothing and a desktop PNG was decoded with Pillow, Tesseract and an ASCII colour map instead; the description and the system prompt now say an image opens as a picture for one request and forbid Python/PIL/OCR.",
       "gate": "tests/test_delivery_surface.py grades the description and the prompt (red on the 1.1.41 build)"
