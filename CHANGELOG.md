@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.40] - 2026-10-20
+
+### Fixed
+- **A long tool loop stops re-reading its own thinking:** the in-flight reasoning replay carried every assistant call since the operator's message, so each new call saw all the earlier reasoning and thought longer - only the newest call is replayed whole now, and an endpoint that proved it needs the echo still gets the loop (tests/test_retry_surface.py).
+- **`/new` names the model it reverts to:** a `/model` choice is conversation-scoped and `/new` ends it, but the revert was memory-only - the saved copy survived a restart and no reply named the model - so `/new` now saves the revert and says which model the conversation runs on every door (tests/test_events_surface.py).
+- **A URL in the request is not a missing file:** the pre-delivery checkpoint read `https://host/2026/10/article.html` as the path `com/2026/10/article.html` and told the model a deliverable did not exist - URLs are removed before the path scan (tests/test_stall.py).
+- **A script-rendered page says its body did not come back:** `fetch_url` returned only a page's `<title>` for pages that render their text with script and presented it as the article - a thin result now says so and points at another source (tests/test_tool_args_surface.py).
+
 ## [1.1.39] - 2026-10-20
 
 ### Fixed
