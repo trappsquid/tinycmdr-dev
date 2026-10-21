@@ -61,18 +61,21 @@ same `/props` reply the vision and slot probes already ask for. Nothing branches
 
 ## The replay policy and Kimi K3 (2026-10-20)
 
-The turn IN FLIGHT - the tool loop the server just generated - is always replayed whole: the
-provider's contract requires it (DeepSeek 400s without the field, K3 requires the complete
-assistant message), and a slice is a different message. A COMPLETED turn is stale context and is
-different: it is replayed only where the endpoint has proved it needs the echo - a 400 naming the
-field, or a reply that carries `reasoning_content` (K3's first reply does) - or when
+The turn IN FLIGHT - the newest assistant message the server just generated - is always replayed
+whole: the template rebuilds its `<think>` block from the field, and a slice is a different
+message. Every OLDER assistant message, including the earlier calls of the same tool loop, is
+stale context: it is replayed only where the endpoint has proved it needs the echo - a 400 naming
+the field, or a reply that carries `reasoning_content` (K3's first reply does) - or when
 `llm.replay_reasoning` is `"always"`; otherwise it is dropped. That is the normal chat shape and it
-stops a local model re-buying old thinking. `replay_reasoning_max_chars` applies only to a
-completed turn that is replayed; 0 (the default) sends it whole, which is K3's contract, and a
-positive value is the cost bound. The session history keeps the reasoning with the answer, so a K3
-conversation replays the complete turn on the next message with no switch. The override is a verb on
-every surface: `reasoning` prints the state, `reasoning replay always|auto|off` sets it, `reasoning
-cap <chars>` bounds it (chat writes `/reasoning replay always`; the host drops the slash). `doctor`
+stops a local model re-buying its own old thinking (measured 2026-10-20: replaying a whole 25-call
+loop took one turn to 115k characters of reasoning, growing every call). Where the echo is proven,
+the whole in-flight loop stays whole, because that contract requires it. `replay_reasoning_max_chars`
+applies only to a completed turn that is replayed; 0 (the default) sends it whole, which is K3's
+contract, and a positive value is the cost bound. The session history keeps the reasoning with the
+answer, so a K3 conversation replays the complete turn on the next message with no switch. The
+override is a verb on every surface: `reasoning` prints the state, `reasoning replay always|auto|off`
+sets it, `reasoning cap <chars>` bounds it (chat writes `/reasoning replay always`; the host drops
+the slash). `doctor`
 prints the same state. Whatever the harness learns about a model - the reasoning echo, the
 `/responses` switch, a field it rejected, a streaming downgrade - is also said once as a
 `Model note:` on the chat surface, and `doctor` lists the same notes; the user is never handed a

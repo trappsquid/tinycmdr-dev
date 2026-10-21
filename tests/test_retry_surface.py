@@ -495,6 +495,33 @@ See tests/test_endpoint_surface.py for the learning rules themselves.
             check(_plain[3].get("reasoning_content") == "y" * 500,
                   "...while the turn still in flight stays whole",
                   len(_plain[3].get("reasoning_content") or ""))
+
+            # ...and INSIDE one tool loop, only the NEWEST call is "in flight" for the
+            # echo. Replaying every call's reasoning made a local model re-read its own
+            # thoughts and think longer on every call (2026-10-20: 23.8k chars in one
+            # call, 62k by the third, 115k over a 25-call run). The newest call must stay
+            # byte-identical - the server's prefix cache holds the <think> it generated -
+            # while the ones before it are stale context and go.
+            _loop = [{"role": "user", "content": "order"},
+                     {"role": "assistant", "content": "",
+                      "reasoning_content": "OLD" * 200,
+                      "tool_calls": [{"id": "a", "type": "function",
+                                      "function": {"name": "shell",
+                                                   "arguments": "{}"}}]},
+                     {"role": "tool", "tool_call_id": "a", "content": "r1"},
+                     {"role": "assistant", "content": "",
+                      "reasoning_content": "NEW" * 200,
+                      "tool_calls": [{"id": "b", "type": "function",
+                                      "function": {"name": "shell",
+                                                   "arguments": "{}"}}]},
+                     {"role": "tool", "tool_call_id": "b", "content": "r2"}]
+            _wire = _wf([{**m} for m in _loop], "")
+            check(_wire[1].get("reasoning_content") is None,
+                  "an older in-flight call's reasoning is dropped, so the loop cannot "
+                  "compound its own thinking", _wire[1].get("reasoning_content"))
+            check(_wire[3].get("reasoning_content") == "NEW" * 200,
+                  "...while the newest in-flight call is replayed whole",
+                  len(_wire[3].get("reasoning_content") or ""))
             fb.CONFIG["llm"]["replay_reasoning"] = "always"
             _aged = _wf([{**m} for m in _both], "")
             check(_aged[1].get("reasoning_content") == "x" * 100,

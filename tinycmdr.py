@@ -3278,19 +3278,23 @@ def _messages_for_wire(messages, url):
     unrepaired shape:
 
     * THE ECHO: the reasoning policy for this endpoint (see _replay_reasoning_ok and
-      _replay_completed_ok). The turn still IN FLIGHT - the assistant messages after
-      the last OPERATOR user message (see _operator_user; the trailing state block
-      is a user message too, so the naive boundary would call every tool round
-      completed) - carries its reasoning WHOLE: the server's chat template rebuilds
-      the <think> block from it, and a value sliced by replay_reasoning_max_chars
-      renders a different token sequence than the one the server just generated, so
-      the prefix KV-cache misses from the cut onward on every tool round of every
-      thinking model. A COMPLETED turn is stale context: it is replayed only where
-      the endpoint proved it needs the field (a 400, or a reply that carries it -
-      Kimi K3 and DeepSeek-class) or `llm.replay_reasoning` is "always"; otherwise
-      it is dropped. When the echo is OFF the field is stripped everywhere (the
-      history keeps the text unconditionally, which is what lets an endpoint which
-      LATER says the field is required be served without replaying the turn).
+      _replay_completed_ok). The NEWEST assistant message after the last OPERATOR user
+      message (see _operator_user; the trailing state block is a user message too, so
+      the naive boundary would call every tool round completed) carries its reasoning
+      WHOLE, and only it: the server's chat template rebuilds the <think> block from
+      it, and a value sliced by replay_reasoning_max_chars renders a different token
+      sequence than the one the server just generated, so the prefix KV-cache misses
+      from the cut onward. Every OLDER assistant message - including the earlier turns
+      of the same in-flight tool loop - is stale context and follows the completed
+      policy: replayed only where the endpoint proved it needs the field (a 400, or a
+      reply that carries it - Kimi K3 and DeepSeek-class) or `llm.replay_reasoning` is
+      "always"; otherwise dropped. Replaying a whole long loop made each call read its
+      own earlier thoughts and think longer on a local model (measured 2026-10-20:
+      23.8k chars in one call, 115k over 25). Where the endpoint DID prove the echo,
+      the whole in-flight loop stays whole, because that contract requires it. When the
+      echo is OFF the field is stripped everywhere (the history keeps the text
+      unconditionally, which is what lets an endpoint which LATER says the field is
+      required be served without replaying the turn).
     * THE JOIN: consecutive `user` messages are coalesced into one. The harness
       builds them on purpose - the volatile state block is inserted before the
       operator's message, tool images are appended after it, a carried tool-result
@@ -3308,6 +3312,22 @@ def _messages_for_wire(messages, url):
     for i, m in enumerate(messages):
         if _operator_user(m):
             last_user = i
+    # THE TURN THE SERVER JUST GENERATED is the NEWEST assistant message in flight, not
+    # every assistant message since the operator spoke: one tool loop puts a dozen turns
+    # "in flight", and replaying each one's reasoning makes every new call read its own
+    # earlier thoughts and think longer (measured 2026-10-20 on a local server: 23.8k
+    # chars of reasoning in one call, 62k by the third, 115k over a 25-call run, and one
+    # turn spent six minutes thinking for a 300-char reply). Only the newest one has to
+    # stay byte-identical for the template's <think> rebuild; the ones before it are
+    # stale context and follow the completed policy (dropped unless the endpoint proved
+    # it needs the field), so the loop cannot compound its own thinking.
+    active = -1
+    if not replay_done:
+        for i, m in enumerate(messages):
+            if (i > last_user and isinstance(m, dict)
+                    and m.get("role") == "assistant"
+                    and m.get("reasoning_content")):
+                active = i
     out = []
     changed = False
     for i, m in enumerate(messages):
@@ -3315,15 +3335,16 @@ def _messages_for_wire(messages, url):
             if not replay:
                 m = {k: v for k, v in m.items() if k != "reasoning_content"}
                 changed = True
-            elif i < last_user and not replay_done:
+            elif replay_done:
+                if i < last_user:
+                    capped = _reasoning_for_replay(m)
+                    if capped != m.get("reasoning_content"):
+                        m = ({**m, "reasoning_content": capped} if capped else
+                             {k: v for k, v in m.items() if k != "reasoning_content"})
+                        changed = True
+            elif i != active:
                 m = {k: v for k, v in m.items() if k != "reasoning_content"}
                 changed = True
-            elif i < last_user:
-                capped = _reasoning_for_replay(m)
-                if capped != m.get("reasoning_content"):
-                    m = ({**m, "reasoning_content": capped} if capped else
-                         {k: v for k, v in m.items() if k != "reasoning_content"})
-                    changed = True
         if (isinstance(m, dict) and m.get("role") == "user" and out
                 and isinstance(out[-1], dict) and out[-1].get("role") == "user"):
             out[-1] = {"role": "user", "content": _join_user_messages(out[-1], m)}
