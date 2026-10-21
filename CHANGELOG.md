@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.42] - 2026-10-20
+
+### Fixed
+- **An image is opened with `read_file`:** the image path existed but `read_file`'s description said only that it read files, so a model searching for image analysis decoded a PNG with Pillow, Tesseract and an ASCII colour map instead - the description and the system prompt now say an image opens as a picture for one request and forbid Python/PIL/OCR (tests/test_delivery_surface.py).
+
 ## [1.1.41] - 2026-10-20
 
 ### Fixed

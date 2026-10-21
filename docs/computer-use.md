@@ -85,6 +85,9 @@ the text:
 - `agent.vision: true` is the operator's assertion for an endpoint that says nothing (a
   cloud API, an older server), and a positive `modalities.vision=false` still vetoes;
   `agent.vision: false` never attaches.
+- The model is told the door: `read_file`'s description and the system prompt both say an
+  image opens as a picture for one request, so a path to a screenshot is opened there
+  instead of decoded with Python or OCR.
 - One decision (`image_switch`) is read by every door: a chat upload (Mattermost,
   Telegram), any image path `read_file` opens, and a tool that returns images. When an
   image cannot be attached, the run's text says why, says the cause is this install's
