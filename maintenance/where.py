@@ -276,6 +276,7 @@ def origin_facts(path):
     newest = git_out(path, "describe", "--tags", "--abbrev=0", "HEAD")
     ahead = git_out(path, "rev-list", "--count", newest + "..HEAD") if newest else ""
     return {
+        "path": str(path),
         "newest_tag": git_out(path, "describe", "--tags", "--abbrev=0", "origin/main")
         if has else "",
         "main": git_out(path, "log", "-1", "--format=%h %s", "origin/main") if has else "",
@@ -287,6 +288,22 @@ def origin_facts(path):
     }
 
 
+def release_repo(path):
+    """The install surface: the repo users download from, from the updater's own constant.
+
+    A source clone's origin is not that repo - every installer and updater fetches
+    releases/latest/download from DEFAULT_UPDATE_URL, so the release line must ask the repo that
+    constant names, not whichever repository the current directory happens to resolve to.
+    """
+    try:
+        src = (Path(path) / "tinycmdr.py").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    m = re.search(r'DEFAULT_UPDATE_URL\s*=\s*"https://github\.com/([^/"]+/[^/"]+)/releases/',
+                  src)
+    return m.group(1) if m else ""
+
+
 def github_facts(path):
     """What GitHub has NOW: main's sha and the newest published release. Network, read-only.
 
@@ -295,7 +312,7 @@ def github_facts(path):
     cannot change the answer the next reader gets.
     """
     facts = {"available": False, "why_not": "", "main_sha": "", "main": "",
-             "release": "", "published": ""}
+             "release": "", "published": "", "repo": release_repo(path)}
     rc, out = _run(["git", "-C", str(path), "ls-remote", "origin", "refs/heads/main"], timeout=25)
     if rc != 0:
         facts["why_not"] = "git ls-remote failed (no network, or no origin)"
@@ -305,8 +322,10 @@ def github_facts(path):
         facts["why_not"] = "origin has no main branch"
         return facts
     facts.update({"available": True, "main_sha": sha, "main": sha[:7]})
-    rc, out = _run(["gh", "release", "list", "--limit", "1", "--json", "tagName,publishedAt"],
-                   timeout=25)
+    cmd = ["gh", "release", "list", "--limit", "1", "--json", "tagName,publishedAt"]
+    if facts["repo"]:
+        cmd += ["-R", facts["repo"]]
+    rc, out = _run(cmd, timeout=25)
     if rc == 0 and out.strip():
         try:
             rel = (json.loads(out) or [{}])[0]
@@ -371,10 +390,11 @@ def render(facts, bots, origin=None, dist=None, github=None, out=sys.stdout):
                      if f["exists"] and b["script"].startswith(f["path"])), "?")
         w("  pid %-7s %s   -> role: %s\n" % (b["pid"], b["script"], role))
     if origin:
+        label = (origin.get("path") or "this clone").replace(str(Path.home()), "~")
         if origin.get("fetched_at"):
-            w("\nORIGIN (as this clone last fetched it: %s)\n" % origin["fetched_at"])
+            w("\nORIGIN (%s; last fetched %s)\n" % (label, origin["fetched_at"]))
         else:
-            w("\nORIGIN (this clone has never fetched - these refs came with the clone)\n")
+            w("\nORIGIN (%s; never fetched - these refs came with the clone)\n" % label)
         w("  newest tag  %s\n" % (origin["newest_tag"] or "-"))
         w("  main        %s\n" % (origin["main"] or "-"))
         # "Is what I am looking at released?" - the question a drop-in reader asks first, and
@@ -393,14 +413,15 @@ def render(facts, bots, origin=None, dist=None, github=None, out=sys.stdout):
             w("  unavailable: %s\n" % github["why_not"])
         else:
             local = (origin or {}).get("main_sha") or ""
-            verdict = ("same as this clone's origin/main" if local
+            verdict = ("same as the local origin/main" if local
                        and local == github["main_sha"] else
-                       "DIFFERS from this clone's origin/main (%s) - fetch before trusting it"
+                       "DIFFERS from the local origin/main (%s) - fetch before trusting it"
                        % (local[:7] or "nothing fetched"))
             w("  main        %s  %s\n" % (github["main"], verdict))
-            w("  newest release  %s%s\n"
+            w("  newest release  %s%s%s\n"
               % (github["release"] or "(none)",
-                 " published " + github["published"] if github["published"] else ""))
+                 " published " + github["published"] if github["published"] else "",
+                 " (%s)" % github["repo"] if github.get("repo") else ""))
     if dist:
         w("\nON DISK\n")
         w("  %s\n    %s\n    SHA256SUMS: %s\n"
@@ -475,11 +496,17 @@ def main(argv=None):
     bots = [] if overridden else running_bots()
     live_dir = next((f["path"] for f in facts if f["role"] == "live" and f["exists"]), None)
     is_git = bool(live_dir) and (Path(live_dir) / ".git").exists()
-    origin = origin_facts(live_dir) if is_git else None
+    # The release and remote facts belong to the tree that is a clone: `live` when it is one,
+    # else the declared git tree - the shipped two-tree box installs the bot from a package
+    # (live has no .git) and keeps the release line in a git dev, so asking only `live`
+    # silently dropped both blocks there.
+    git_dir = live_dir if is_git else next(
+        (f["path"] for f in facts if f["is_git"] and f["exists"]), None)
+    origin = origin_facts(git_dir) if git_dir else None
     dist = dist_facts(live_dir) if live_dir else None
     # --remote asks GitHub rather than trusting this clone's refs, and is skipped for an
     # overridden declaration: a test's synthetic trees have no origin to ask about.
-    github = github_facts(live_dir) if (do_remote and not overridden and is_git) else None
+    github = github_facts(git_dir) if (do_remote and not overridden and git_dir) else None
     problems = check(facts, bots)
     if as_json:
         print(json.dumps({"trees": facts, "running": bots, "origin": origin,

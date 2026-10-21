@@ -441,6 +441,48 @@ Run:  python tests/test_status.py
                   "asking GitHub about a tree with no origin says why, rather than dying")
             check(where.ref_age(str(one)) == "",
                   "a tree nobody has fetched says so, instead of implying its refs are fresh")
+            check(where.release_repo(str(BASE)) == "trappsquid/tinycmdr",
+                  "the install surface is read from the updater's own constant")
+            calls = []
+            saved_run = where._run
+            where._run = lambda argv, timeout=20: (calls.append(argv) or (
+                (0, "a" * 40 + "\trefs/heads/main\n") if "ls-remote" in argv else
+                (0, '[{"tagName": "v9.9.9", "publishedAt": "2026-10-21T00:00:00Z"}]')))
+            try:
+                f = where.github_facts(str(BASE))
+                check(f["release"] == "v9.9.9" and
+                      any("-R" in c and "trappsquid/tinycmdr" in c for c in calls),
+                      "the release line asks the install surface, not the clone's origin")
+            finally:
+                where._run = saved_run
+
+            # ---- remote facts come from the git tree, not only from `live` --------
+            # The shipped two-tree box installs the bot from a package (live has no .git) and
+            # keeps the release line in a git dev. Asking only `live` silently dropped both
+            # the ORIGIN and GitHub blocks there.
+            remote_roles = tmp / "where-roles-remote.json"
+            remote_roles.write_text(json.dumps([
+                {"role": "live", "path": str(plain), "git": False},
+                {"role": "dev", "path": str(seed), "git": True}]), encoding="utf-8")
+            saved_host, saved_github = where.HOST_ROLES, where.github_facts
+            asked = []
+            where.HOST_ROLES = remote_roles
+            where.github_facts = lambda path: (asked.append(str(path)) or {
+                "available": True, "why_not": "", "main_sha": "a" * 40, "main": "aaaaaaa",
+                "release": "v9.9.9", "published": "2026-10-21"})
+            try:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rc = where.main(["--remote", "--json"])
+                payload = json.loads(buf.getvalue())
+                check(rc == 0 and asked == [str(seed)],
+                      "--remote asks the declared git tree when live is an install")
+                check(bool(payload.get("github") and payload["github"]["available"]),
+                      "  and reports GitHub instead of omitting the block")
+                check(bool(payload.get("origin")) and payload["origin"]["path"] == str(seed),
+                      "  and the release facts come from that tree too")
+            finally:
+                where.HOST_ROLES, where.github_facts = saved_host, saved_github
 
             # ---- --json still parses, and admits github was not asked for ---------
             buf = io.StringIO()
