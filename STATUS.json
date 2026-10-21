@@ -3920,10 +3920,10 @@
     {
       "id": "replay-newest-thinking-only",
       "title": "only the newest in-flight thinking is replayed",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "cbf6492",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The in-flight replay covered every assistant call since the operator spoke, so a long tool loop fed each new call its own earlier reasoning and the thinking grew every turn (measured 2026-10-20 on the LAN server: 23.8k characters in one call, 62.5k by the third, 115k over a 25-call run); only the newest call is replayed whole now, because its `<think>` is what the server's prefix holds, and the older ones follow the completed policy.",
       "gate": "tests/test_retry_surface.py grades the newest-only rule and that a proved endpoint still gets the whole loop (red on the pre-fix build)"
@@ -3931,10 +3931,10 @@
     {
       "id": "new-session-names-the-model",
       "title": "a new session names the model it reverted to",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "fade424",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A `/model` choice is scoped to the conversation and `/new` ends it (`--global` is the choice that persists), but the reset dropped it in memory only while the saved copy stayed on disk, so a restart could resurrect a model the user could not see and the reply named no model at all; `/new` now saves the revert and every door's reply names the model the conversation runs.",
       "gate": "tests/test_events_surface.py grades the revert, the saved removal, the named model on `/new` and the derived-key cleanup (red on the 1.1.39 build)"
@@ -3942,10 +3942,10 @@
     {
       "id": "url-is-not-a-request-path",
       "title": "a URL in the request is not a missing path",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "3980639",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The pre-delivery checkpoint's path scan starts a token after a dot, so `https://host/2026/10/article.html` was read as `com/2026/10/article.html`, checked on the filesystem and reported as a missing deliverable, and the model spent a turn explaining that the harness read the article's URL as a local path instead of answering; URLs (http/https/ftp, `www.`) are removed before the scan.",
       "gate": "tests/test_stall.py grades a URL contributing no path, a real path beside one, a `www.` host and a bare filename (red on the pre-fix build)"
@@ -3953,10 +3953,10 @@
     {
       "id": "fetch-thin-page-says-so",
       "title": "a script-rendered page says its body did not come back",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "52ce9cf",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "`fetch_url` returned only a page's `<title>` for script-rendered pages and presented it as the page - measured live 2026-10-20, two news/issue links came back as 84 and 119 characters and the model read them as the article - so a response past 20 KB of raw HTML with under 400 characters of text now says the body did not come back and to try another source.",
       "gate": "tests/test_tool_args_surface.py fakes the responses and grades the thin page, a real body and a genuinely small page (red on the pre-fix build)"
