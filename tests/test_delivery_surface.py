@@ -529,6 +529,13 @@ most if it broke:
                 {"session_key": "rf2", "tool_images": True, "config": fb.CONFIG})
             check("...and the run's next request carries it",
                   len(fb.peek_tool_images("rf2")) == 1, fb.peek_tool_images("rf2"))
+            _desc = (fb.CORE_TOOLS["read_file"]["schema"]["function"]
+                     .get("description", ""))
+            check("read_file's description tells the model it shows pictures",
+                  "picture" in _desc.lower() and "image" in _desc.lower(), _desc)
+            _prompt = fb.build_system_prompt()
+            check("...and the system prompt routes an image through it, not OCR",
+                  "picture" in _prompt.lower() and "ocr" in _prompt.lower(), "")
 
             # ---- limits ---------------------------------------------------------
             fb._TOOL_IMAGES.clear()
