@@ -122,6 +122,24 @@
    "category": "steering",
    "steps": 3,
    "llm_calls": 4
+  },
+  "T20_build_cli": {
+   "pass": true,
+   "category": "build_cli",
+   "steps": 17,
+   "llm_calls": 16
+  },
+  "T21_build_game": {
+   "pass": true,
+   "category": "build_game",
+   "steps": 21,
+   "llm_calls": 17
+  },
+  "T22_replicate_spec": {
+   "pass": true,
+   "category": "replication",
+   "steps": 18,
+   "llm_calls": 15
   }
  },
  "variance": {
@@ -169,5 +187,22 @@
     "prompt_tokens": 341345
    }
   ]
+ },
+ "build_probe": {
+  "date": "2026-10-22",
+  "endpoint": "LAN eval endpoint (not recorded)",
+  "model": "main",
+  "budget": 24000,
+  "sampling": {
+   "temperature": 0.0,
+   "top_p": 1.0,
+   "top_k": 0
+  },
+  "runs": [
+   "20261022-082130-build-probe.jsonl",
+   "20261022-083148-build-probe2.jsonl",
+   "20261022-091544-game-probe.jsonl"
+  ],
+  "note": "T20-T22 measured after the build-in-code batch. The main baseline predates these tasks and the arm pin, so compare the build tasks within this block. T21 used the task llm.max_tokens=4096 bound after its first unbounded call streamed for more than 30 minutes."
  }
 }
