@@ -558,6 +558,25 @@ DEFAULT_CONFIG = {
         # a plan with `/plan apply` (or answers the approval question raised when the
         # model records one). Off by default; `/plan on` turns it on for one session.
         "plan_requires_approval": False,
+        # Build-in-code surface, default OFF so a clean unpack's payload is byte-identical
+        # to the build before it (the clean-unpack figure is frozen). When on, four tools
+        # register hidden (name on a shelf, schema on reveal): submit_done, run_tests,
+        # changes, build_project. The failure that demanded them: a run asked to build a
+        # 3D game declared victory with a buggy prototype, no check had ever been run,
+        # test output had flooded a small window, and there was no way to see or undo what
+        # the run had written.
+        "build_tools": False,
+        # Build mode: the first MUTATING call (write/edit/create_tool, a side-effecting
+        # shell or execute_code) is refused with "plan first" until the model records its
+        # own plan with the plan tool. Read-only calls are never blocked. The request-
+        # derived plan does not count: it is the harness parsing the order, not the model
+        # stating how it will do the work.
+        "build_mode": False,
+        # The done gate: once this run has mutated files, an answer that reports success
+        # without a PASSING submit_done check is challenged once, then delivered with
+        # the unverified fact attached. Off by default; setting it alone also registers
+        # the four build tools (submit_done is the one it needs).
+        "done_gate": False,
         # The designer's suggested defaults (2026-10-03): a theme name resolved by
         # --theme/TINYCMDR_THEME/config (see resolve_theme_name), colour and Unicode as
         # policies ("auto" asks the environment), and animations subtle or off.
@@ -9987,6 +10006,7 @@ def tool_shell(args, ctx):
         out = digest_output("shell", args, out)
         out = out + verify_shell_writes(command)
         out = cap_output("shell", out, "command output",
+                         limit=args.get("_output_limit"),
                          session=(ctx or {}).get("session_key"))
         if timeout_hit:
             if cost_risk:
@@ -11885,6 +11905,8 @@ def tool_edit_file(args, ctx):
         atomic_write_text(path, out, encoding=_enc)
     except Exception as e:
         return f"ERROR writing {path}: {e} (backup: {backup.name})"
+    # Recorded only after the bytes landed: a failed write is not a change.
+    _changes_capture(path, "edit_file", ctx, raw_bytes, existed=True)
     _edit_noop_clear(path, ctx)
     _receipt_record(path, new_lf, ctx)
     diff = _edit_diff(lf_text, new_lf, path)
@@ -12355,6 +12377,19 @@ def tool_write_file(args, ctx):
               "approved it]" if (_confirm_hit(_content, "confirm_content_patterns")
                                  or (_script_shaped(path)
                                      and _confirm_hit(_content))) else "")
+    # The change ledger's pre-image, read once before the write. Bounded by the same
+    # 8 MiB the edit path refuses to rewrite whole; a larger file records that no
+    # snapshot was kept instead of paying RAM for a rollback it cannot promise.
+    _before = None
+    _existed = False
+    if build_tools_on():
+        _existed = path.exists() and path.is_file()
+        if _existed:
+            try:
+                if path.stat().st_size <= _CHANGES_MAX_BYTES:
+                    _before = path.read_bytes()
+            except OSError:
+                _before = None
     try:
         # Name the dirs a write invents: `no_such_dir/sub/p.txt` used to build the tree
         # silently, so a typo'd path looked like a successful write (A-2026-10-05-74).
@@ -12385,6 +12420,8 @@ def tool_write_file(args, ctx):
             # (config.json, notes.md through an approved gate) (A-2026-10-08-107). The
             # bytes are written raw, so an LF-only payload stays LF.
             atomic_write_text(path, args["content"])
+        # Recorded only after the bytes landed: a failed write is not a change.
+        _changes_capture(path, "write_file", ctx, _before, _existed)
         # A landed write ends any no-op streak on this path (the edit tool's guard).
         _edit_noop_clear(path, ctx)
         _receipt_record(path, _content, ctx)
@@ -15498,6 +15535,7 @@ def tool_create_tool(args, ctx):
     # (measured 2026-09-24 on a Windows install: three `python -c "import biggest_dirs"` calls after
     # create_tool, and never the tool call). One reveal closes that loop.
     reveal_tools((ctx or {}).get("session_key"), [name])
+    _changes_capture(path, "create_tool", ctx, None, existed=False)
     return (f"OK: tool '{name}' created and loaded. It is now callable and in your tool "
             f"list for this session. "
             + (f"Also registered from the same file: {', '.join(extras)}. "
@@ -16212,6 +16250,733 @@ def tool_plan(args, ctx):
     # Any real move resets the drift counter: the point is progress, not the plan itself.
     state["progress_at"] = state["calls"]
     return render()
+
+
+# ------------------------------------------------------------ build-in-code tools ---
+# Why this block exists: a run asked to build a 3D game from a reference image produced a
+# buggy prototype and stopped early. Nothing had defined "done" beyond the model's own
+# word, a build's output had flooded the window, and there was no way to review or undo
+# what it had written. These tools are the ratchet for that failure: a completion check
+# the harness runs, a failure-shaped test result, and a run-scoped change ledger. They
+# register ONLY when agent.build_tools or agent.done_gate is on, so a clean unpack's
+# fixed prompt is byte-identical and the clean-unpack figure cannot grow.
+
+
+def build_tools_on():
+    """Are the build-in-code tools registered on this process?"""
+    return bool(CONFIG["agent"].get("build_tools")
+                or CONFIG["agent"].get("done_gate"))
+
+
+# A side effect the model can start without naming a file tool. Deliberately broad: build
+# mode is opt-in and its whole point is "plan before you touch the box", so a false
+# positive costs one plan call, while a false negative lets the untracked path through.
+_BUILD_SHELL_WRITE_RX = re.compile(
+    r"(?ix)"
+    r"(?<![0-9])>>?(?![&=])"                       # a file redirect, not 2>&1 or >=
+    r"|\b(?:rm|rmdir|mv|cp|install|mkdir|touch|chmod|chown|ln|tee|dd|"
+    r"truncate|sed\s+-i|perl\s+-i|remove-item|ri|del|erase|rd|new-item|"
+    r"set-content|out-file|copy-item|move-item)\b"
+    r"|\bfind\b[^\n]*\s-delete\b"
+    r"|\b(?:pip3?|npm|pnpm|yarn|apt|apt-get|brew|choco|winget|cargo|dotnet|"
+    r"go|make|cmake|ninja|meson|pyinstaller|nuitka|gcc|clang|javac|mvn|gradle)\b"
+    r"|\bgit\s+(?:add|commit|checkout|switch|merge|reset|clean|apply|am|rebase|"
+    r"clone|init|rm)\b"
+    r"|(?:^|[;&|]\s*)(?:python3?|node|ruby|perl)\s+(?![-\s])"
+)
+
+_BUILD_CODE_WRITE_RX = re.compile(
+    r"(?i)\bopen\s*\([^)]*['\"][wax]\+?['\"]|\.write_text\s*\(|\.write_bytes\s*\(|"
+    r"\bos\.(?:remove|unlink|rename|replace|makedirs|mkdir)\b|"
+    r"\bshutil\.(?:copy|move|rmtree|copyfile)\b|\bsubprocess\.|"
+    r"\bos\.system\s*\(|\.unlink\s*\(|\.mkdir\s*\("
+)
+
+
+def _shell_has_side_effects(command):
+    text = str(command or "")
+    try:
+        live = _live_text(text)          # a quoted string is an argument, not a command
+    except Exception:
+        live = text
+    if _BUILD_SHELL_WRITE_RX.search(live):
+        return True
+    # A shell that EXECUTES its quoted argument hides the redirect from _live_text. The
+    # build-mode gate is not a sandbox, but it should not be bypassed by `bash -c ">"`.
+    if re.search(r"\b(?:ba|z|k|da)?sh\s+-c\b|\b(?:pwsh|powershell)\b[^\n]*"
+                 r"-(?:c|command)\b", live, re.I):
+        return bool(_BUILD_SHELL_WRITE_RX.search(text))
+    # Code passed with -c/-e is a command too: `python -c "open('x','w')"` is a write.
+    if re.search(r"\b(?:python3?|node|ruby|perl)\s+(?:-c|-e)\b", live, re.I):
+        return bool(_BUILD_CODE_WRITE_RX.search(text))
+    return False
+
+
+def _call_is_build_mutation(name, args):
+    """Would this call change local state, for build-mode's read-only-until-planned rule?"""
+    if name in MUTATING_TOOLS or name == "build_project":
+        return True
+    if name == "changes" and str((args or {}).get("action") or "").lower() in (
+            "restore", "revert", "undo"):
+        return True
+    if (REGISTRY.custom.get(name) or {}).get("mutates"):
+        return True
+    if name == "shell":
+        return _shell_has_side_effects((args or {}).get("command"))
+    if name == "execute_code":
+        return bool(_BUILD_CODE_WRITE_RX.search(str((args or {}).get("code") or "")))
+    return False
+
+
+def build_plan_refusal(name, args, ctx):
+    """Refuse a mutating call until the MODEL has recorded its own plan.
+
+    Not plan mode: read-only calls still run, and the plan does not need operator approval.
+    The request-derived plan does not count - it is the harness parsing the order, and the
+    measured failure is that no model-written plan existed before the first write.
+    """
+    if not CONFIG["agent"].get("build_mode"):
+        return ""
+    if name == "plan" or not _call_is_build_mutation(name, args):
+        return ""
+    if not CONFIG["agent"].get("plan_enabled", True):
+        return ("REFUSED (build mode misconfigured): agent.build_mode is on but "
+                "agent.plan_enabled is false, so there is no plan tool to satisfy it. "
+                "Set agent.plan_enabled true (or turn agent.build_mode off) in "
+                "config.json and restart; this is not something a tool call can fix.")
+    key = (ctx or {}).get("session_key")
+    st = run_state(key) or {}
+    if st.get("plan") and not st.get("derived"):
+        return ""
+    try:
+        # The refusal names a tool the caller may not have seen the schema for. Reveal it
+        # for this session so the next turn can act instead of guessing the arguments.
+        reveal_tools(key, ["plan"])
+    except Exception:
+        log.debug("build-mode plan reveal failed", exc_info=True)
+    return ("REFUSED (build mode): plan first. This box is write-protected until you "
+            "record your own plan with `plan action=set` (the steps you will take, one "
+            "per line). The plan is re-sent every turn with your position; then retry "
+            "this exact call. Read-only tools are not blocked.")
+
+
+def _exit_code_of(text):
+    """The exit code a tool_shell result carries, or None when it never produced one."""
+    m = re.search(r"(?m)^exit_code=(-?\d+)\s*$", str(text or ""))
+    return int(m.group(1)) if m else None
+
+
+def _run_capture_tool(command, timeout, ctx):
+    """Run a command through the ONE shell door, blocking to its exit.
+
+    `wait=True` is load-bearing: a check that outlived agent.auto_background_seconds
+    would otherwise be handed to the process table and submit_done would answer without
+    an exit code - the same "model declares victory" hole this tool exists to close.
+    """
+    try:
+        seconds = max(1, int(timeout))
+    except (TypeError, ValueError):
+        seconds = int(CONFIG["agent"].get("shell_timeout") or 300)
+    return tool_shell({"command": command, "timeout": seconds, "wait": True,
+                       "raw": True,
+                       # The summary tools need the CAUSE lines, and the shell's normal cap
+                       # keeps head+tail: on a 10-failure run the tenth FAIL line sat in the
+                       # dropped middle, so `run_tests` could not keep every failing test
+                       # name (its own acceptance rule). A larger raw window here is the
+                       # input to a bounded summary, not what reaches the model.
+                       "_output_limit": 200000}, ctx or {})
+
+
+# Lines that name the cause in the output of the test/build runners a coding run meets.
+# Order is the tie-break, and every pattern is deliberately narrow: a "summary" that
+# selects half the log is the flooding this tool exists to stop.
+_BUILD_FAILURE_LINE_RX = (
+    re.compile(r"^(?:FAILED|ERROR)\s+[\w./\\:\-\[\]]+"),      # pytest short summary
+    re.compile(r"^(?:FAIL|ERROR):\s+\S+"),                    # unittest
+    re.compile(r"^\s*E\s{2,}\S"),                             # pytest assertion detail
+    re.compile(r"^\s*--- FAIL:"),                            # go test
+    re.compile(r"^FAIL\s+\S+"),                              # go package failure
+    re.compile(r"^error(?:\[|:)\s*\S?"),                     # cargo / rustc / generic
+    re.compile(r"^(?:\[ERROR\]|\[FATAL\])"),                 # maven / java
+    re.compile(r"^\s*\d+\s+failing\b", re.I),                # mocha
+    re.compile(r"^\s*✕\s+\S"),                               # jest
+    re.compile(r"^npm ERR!"),                                # npm
+    re.compile(r"^Traceback \(most recent call last\):"),    # python crash
+    re.compile(r"^(?:AssertionError|Exception|SyntaxError|"
+               r"ModuleNotFoundError|ImportError|TypeError|ValueError)\b"),
+    re.compile(r"\bFAILED\b.*\btest", re.I),                 # one-line runner verdicts
+    re.compile(r"^\s*(?:FAIL|ERROR)\b.*$"),                  # anything else that says so
+)
+
+
+def _failure_lines(text, limit=80):
+    """The lines that name a cause, in output order, bounded and de-duplicated."""
+    picked, seen = [], set()
+    for raw in str(text or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip() or line.startswith("exit_code="):
+            continue
+        if len(line) > 400:
+            line = line[:400] + "..."
+        if not any(rx.search(line) for rx in _BUILD_FAILURE_LINE_RX):
+            continue
+        key = line.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(line)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def _fit_output(header, lines, cap):
+    """Header + as many selected lines as fit under `cap`, saying what was left out."""
+    cap = max(512, int(cap or 0))
+    out, used = [header], len(header)
+    for i, line in enumerate(lines):
+        more = len(lines) - i
+        reserve = len(f"\n... [{more} more line(s) omitted to stay under the window cap]")
+        if used + len(line) + 1 + reserve > cap and i > 0:
+            out.append("... [%d more line(s) omitted to stay under the window cap]"
+                       % more)
+            break
+        out.append(line)
+        used += len(line) + 1
+        if used >= cap:
+            if i + 1 < len(lines):
+                out.append("... [%d more line(s) omitted to stay under the window cap]"
+                           % (more - 1))
+            break
+    return "\n".join(out)[:cap]
+
+
+def _shape_command_result(command, out, rc, seconds, cap, label="command"):
+    """A passing run is one line; a failing one carries only the lines that name why.
+
+    This is the small-window half of the failure: tool output used to arrive whole and
+    eat the context, so the model spent turns re-running the same build to see the line
+    that mattered. The summary is deterministic - regex, no model, no network - and the
+    full text remains one raw shell call away.
+    """
+    body = re.sub(r"(?m)^exit_code=-?\d+\s*$", "", str(out or "")).strip()
+    if rc == 0:
+        tail = next((l.strip() for l in reversed(body.splitlines()) if l.strip()), "")
+        if len(tail) > 200:
+            tail = tail[:197] + "..."
+        return (f"PASS exit=0 in {seconds:.1f}s: {label} `{command[:180]}`"
+                + (f" | last line: {tail}" if tail else ""))
+    lines = _failure_lines(body)
+    if not lines:
+        lines = [l for l in body.splitlines() if l.strip()][-20:]
+    head = (f"FAIL exit={rc} in {seconds:.1f}s: {label} `{command[:180]}`\n"
+            f"{len(body.splitlines())} line(s) / {len(body)} chars of output; "
+            f"showing the {min(len(lines), 80)} line(s) that name the cause. "
+            f"Re-run the same command with shell raw=true for the full text.")
+    return _fit_output(head, lines[:80], cap)
+
+
+def tool_run_tests(args, ctx):
+    """Run a test/build command and inject only its failure summary.
+
+    The measured need: a small model on a slow endpoint spent three turns finding out why
+    a build failed because the failure text and the stack around it arrived whole. This
+    returns the failure-shaped lines, capped by the same window-scaled mem_limit_chars the
+    rest of the harness uses, and a one-line success when it passes.
+    """
+    command = str(args.get("command") or "").strip()
+    if not command:
+        return ("ERROR: run_tests needs `command` - the test/build invocation to run, "
+                "e.g. {\"command\": \"python -m pytest -q\"} or "
+                "{\"command\": \"npm test\"}.")
+    t0 = time.time()
+    out = _run_capture_tool(command, args.get("timeout"), ctx)
+    rc = _exit_code_of(out)
+    seconds = time.time() - t0
+    if rc is None:
+        # No exit code means the command was refused, timed out, stopped or never ran.
+        # That is not a pass: answer as the failure it is.
+        return ("RUN NOT COMPLETED: " + str(out).strip()[:1200]
+                + "\nNo exit code was produced, so this is not evidence that the tests "
+                  "pass. Fix the command or the timeout and run it again.")
+    cap = int(args.get("max_chars") or mem_limit_chars("tool_output_max_chars", 10000))
+    result = _shape_command_result(command, out, rc, seconds, cap, "tests")
+    try:
+        st = run_state((ctx or {}).get("session_key"), create=True)
+        st["tests_last"] = {"command": command[:500], "exit": rc,
+                            "at": time.time()}
+    except Exception:
+        log.debug("run_tests state write failed", exc_info=True)
+    return result
+
+
+def tool_submit_done(args, ctx):
+    """The completion check: the run ends on a PASS, not on the model's word.
+
+    The check is a command and the exit code it must produce. A failure comes back as a
+    shaped summary and a refusal to treat the task as complete; a pass records the check
+    on this run so the answer path can see it. This is the highest-value half of the
+    game-build failure: the model declared victory with a buggy prototype because nothing
+    ever asked it to prove the prototype ran.
+    """
+    check = str(args.get("check") or args.get("command") or "").strip()
+    if not check:
+        return ("ERROR: submit_done needs `check` - a command that exits with the expected "
+                "code only if the work is complete (tests, --selftest, a file existence "
+                "probe). Example: {\"check\": \"python -m pytest -q\", \"expect_exit\": 0}.")
+    try:
+        expect = int(args.get("expect_exit", 0))
+    except (TypeError, ValueError):
+        return ("ERROR: expect_exit must be a whole number (the exit code the check must "
+                "produce, normally 0).")
+    t0 = time.time()
+    out = _run_capture_tool(check, args.get("timeout"), ctx)
+    rc = _exit_code_of(out)
+    seconds = time.time() - t0
+    key = (ctx or {}).get("session_key")
+    st = run_state(key, create=True) if key else None
+    cap = int(args.get("max_chars") or mem_limit_chars("tool_output_max_chars", 10000))
+
+    if rc is None:
+        summary = ("the check produced NO exit code (it was refused, timed out, stopped "
+                   "or never ran), so it cannot prove completion")
+        if st is not None:
+            st["done_ok"] = None
+            st["done_fail"] = {"check": check[:500], "exit": None,
+                               "expect": expect, "summary": summary, "at": time.time()}
+        return ("REFUSED: DONE NOT VERIFIED - " + summary + ".\n"
+                + str(out).strip()[:1200]
+                + "\nThe run must not report success. Fix the check command or the cause "
+                  "and call submit_done again.")
+
+    if rc == expect:
+        if st is not None:
+            st["done_ok"] = {"check": check[:500], "exit": rc, "expect": expect,
+                             "at": time.time()}
+            st["done_fail"] = None
+        tail = _shape_command_result(check, out, rc, seconds, cap, "check")
+        log.info("[%s] submit_done PASSED: %s (exit %d)", key or "(no key)",
+                 check[:160], rc)
+        return ("DONE VERIFIED: `%s` exited %d as required (%.1fs). The completion check "
+                "is recorded for this run; report the result and what it proves.\n%s"
+                % (check[:180], rc, seconds, tail))
+
+    summary = _shape_command_result(check, out, rc, seconds, cap, "check")
+    if st is not None:
+        st["done_ok"] = None
+        st["done_fail"] = {"check": check[:500], "exit": rc, "expect": expect,
+                           "summary": summary[:3000], "at": time.time()}
+    log.warning("[%s] submit_done REFUSED: %s exited %d (expected %d)",
+                key or "(no key)", check[:160], rc, expect)
+    return ("REFUSED: DONE NOT VERIFIED - the check exited %d, expected %d.\n%s\n"
+            "The task is not complete. Fix the cause, re-run the check with "
+            "submit_done, and do not report success until it passes." % (rc, expect, summary))
+
+
+def _done_gate_reasons(key, muts, run):
+    """Why this answer may not claim completion yet, or [] when it may.
+
+    Only a run that CHANGED something is asked to prove it: a question answered from
+    reading, or an operator's status check, has nothing to verify. The changed set is
+    write/edit/create_tool plus a shell/execute_code call build mode classifies as
+    side-effecting; a `submit_done` PASS clears it, and any later mutation invalidates
+    that pass (the disk moved after the proof).
+    """
+    if not CONFIG["agent"].get("done_gate"):
+        return []
+    changed = bool(muts) or int((run or {}).get("shell_mutations") or 0)
+    if not changed:
+        return []
+    st = run_state(key) or {}
+    if st.get("done_ok"):
+        return []
+    why = ["this run changed files or ran a write-shaped command"]
+    fail = st.get("done_fail") or {}
+    if fail:
+        why.append("the last submit_done check FAILED (exit %s, expected %s)"
+                   % (fail.get("exit"), fail.get("expect")))
+    else:
+        why.append("no submit_done check has passed for it")
+    return why
+
+
+def _done_gate_turn(key, reasons):
+    """The one asking turn the done gate gets before it lets an unproven answer ship."""
+    st = run_state(key) or {}
+    fail = st.get("done_fail") or {}
+    body = ("SYSTEM: " + "; ".join(reasons) + ". Before you report the work as done, "
+            "call `submit_done` with a check that proves it - the project's tests, a "
+            "--selftest, or a command that exits 0 only when the artifact exists and "
+            "works. The check runs here and its failure output comes back to you. If no "
+            "check can run on this box, say exactly that in your final answer and name "
+            "what remains unverified; do not claim a success you have not checked.")
+    if fail.get("summary"):
+        body += "\nThe last check's failure output:\n" + str(fail["summary"])[:1500]
+    return body
+
+
+def _annotate_done_unverified(answer, reasons):
+    """Say on the delivered answer that completion was never proved."""
+    if not answer:
+        return answer
+    return (answer + "\n\n⚠️ **completion not verified** — " + "; ".join(reasons)
+            + ". The harness asked for a passing `submit_done` check and did not get "
+              "one, so the claims above are the model's own.")
+
+
+# --- the run-scoped change ledger -------------------------------------------------------
+# edit_file/write_file already write .bak files, but a second edit rolls the first one and
+# the .bak is the PREVIOUS state, not the run's start. The ledger takes one snapshot per
+# path at its FIRST mutation in the run, so `changes restore` means what an operator
+# expects: back to how it was before this run touched it. Shell writes are deliberately
+# not guessed at; the tool says so and points at git/diff.
+
+_CHANGES_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _real_path(path):
+    try:
+        return str(Path(path).expanduser().resolve())
+    except Exception:
+        return str(path)
+
+
+def _changes_dir(key):
+    digest = hashlib.sha1(str(key or "").encode("utf-8", "replace")).hexdigest()[:12]
+    _ensure_sessions_dir()
+    d = SESSIONS_DIR / "changes" / digest
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _changes_capture(path, tool, ctx, before_bytes=None, existed=True):
+    """Record one path's pre-run bytes the first time this run mutates it."""
+    if not build_tools_on():
+        # Default-off means NO behaviour change: without this, every write in the harness
+        # (config, notes, state) would pay a snapshot and a sessions/changes dir for a
+        # review tool the box does not have.
+        return
+    key = (ctx or {}).get("session_key")
+    if not key:
+        return
+    try:
+        st = run_state(key, create=True)
+        entries = st.setdefault("changes", [])
+        real = _real_path(path)
+        if any(e.get("path") == real for e in entries):
+            return
+        original = ""
+        note = ""
+        if existed and before_bytes is not None:
+            if len(before_bytes) <= _CHANGES_MAX_BYTES:
+                snap = _changes_dir(key) / (
+                    hashlib.sha1(real.encode("utf-8", "replace")).hexdigest()[:16]
+                    + ".orig")
+                atomic_write_bytes(snap, before_bytes)
+                original = str(snap)
+            else:
+                note = "too large to snapshot; restore is not available"
+        elif existed:
+            note = "no snapshot was taken before the write"
+        entries.append({"path": real, "tool": tool, "at": time.time(),
+                        "original": original, "existed": bool(existed),
+                        "note": note})
+    except Exception:
+        log.debug("change capture failed for %s", path, exc_info=True)
+
+
+def _changes_clear(key):
+    """Forget this session's change ledger AND its snapshots at the start of a new run.
+
+    The ledger is per RUN by definition, and snapshots are file copies: leaving them for
+    the life of the session turns a review tool into an unbounded second copy of every
+    edited file. A run start or /new is the boundary that says the old work is closed.
+    """
+    if not build_tools_on() or not key:
+        return
+    try:
+        digest = hashlib.sha1(str(key).encode("utf-8", "replace")).hexdigest()[:12]
+        shutil.rmtree(SESSIONS_DIR / "changes" / digest, ignore_errors=True)
+    except Exception:
+        log.debug("change cleanup failed", exc_info=True)
+
+
+def _changes_entry(entries, raw):
+    """Find one entry by path, basename, or unique suffix - the way a model spells it."""
+    want = str(raw or "").strip()
+    if not want:
+        return None, "name the file, e.g. {\"action\": \"diff\", \"path\": \"app.py\"}"
+    real = _real_path(_tool_path(want))
+    for e in entries:
+        if e.get("path") == real:
+            return e, ""
+    base = os.path.basename(want.rstrip("/\\"))
+    hits = [e for e in entries if os.path.basename(e.get("path", "")) == base]
+    if len(hits) == 1:
+        return hits[0], ""
+    if len(hits) > 1:
+        return None, (f"{base!r} matches {len(hits)} changed files; name the full path")
+    return None, f"no file matching {want!r} was changed by this run"
+
+
+def _read_bytes_capped(path, cap=_CHANGES_MAX_BYTES):
+    try:
+        if not path.is_file() or path.stat().st_size > cap:
+            return None
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _decode_change_bytes(data):
+    if data is None:
+        return ""
+    return data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def tool_changes(args, ctx):
+    """List, diff or restore the files this run changed.
+
+    The ops-agent answer to "what did it just do to my disk", without importing a
+    permission model. edit_file and write_file already keep .bak data; this exposes the
+    run-scoped view and one-step rollback. Shell mutations are outside the ledger and are
+    named as such rather than implied to be covered.
+    """
+    action = str(args.get("action") or "list").strip().lower()
+    key = (ctx or {}).get("session_key")
+    st = run_state(key, create=True) if key else {}
+    entries = list((st or {}).get("changes") or [])
+    if action in ("", "list", "ls"):
+        if not entries:
+            return ("No files changed by this run through write_file, edit_file or "
+                    "create_tool. (Shell and execute_code writes are not tracked by this "
+                    "ledger; git status / git diff sees those.)")
+        lines = [f"Files changed by this run ({len(entries)}):"]
+        for i, e in enumerate(entries, 1):
+            path = Path(e["path"])
+            now = _read_bytes_capped(path)
+            size = (f"{len(now)} B" if now is not None else
+                    ("missing" if not path.exists() else "unreadable/large"))
+            flag = " [restored]" if e.get("restored_at") else ""
+            origin = ("created by this run" if not e.get("existed")
+                      else "original snapshotted" if e.get("original")
+                      else "original not kept")
+            lines.append(f"  {i}. {e['path']} - {e.get('tool', '?')}, {size} now, "
+                         f"{origin}{flag}")
+        lines.append("Use changes action=diff path=<file>, then action=restore path=<file>.")
+        return "\n".join(lines)
+
+    entry, why = _changes_entry(entries, args.get("path"))
+    if entry is None:
+        return "ERROR: " + why
+
+    path = Path(entry["path"])
+    original = b""
+    if entry.get("original"):
+        try:
+            original = Path(entry["original"]).read_bytes()
+        except OSError:
+            return (f"ERROR: the run's original snapshot of {path} is gone "
+                    f"({entry['original']}); cannot diff or restore it.")
+    elif entry.get("existed"):
+        return (f"ERROR: no pre-run snapshot of {path} was kept"
+                + (f" ({entry['note']})" if entry.get("note") else "")
+                + ". The adjacent .bak may hold the previous state; restore it by hand.")
+
+    if action in ("diff", "show"):
+        current = _read_bytes_capped(path)
+        now_text = _decode_change_bytes(current)
+        old_text = _decode_change_bytes(original)
+        import difflib
+        diff = list(difflib.unified_diff(
+            old_text.splitlines(), now_text.splitlines(),
+            fromfile=f"before-this-run/{path.name}", tofile=str(path), lineterm="",
+            n=3))
+        if not diff:
+            return f"No content difference between the run's start and now: {path}."
+        cap = int(args.get("max_chars") or mem_limit_chars("tool_output_max_chars", 10000))
+        head = (f"Diff for {path} ({len(diff)} line(s); - before this run, + now):")
+        body = "\n".join(diff)
+        if len(head) + len(body) > cap:
+            body = body[:max(512, cap - len(head) - 80)] + (
+                f"\n... [{len(diff)} diff line(s) total; truncated to this window. "
+                f"Read the file and the snapshot for the rest.]")
+        return head + "\n" + body
+
+    if action in ("restore", "revert", "undo"):
+        if not entry.get("original") and entry.get("existed"):
+            return (f"ERROR: no pre-run snapshot for {path}; nothing was restored. "
+                    f"The .bak beside it may be the previous state.")
+        try:
+            if path.is_file():
+                _keep_backup(path)       # keep what is there now, too
+            if entry.get("existed"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_bytes(path, original)
+                did = f"restored the original {len(original)} bytes"
+            else:
+                if path.exists():
+                    if path.is_dir():
+                        return (f"ERROR: {path} is a directory now; refusing to remove "
+                                f"it. Restore by hand.")
+                    path.unlink()
+                did = "removed the file this run created"
+        except OSError as e:
+            return f"ERROR: could not restore {path}: {e}"
+        entry["restored_at"] = time.time()
+        if st is not None:
+            st["done_ok"] = None        # the verified state changed with the disk
+        log.info("[%s] changes restored %s", key or "(no key)", path)
+        return (f"OK: {did} at {path}. A .bak of the state just replaced was kept beside "
+                f"it. Other changed files were not touched; action=list shows them.")
+
+    return (f"ERROR: unknown changes action {action!r}. Actions: list, diff, restore.")
+
+
+# --- build_project: run the incantation, name the artifact, hand it over ---------------
+_BUILD_ARTIFACT_EXT = {
+    ".exe", ".msi", ".app", ".dmg", ".pkg", ".deb", ".rpm", ".appimage",
+    ".whl", ".zip", ".tar", ".gz", ".tgz", ".jar", ".war", ".dll", ".so",
+    ".dylib", ".bin", ".elf", ".apk", ".aab", ".ipa", ".wasm",
+}
+
+
+def _project_build_command(root, kind):
+    """The common incantation for a project shape, or "" when it is not knowable."""
+    kind = str(kind or "").strip().lower()
+    py = "python" if IS_WINDOWS else "python3"
+    if kind in ("python", "py", "pip", "wheel"):
+        return f"{py} -m build"
+    if kind in ("cargo", "rust"):
+        return "cargo build --release"
+    if kind in ("dotnet", "csharp", "cs", "msbuild"):
+        return "dotnet publish -c Release"
+    if kind in ("node", "npm", "javascript", "js", "typescript", "ts"):
+        return "npm run build"
+    if kind in ("go", "golang"):
+        return "go build ./..."
+    if kind:
+        return ""
+    if (root / "Cargo.toml").is_file():
+        return "cargo build --release"
+    if (root / "go.mod").is_file():
+        return "go build ./..."
+    if (root / "package.json").is_file():
+        return "npm run build"
+    if any(root.glob("*.csproj")) or any(root.glob("*.sln")):
+        return "dotnet publish -c Release"
+    if (root / "pyproject.toml").is_file() or (root / "setup.py").is_file():
+        return f"{py} -m build"
+    return ""
+
+
+def _build_artifacts(root, pattern="", limit=8, since=None):
+    """Recently written build products, newest first; bounded so a huge tree stays cheap.
+
+    `since` keeps an OLD artifact in the folder from being offered as this build's output:
+    a failed run that left the previous wheel in dist/ would otherwise hand the operator
+    yesterday's file under today's result.
+    """
+    cands = []
+    if pattern:
+        try:
+            cands = [p for p in root.glob(pattern) if p.is_file()]
+        except (OSError, ValueError):
+            cands = []
+    if not cands:
+        dirs = [root / d for d in ("dist", "target/release", "build",
+                                   "bin/Release", "bin/Debug", "out", "publish")]
+        seen = 0
+        for d in dirs:
+            if not d.is_dir():
+                continue
+            try:
+                for p in d.rglob("*"):
+                    seen += 1
+                    if seen > 4000:
+                        break
+                    if p.is_file() and (p.suffix.lower() in _BUILD_ARTIFACT_EXT
+                                        or ".app/Contents/MacOS/" in str(p)):
+                        cands.append(p)
+            except OSError:
+                continue
+            if seen > 4000:
+                break
+        if not cands:
+            # A root-level one-file product (`pyinstaller --onefile app.py`) lands here.
+            try:
+                for p in root.iterdir():
+                    if p.is_file() and p.suffix.lower() in _BUILD_ARTIFACT_EXT:
+                        cands.append(p)
+            except OSError:
+                pass
+    if since:
+        fresh = []
+        for p in cands:
+            try:
+                if p.stat().st_mtime >= float(since) - 1.0:
+                    fresh.append(p)
+            except OSError:
+                continue
+        cands = fresh
+    return sorted([p for p in cands if p.exists()],
+                  key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+
+
+def tool_build_project(args, ctx):
+    """Run a project's build incantation, find the artifact, and optionally send it.
+
+    An ops agent's native gesture is "run the job, hand back the report". This is that for
+    a build: the command runs with the shell tool's gates and timeout, a failure comes back
+    failure-shaped, and the produced file is named (and attached when the lane can carry
+    it) instead of leaving the operator to guess where the build put it.
+    """
+    root = _tool_path(args.get("path") or ".")
+    if not root.exists() or not root.is_dir():
+        return f"ERROR: {root} is not a directory to build."
+    command = str(args.get("command") or "").strip()
+    if not command:
+        command = _project_build_command(root, args.get("kind"))
+    if not command:
+        return (f"ERROR: build_project could not recognize a build in {root}. Pass "
+                f"`command` (e.g. \"pyinstaller --onefile app.py\") or `kind` "
+                f"(python, cargo, dotnet, node, go).")
+    full = f'cd "{root}" && {command}'
+    t0 = time.time()
+    out = _run_capture_tool(full, args.get("timeout"), ctx)
+    rc = _exit_code_of(out)
+    seconds = time.time() - t0
+    if rc is None:
+        return ("BUILD NOT COMPLETED: " + str(out).strip()[:1200]
+                + "\nNo exit code was produced, so there is no artifact to hand over.")
+    cap = int(args.get("max_chars") or mem_limit_chars("tool_output_max_chars", 10000))
+    if rc != 0:
+        return ("BUILD FAILED. "
+                + _shape_command_result(command, out, rc, seconds, cap, "build"))
+    artifacts = _build_artifacts(root, str(args.get("artifact") or "").strip(),
+                                 since=t0)
+    if not artifacts:
+        return (f"BUILD PASSED (exit 0, {seconds:.1f}s) but no artifact was found under "
+                f"{root}. The command was `{command}`. Name the output with `artifact` "
+                f"(a glob relative to the project) or read the build output for its path.")
+    lines = [f"BUILD PASSED (exit 0, {seconds:.1f}s). Artifact(s), newest first:"]
+    for p in artifacts:
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0
+        lines.append(f"  - {p} ({size} bytes)")
+    sent = ""
+    if args.get("send") and (ctx or {}).get("send_file"):
+        try:
+            sent = "\n" + str(tool_send_file(
+                {"path": str(artifacts[0]),
+                 "note": args.get("note") or f"build artifact: {artifacts[0].name}"}, ctx))
+        except Exception as e:                                   # noqa: BLE001
+            sent = f"\n(send_file failed: {e}; the path above is the deliverable)"
+    elif args.get("send"):
+        sent = "\n(This lane cannot carry a file; give the operator the absolute path.)"
+    return "\n".join(lines) + sent
 
 
 def _skill_names_brief(skills, cap=40):
@@ -17784,6 +18549,16 @@ CORE_TOOLS = {
 # fix was one config key).
 _GATED_CORE_TOOLS = {"a2a": "agent.a2a_remotes", "mcp": "agent.mcp_servers"}
 
+# Boolean gates are a different shape: "has at least one entry" is wrong for a switch, and
+# the build tools need TWO switches (build_tools registers the shelf; done_gate also needs
+# submit_done). The unknown-tool answer reads this first.
+_GATED_BOOL_TOOLS = {
+    "submit_done": ("agent.build_tools", "agent.done_gate"),
+    "run_tests": ("agent.build_tools",),
+    "changes": ("agent.build_tools",),
+    "build_project": ("agent.build_tools",),
+}
+
 # The A2A client exists only on a box that has remotes configured: a feature that is
 # off registers nothing at all, so the payload is byte-identical to a build that never
 # had it, and its NAME is the only static-prompt byte when it is on.
@@ -17811,6 +18586,84 @@ if (CONFIG.get("agent") or {}).get("mcp_servers"):
              "tool": {"type": "string", "description": "call: the tool to invoke"},
              "arguments": {"type": "object", "description": "call: its arguments"}},
             ["action"]),
+    }
+
+if build_tools_on():
+    CORE_TOOLS["submit_done"] = {
+        "fn": tool_submit_done,
+        "schema": _schema(
+            "Finish a build/fix job by PROVING it: run a check command and require its "
+            "exit code. On a failure the harness refuses completion and returns the lines "
+            "that name the cause. Call this once the work is actually done, then report. "
+            "The check must be runnable here (tests, --selftest, a command that exits 0 "
+            "only when the artifact exists).",
+            {"check": {"type": "string",
+                       "description": "Command to run; e.g. 'python -m pytest -q' or "
+                                      "'python app.py --selftest'"},
+             "expect_exit": {"type": "integer",
+                             "description": "Exit code that proves completion (default 0)"},
+             "timeout": {"type": "integer",
+                         "description": "Seconds before the check is killed"},
+             "max_chars": {"type": "integer",
+                           "description": "Cap on the failure summary (window-scaled "
+                                          "default)"}},
+            ["check"]),
+    }
+    CORE_TOOLS["run_tests"] = {
+        "fn": tool_run_tests,
+        "schema": _schema(
+            "Run a test/build command and return ONLY the failure summary: failing test "
+            "names, compiler errors and assertion lines, capped to the window. On success "
+            "answers one line. Use this instead of shell for pytest/npm test/dotnet "
+            "build/cargo test, then fix and call it again.",
+            {"command": {"type": "string",
+                         "description": "The test/build invocation, e.g. "
+                                        "'python -m pytest -q' or 'cargo test'"},
+             "timeout": {"type": "integer",
+                         "description": "Seconds before the command is killed"},
+             "max_chars": {"type": "integer",
+                           "description": "Cap on the injected summary (window-scaled "
+                                          "default)"}},
+            ["command"]),
+    }
+    CORE_TOOLS["changes"] = {
+        "fn": tool_changes,
+        "schema": _schema(
+            "What this run did to the disk: list the files write_file/edit_file/"
+            "create_tool changed, show a unified diff against the run's start, or restore "
+            "one file to its pre-run content. Use before reporting a build, and after a "
+            "bad edit. Shell writes are not tracked; git sees those.",
+            {"action": {"type": "string", "enum": ["list", "diff", "restore"],
+                        "description": "list (default), diff one file, or restore one file"},
+             "path": {"type": "string",
+                      "description": "The changed file (full path or unique basename)"},
+             "max_chars": {"type": "integer",
+                           "description": "Cap on a diff (window-scaled default)"}},
+            ["action"]),
+    }
+    CORE_TOOLS["build_project"] = {
+        "fn": tool_build_project,
+        "schema": _schema(
+            "Build a project and hand back its artifact: runs the common incantation "
+            "(or your `command`), captures the produced file, and can attach it to the "
+            "chat. Use when the order is to package/deliver something runnable, not just "
+            "to leave sources in a folder.",
+            {"path": {"type": "string",
+                      "description": "Project directory (default: this install's dir)"},
+             "command": {"type": "string",
+                         "description": "Exact build command; overrides `kind`"},
+             "kind": {"type": "string",
+                      "description": "python, cargo, dotnet, node or go - picks the "
+                                     "usual command"},
+             "artifact": {"type": "string",
+                          "description": "Glob for the artifact, relative to the project"},
+             "send": {"type": "boolean",
+                      "description": "Attach the artifact through the lane's send_file"},
+             "note": {"type": "string",
+                      "description": "One line to send with the artifact"},
+             "timeout": {"type": "integer"},
+             "max_chars": {"type": "integer"}},
+            []),
     }
 
 CORE_TOOL_NAMES = set(CORE_TOOLS)
@@ -23947,6 +24800,21 @@ class Agent:
         if not tool:
             # A core tool whose config gate is off is IN this build, just not registered:
             # answer with the key that turns it on instead of the build-mismatch hint.
+            if name in _GATED_BOOL_TOOLS:
+                _keys = _GATED_BOOL_TOOLS[name]
+                _vals = []
+                for _gate in _keys:
+                    _val = CONFIG
+                    for _part in _gate.split("."):
+                        _val = _val.get(_part) if isinstance(_val, dict) else None
+                    _vals.append((_gate, bool(_val)))
+                _names = " or ".join("`%s`" % g for g, _v in _vals)
+                _now = ", ".join("%s=%s" % (g, "on" if v else "off") for g, v in _vals)
+                return name, args, (
+                    f"ERROR: unknown tool '{name}'. This build has `{name}` but registers "
+                    f"it only when {_names} is on; right now {_now}. Set it in config.json "
+                    f"and restart the bot. No rebuild or new tool is needed; the tool "
+                    f"appears after the restart.")
             if name in _GATED_CORE_TOOLS:
                 _gate = _GATED_CORE_TOOLS[name]
                 _val = CONFIG
@@ -24009,6 +24877,12 @@ class Agent:
                 "record what you would do with `plan action=set` and stop; the operator "
                 "approves with `/plan apply` (or answers the approval question), and "
                 "only then do writes and commands run.")
+        # Build mode is the softer sibling: the box is not read-only, but a mutating call
+        # waits until the MODEL has recorded its own plan. Same dispatch point as plan
+        # mode, so drop-ins are covered by the same rule.
+        refusal = build_plan_refusal(name, args, ctx)
+        if refusal:
+            return name, args, refusal
         # A TOOL that moves the endpoint this bot talks to takes the same gate as a
         # shell command that does. Without this, an inferctl-style tool walked straight
         # past a guard that only ever read shell text (2026-09-21).
@@ -24415,6 +25289,13 @@ class Agent:
             _run["compactions"] = 0
             _run["atlas_reask"] = False
             _run["route_hint_used"] = 0
+            # Build state is PER RUN, like the mutation count: a previous run's change
+            # ledger, verification and test result must not make this run look reviewed
+            # or verified. The plan deliberately survives (a continuation hands it on).
+            _changes_clear(session_key)
+            for _k in ("changes", "done_ok", "done_fail", "done_challenged",
+                       "tests_last", "shell_mutations"):
+                _run.pop(_k, None)
             # Generated on the host, never shipped in a package. One stat per run once the
             # file exists; a fresh install gets a draft it can correct. It must never be able
             # to stop a run.
@@ -24979,6 +25860,32 @@ class Agent:
                                 log.warning("[%s] the continuation was cut too - "
                                             "delivering %d char(s) and the note",
                                             session_key, len(answer))
+                        # THE DONE GATE (build-in-code). A run that wrote files but never
+                        # passed submit_done is asked once to prove completion before its
+                        # answer ships; if it stops again, the answer carries the
+                        # unverified fact. It never asks a read-only run for a check, and
+                        # it cannot loop: one asking turn per run.
+                        _done_reasons = []
+                        if (not spun and not _run.get("idle_stop")
+                                and status not in ("truncated", "empty", "budget")
+                                and (reply.get("content") or "").strip()):
+                            _done_reasons = _done_gate_reasons(session_key, muts, _run)
+                            if _done_reasons and not _run.get("done_challenged"):
+                                _run["done_challenged"] = 1
+                                try:
+                                    # The one turn that needs this schema is this one:
+                                    # reveal it rather than spending another turn on a
+                                    # call the model had to guess at.
+                                    reveal_tools(session_key, ["submit_done"])
+                                except Exception:
+                                    log.debug("done gate reveal failed", exc_info=True)
+                                messages.append({"role": "user",
+                                                 "content": _done_gate_turn(
+                                                     session_key, _done_reasons)})
+                                log.warning("[%s] done gate: %s - asking for a "
+                                            "completion check", session_key,
+                                            " | ".join(_done_reasons)[:300])
+                                continue
                         # THE PRE-DELIVERY CHECKPOINT (2026-10-16). This is the one
                         # moment a bare answer is about to ship, so it is where the
                         # harness's state gets one last word. It fires only when that
@@ -25016,6 +25923,8 @@ class Agent:
                                     and (_no_call_used >= _nudge_cap
                                          or _promise_used >= _nudge_cap))):
                             answer = _annotate_promise(answer, calls)
+                        if _done_reasons:
+                            answer = _annotate_done_unverified(answer, _done_reasons)
                         answer = _annotate_evidence(answer, muts, calls)
                         if _dropped_answers:
                             # No say_cb lane (the bare console/web runs): earlier
@@ -25400,6 +26309,17 @@ class Agent:
                             # and could force a report mid-task (2026-09-22).
                             repeated.clear()
                             _restated = 0      # real work: the status is not the story
+                            _run["done_ok"] = None   # the verified state just changed
+                        elif not refused and name in ("shell", "execute_code",
+                                                      "changes", "build_project") \
+                                and _call_is_build_mutation(name, args):
+                            # Shell/build writes are not in `muts` (the tool deliberately
+                            # does not guess at command text), but the done gate must still
+                            # see that this run changed the box. Count it, and treat any
+                            # later verification as stale.
+                            _run["shell_mutations"] = int(
+                                _run.get("shell_mutations") or 0) + 1
+                            _run["done_ok"] = None
                         log.info("[%s] %s(%s) -> %d chars",
                                  session_key, name,
                                  json.dumps(args)[:120], len(output))
@@ -25758,6 +26678,7 @@ class Agent:
         if lock is not None and not lock.locked():
             self.locks.pop(session_key, None)
         _carry_reset(session_key)
+        _changes_clear(session_key)
         _run_state_reset(session_key)
         # `session` = THIS conversation, so /new ends it: the allow-list is keyed by the
         # channel's session key (which /new keeps), so without this the fresh conversation

@@ -205,6 +205,23 @@ tinycmdr web                            # print the tokenized link (checks the p
 
 Flat as it grows: ~5.7 characters of tool index per tool at 80 tools.
 
+## Build-in-code
+
+Off by default. Turn on the verification workflow for a box that builds things:
+
+```bash
+tinycmdr config set agent.build_tools true     # submit_done, run_tests, changes, build_project
+tinycmdr config set agent.build_mode true      # plan before the first mutating call
+tinycmdr config set agent.done_gate true       # a changed run needs a passing submit_done
+tinycmdr restart
+```
+
+`submit_done` runs a check command and requires its exit code before the run can call the
+job complete; `run_tests` returns only the failure-shaped lines under the window cap;
+`changes` lists, diffs and restores what this run wrote; `build_project` runs the build,
+finds the artifact and can attach it. The four tools are hidden until the gate is on, so a
+host that does not ask for them pays nothing in the fixed prompt.
+
 ## Update
 
 ```bash

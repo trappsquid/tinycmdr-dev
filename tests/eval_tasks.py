@@ -28,18 +28,26 @@ Design rules, so the numbers mean something:
       landing             does it land the run gracefully when the budget runs out
       field_notes         a known failure signature reaches the model with its fix
       verify              the harness checks what a write produced and says so
+      build_cli           can it build and prove a small command-line tool
+      build_game          the originating task: a headless 3D prototype that launches
+      replication         can it implement a supplied contract and pass its conformance test
 - Deterministic fixtures. Generated text is fixed, not random: two runs of the eval
   must differ only because the model differed.
 
 Grading spec (interpreted by run_eval.py):
 
   files            {relpath: {exists, equals, lines, contains, not_contains,
-                              json, json_paths, unchanged}}
+                              json, json_paths, unchanged, absent}}
+  runs             [{argv, expect_exit, timeout, stdout_contains, stdout_regex}];
+                   {python} in argv is the interpreter running the eval. This is how a
+                   build task checks that --selftest or the conformance test really passes.
   answer_contains      all of these must appear, case-insensitive
   answer_contains_any  at least one
   answer_not_contains  none of these
   answer_regex         must match
   tool_calls_max/min   bounds on tool calls
+  tool_names_include   every named tool must have been called
+  tool_names_include_any  at least one of them
   status_in            the run's status must be one of these
 """
 
@@ -188,6 +196,59 @@ BROKEN_SETTINGS_JSON = """{
   },
 }
 """
+
+# A tiny replication fixture: the spec is the source of truth and the conformance test is
+# supplied, so the task measures reading a contract and implementing it, not guessing at
+# an unstated one. The test is part of SETUP and the model is told not to edit it.
+SLUG_SPEC = """# slugify contract
+
+`convert.py` must expose one function, `slugify(text) -> str`, and a CLI:
+
+    python convert.py "Hello, World!"    -> hello-world
+
+Rules, in order:
+
+1. Lowercase the whole input.
+2. Replace every run of characters outside `a-z0-9` with a single `-`.
+3. Strip leading and trailing `-`.
+4. An empty or all-punctuation input becomes the empty string.
+
+Examples:
+
+    "Hello, World!"      -> "hello-world"
+    "  A--B  "           -> "a-b"
+    "already-a-slug"     -> "already-a-slug"
+    "!!!"                -> ""
+"""
+
+SLUG_CHECK = '''"""Conformance test shipped with the task; do not edit."""
+import subprocess
+import sys
+
+import convert
+
+
+def main():
+    cases = {
+        "Hello, World!": "hello-world",
+        "  A--B  ": "a-b",
+        "already-a-slug": "already-a-slug",
+        "!!!": "",
+    }
+    for text, want in cases.items():
+        got = convert.slugify(text)
+        assert got == want, "slugify(%r) = %r, want %r" % (text, got, want)
+    out = subprocess.run(
+        [sys.executable, "convert.py", "Hello, World!"],
+        capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "hello-world", repr(out.stdout)
+    print("all slugify checks passed")
+
+
+if __name__ == "__main__":
+    main()
+'''
 
 
 # --------------------------------------------------------------------------
@@ -445,6 +506,79 @@ TASKS = [
                             "b.txt": {"absent": True},
                             "c.txt": {"contains": "CHANGED"}},
                   "steered": True},
+    },
+    {
+        "id": "T20_build_cli", "category": "build_cli", "difficulty": "hard",
+        # The first build-a-thing task, and the reason the category exists: a correct
+        # artifact is not enough, the run must plan before writing and prove the artifact
+        # with submit_done. The selftest is the acceptance the operator asked for.
+        "prompt": ("Build a small Python command-line todo tool in the working directory.\n"
+                   "Requirements:\n"
+                   "- todo.py, standard library only\n"
+                   "- `python todo.py add \"text\"` appends one task to todo.json\n"
+                   "- `python todo.py list` prints one line per task\n"
+                   "- `python todo.py --selftest` runs an add+list check in a temporary "
+                   "directory and exits 0 only if both work\n"
+                   "- README.md shows the commands\n"
+                   "Plan first with the plan tool, then build. Run the selftest yourself "
+                   "and fix it until it passes. Finish with submit_done, using "
+                   "`python todo.py --selftest` as the check, then report the result."),
+        "setup": {},
+        "config": {"build_tools": True, "build_mode": True, "done_gate": True,
+                   "max_steps": 70, "max_minutes": 25},
+        "check": {"files": {"todo.py": {"exists": True, "contains": "--selftest"},
+                            "README.md": {"exists": True, "contains": "todo.py"}},
+                  "runs": [{"argv": ["{python}", "todo.py", "--selftest"],
+                            "timeout": 60}],
+                  "tool_names_include": ["plan", "submit_done"],
+                  "status_in": ["ok"]},
+    },
+    {
+        "id": "T21_build_game", "category": "build_game", "difficulty": "hard",
+        # The flagship: the originating failure was a 3D game prototype that was declared
+        # done without ever being run. This one must launch cleanly (a headless selftest)
+        # and carry a README, so "I built a game" is checked rather than believed.
+        "prompt": ("Build a small playable 3D game prototype in the TERMINAL, no browser, "
+                   "in game.py. Use only the Python standard library. It must render a 3D "
+                   "scene as ASCII/ANSI and support a `--selftest` flag that renders three "
+                   "frames headlessly and exits 0 only if that works. Add README.md with "
+                   "how to run it. Plan first with the plan tool, then build. Run the "
+                   "selftest yourself and fix it until it passes. Finish with submit_done, "
+                   "using `python game.py --selftest` as the check, then report the "
+                   "result and what the player sees."),
+        "setup": {},
+        "config": {"build_tools": True, "build_mode": True, "done_gate": True,
+                   "max_steps": 100, "max_minutes": 30},
+        "check": {"files": {"game.py": {"exists": True, "contains": "--selftest"},
+                            "README.md": {"exists": True,
+                                          "contains": "game.py"}},
+                  "runs": [{"argv": ["{python}", "game.py", "--selftest"],
+                            "timeout": 60,
+                            "stdout_regex": "(?i)frame|render|scene"}],
+                  "tool_names_include": ["plan", "submit_done"],
+                  "status_in": ["ok"]},
+    },
+    {
+        "id": "T22_replicate_spec", "category": "replication", "difficulty": "medium",
+        # Reverse engineering from a contract, not from a description of the code: the
+        # spec and its conformance test are staged, the model implements the module and
+        # must make the supplied test pass. Reading before writing is the skill here.
+        "prompt": ("Read spec.md and implement convert.py exactly as it specifies. Do not "
+                   "edit spec.md or check_convert.py - they are the contract. Run "
+                   "check_convert.py until it passes. Add README.md with the one-line "
+                   "usage. Plan first with the plan tool, then build. Finish with "
+                   "submit_done, using `python check_convert.py` as the check, then report "
+                   "the result."),
+        "setup": {"spec.md": SLUG_SPEC, "check_convert.py": SLUG_CHECK},
+        "config": {"build_tools": True, "build_mode": True, "done_gate": True,
+                   "max_steps": 60, "max_minutes": 20},
+        "check": {"files": {"convert.py": {"exists": True, "contains": "slugify"},
+                            "README.md": {"exists": True,
+                                          "contains": "convert.py"}},
+                  "runs": [{"argv": ["{python}", "check_convert.py"], "timeout": 60,
+                            "stdout_contains": "all slugify checks passed"}],
+                  "tool_names_include": ["plan", "submit_done"],
+                  "status_in": ["ok"]},
     },
 ]
 

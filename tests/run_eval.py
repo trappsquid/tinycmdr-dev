@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -145,6 +146,39 @@ def grade(task, metrics):
 
     reasons.extend(check_files(Path(metrics["_workdir"]), spec.get("files")))
 
+    # A build task's real acceptance is often a process: does `--selftest` exit 0, does
+    # the hidden conformance test pass? argv is a list (no shell quoting, no platform
+    # difference), and {python} resolves to the interpreter running the eval.
+    for i, run in enumerate(spec.get("runs") or []):
+        argv = [sys.executable if str(a) == "{python}" else str(a)
+                for a in (run.get("argv") or [])]
+        want = int(run.get("expect_exit", 0))
+        label = " ".join(Path(str(a)).name for a in argv) or ("run %d" % (i + 1))
+        if not argv:
+            reasons.append((False, f"run {i + 1}: no argv"))
+            continue
+        try:
+            proc = subprocess.run(
+                argv, cwd=str(metrics["_workdir"]), capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=float(run.get("timeout") or 60))
+            out = (proc.stdout or "") + (proc.stderr or "")
+            ok = proc.returncode == want
+            why = (f"`{label}` exited {proc.returncode} (wanted {want})"
+                   if not ok else f"`{label}` exited {proc.returncode} as required")
+            if "stdout_contains" in run and run["stdout_contains"] not in out:
+                ok = False
+                why += f"; output does not contain {run['stdout_contains']!r}"
+            if "stdout_regex" in run and not re.search(run["stdout_regex"], out):
+                ok = False
+                why += f"; output does not match {run['stdout_regex']!r}"
+            reasons.append((ok, why))
+        except subprocess.TimeoutExpired:
+            reasons.append((False, f"`{label}` did not finish in "
+                                   f"{run.get('timeout') or 60}s"))
+        except OSError as e:
+            reasons.append((False, f"`{label}` could not start: {e}"))
+
     if spec.get("steered"):
         # A steering task has two failure modes and they are not the same: the steer never
         # reached the run (a harness bug) or the model ignored it (a prompt bug). This rule
@@ -201,6 +235,19 @@ def grade(task, metrics):
         n = metrics.get("tool_calls", 0)
         reasons.append((n >= spec["tool_calls_min"],
                         f"tool calls {n} (min {spec['tool_calls_min']})"))
+    # Build tasks grade the TOOLS the new workflow asks for: a plan before the first
+    # write, and a passing completion check before the answer. A correct artifact built
+    # without either is still a run that did not use the safety it was given.
+    used = set(metrics.get("tool_names") or [])
+    if spec.get("tool_names_include"):
+        missing = [t for t in spec["tool_names_include"] if t not in used]
+        reasons.append((not missing,
+                        "used the required tools " + ", ".join(spec["tool_names_include"])
+                        if not missing else f"never called {missing}"))
+    if spec.get("tool_names_include_any"):
+        hit = [t for t in spec["tool_names_include_any"] if t in used]
+        reasons.append((bool(hit), f"used {hit}" if hit
+                                   else f"used none of {spec['tool_names_include_any']}"))
     if spec.get("status_in"):
         st = metrics.get("status", "")
         reasons.append((st in spec["status_in"],

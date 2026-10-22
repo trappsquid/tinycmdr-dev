@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                49,671 lines / 2.35 MB in ONE file, no package, no framework
+code                50,592 lines / 2.39 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -37,10 +37,10 @@ custom tools        4 example tools ship in ./tools/ (native .py, register-style
 chat commands       21 CLI verbs, 13 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               64 suites / 55,728 lines / 5,921 checks that need no model, plus a graded
-                    set of 19 tasks against a real endpoint (9 support scripts;
+tests               65 suites / 56,169 lines / 5,975 checks that need no model, plus a graded
+                    set of 22 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
-config              config.json, 6 blocks: llm 30, telegram 4, mattermost 6, web 4, search 3, agent 119
+config              config.json, 6 blocks: llm 30, telegram 4, mattermost 6, web 4, search 3, agent 122
                     (all of section 3 is configurable)
 state on disk       sessions/*.json (per channel), memory/ (OKF knowledge),
                     notes.md (legacy, still read), jobs.json (cron), uploads/, logs
@@ -74,6 +74,17 @@ find_tools      ask for a tool by name or by what it does; a category returns a 
 plan            the run's own plan, re-sent every turn with the position
 experiment      what this box has already tested, so an arm is not run twice
 ask_user        one blocking question to the operator, and the run stops for the answer
+```
+
+Four more tools exist only when `agent.build_tools` or `agent.done_gate` is on. They are
+hidden like the other non-core tools (a name on a shelf, the schema on reveal), so the
+default tool surface and the fixed prompt are unchanged:
+
+```
+submit_done     run a check command, require its exit code, and refuse completion on a fail
+run_tests       run a test/build command and inject only the failure summary, capped to the window
+changes         list the files this run changed, diff one, restore one to its pre-run content
+build_project   run a project's build incantation, name the artifact, optionally attach it
 ```
 
 Custom tools are the extension path, and there are three shapes to write one in: a native `.py`
@@ -221,6 +232,8 @@ landing            at the budget cap the model is asked for a fixed skeleton - R
                    to window // 4 like every other call, instead of trusting final_max_tokens
 spilled results    the lines that name a cause are lifted out of the dropped middle and ride
                    inline, so recovering a log tail is not a second call on a slow endpoint
+test output        run_tests and submit_done keep only the failing test names, compiler errors
+                   and assertion lines, under the same window cap, and say what was omitted
 failed calls       are shown the last call to the same tool that worked: the SHAPE of a call,
                    never a note about a cause (which is attached only to failures, on purpose)
 ```
@@ -240,6 +253,35 @@ permission model. The agent runs as the login user on the host, with that user's
 is a regex, so obfuscation beats it, and untrusted text that reaches the model (a fetched page, a
 chat message) can ask it to run something. That is stated plainly in the shipped documentation
 because it is the real threat model.
+
+### 3.6 Build-in-code (opt-in, default off)
+
+The originating failure: a run asked to build a 3D game from a reference image produced a
+buggy prototype and stopped early. Nothing defined "done" beyond the model's word, the
+build's output had flooded the window, no plan was required before the first write, and
+there was no way to review or undo what the run had changed. Four tools and two gates are
+the ratchet for that, and all of them are off on a clean unpack:
+
+```
+agent.build_tools   registers submit_done, run_tests, changes and build_project as hidden
+                    tools; the default tool surface and the fixed prompt are unchanged
+agent.done_gate     once a run has changed files, a completion answer without a PASSING
+                    submit_done is challenged once, then delivered with the unverified fact
+agent.build_mode    a mutating call (write/edit/create_tool, a side-effecting shell or
+                    execute_code) is refused with "plan first" until the MODEL records its
+                    own plan; the request-derived plan does not count, read-only calls never
+                    block
+```
+
+`submit_done` runs a check command through the shell door and requires its exit code;
+`run_tests` returns the failure-shaped lines under the window-scaled cap; `changes` keeps
+one pre-run snapshot per path (not the rolling `.bak`) and can restore it; `build_project`
+runs the common incantation, finds the artifact and can hand it to `send_file`. Shell writes
+are outside the change ledger on purpose, and the tool says so rather than implying cover.
+
+The eval's `build_cli`, `build_game` and `replication` tasks are the scoreboard for this
+surface; each has a machine check (`--selftest`, a supplied conformance test) plus the
+required plan/submit_done calls.
 
 ## 4. Design choices, and why
 
@@ -294,11 +336,15 @@ earlier trees         1.0.16 -> 5,333 est   1.0.30 -> 4,802 est   1.0.31 -> 4,30
                       1.0.34 -> 4,145 est / 3,462 real (clean unpack, 2026-09-27)
 ```
 
-The harness half has not grown: 4,116 est today against 4,145 est on 2026-09-27 (the
-schemas shrank by ~157, the system prompt grew by ~129). What a live box pays on top is its
-own workspace content, not harness overhead: this box's context-file block (a 1.0.54 feature,
-budgeted by `agent.context_files_max_chars`, 4,000 by default) measured 4,250 chars /
-1,250 est, and the per-host skill and drop-in index rode in the rest.
+At the 2026-10-05 snapshot the harness half had not grown: 4,116 est then against 4,145
+est on 2026-09-27 (the schemas shrank by ~157, the system prompt grew by ~129). Re-measured
+2026-10-22: **4,622 est (2,594 + 2,028)** - unchanged by the build-in-code work, because
+none of its tools register while its gates are off; the 506-token difference since the
+snapshot is tool-description and system-prompt edits that landed in between. What a live
+box pays on top is its own workspace content, not harness overhead: this box's
+context-file block (a 1.0.54 feature, budgeted by `agent.context_files_max_chars`, 4,000
+by default) measured 4,250 chars / 1,250 est, and the per-host skill and drop-in index
+rode in the rest.
 
 The endpoint's own tokenizer is what the model actually pays; when this box's endpoint
 answered `POST /tokenize` (2026-09-27) it read about 1.2x lower than the estimator on the
@@ -334,7 +380,9 @@ Execution safety
   no container or VM sandbox per session (OpenHands runs each session in its own Docker runtime)
   no security analyzer or policy engine on individual actions
   no per-tool or per-path permission prompt; no allow/deny rules per command beyond the regex list
-  no read-only mode, no dry-run, no diff-approval step before a write lands
+  no diff-approval step or sandbox: plan mode (operator approval) and build mode (the
+  model's own plan before the first mutation) gate writes, and `changes` reviews and
+  restores a run's file edits - none of those is a permission model
 
 Interop and ecosystem
   an MCP CLIENT (stdio, off until agent.mcp_servers names one; the hidden `mcp` tool
@@ -354,7 +402,8 @@ Interop and ecosystem
   ./tools/computer_use.py - docs/computer-use.md)
 
 Agent architecture
-  no plan/act phases, no explicit plan-approval gate, no graph or state-machine orchestration
+  no plan/act phase machine beyond plan mode and build mode, no diff-approval gate, no
+  graph or state-machine orchestration
   no nested sub-agents: delegate_task fans out one BATCH of children in parallel (each
   with a throwaway context), and a child cannot delegate further - one level by design
   no parallel worker pool beyond one worker per channel
@@ -431,7 +480,7 @@ Two pieces of framing from that same literature describe this build better than 
 
 And the limitation the same sources name, which applies here: the thing that tells you the choice was
 right is an evaluation suite, and it is the piece most often missing. tinycmdr has its own graded
-set of 19 tasks against one endpoint and no third-party benchmark, so none of the Terminal-Bench
+set of 22 tasks against one endpoint and no third-party benchmark, so none of the Terminal-Bench
 or SWE-bench numbers in that field can be held against it, in either direction. That is the honest
 comparison, not a favourable one.
 
@@ -443,7 +492,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 49,671-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 50,592-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -487,7 +536,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     measured by hand in section 4.1 - est_tokens as sent on
                           a clean unpack, plus the endpoint's own count when it
                           answers /tokenize; the command and both legs are there
-readability               49,671 lines, one file, no dependency tree to audit
+readability               50,592 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

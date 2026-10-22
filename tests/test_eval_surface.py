@@ -439,6 +439,57 @@ No model calls. Two directions per task:
         positive.append((eval_tasks.BY_ID["T16_verify_failure"],
                          metrics_for(BASE, "The write failed: the file is invalid JSON.",
                                      verify_failures=1)))
+        # T20: a correct CLI, its selftest exits 0, and the build workflow ran.
+        t = eval_tasks.BY_ID["T20_build_cli"]
+        wd8 = staged(t)
+        (wd8 / "todo.py").write_text(
+            "import json, sys, tempfile, pathlib\n"
+            "def main(argv):\n"
+            "    if '--selftest' in argv:\n"
+            "        d = pathlib.Path(tempfile.mkdtemp())\n"
+            "        (d / 'todo.json').write_text(json.dumps(['one']))\n"
+            "        assert json.loads((d / 'todo.json').read_text()) == ['one']\n"
+            "        print('selftest ok')\n"
+            "        return 0\n"
+            "    return 0\n"
+            "raise SystemExit(main(sys.argv[1:]))\n", encoding="utf-8")
+        (wd8 / "README.md").write_text("usage: python todo.py add x\n",
+                                       encoding="utf-8")
+        positive.append((t, metrics_for(
+            wd8, "Built todo.py; selftest passed.",
+            tool_names=["plan", "submit_done"], status="ok")))
+
+        # T21: a headless game whose selftest renders three frames.
+        t = eval_tasks.BY_ID["T21_build_game"]
+        wd9 = staged(t)
+        (wd9 / "game.py").write_text(
+            "import sys\n"
+            "if '--selftest' in sys.argv:\n"
+            "    for i in range(3):\n"
+            "        print('frame %d: a 3D scene' % i)\n"
+            "    raise SystemExit(0)\n"
+            "print('play the game')\n", encoding="utf-8")
+        (wd9 / "README.md").write_text("run: python game.py\n", encoding="utf-8")
+        positive.append((t, metrics_for(
+            wd9, "Built game.py; selftest rendered three frames.",
+            tool_names=["plan", "submit_done"], status="ok")))
+
+        # T22: the supplied conformance test passes against a faithful implementation.
+        t = eval_tasks.BY_ID["T22_replicate_spec"]
+        wd10 = staged(t)
+        (wd10 / "convert.py").write_text(
+            "import re\n"
+            "import sys\n"
+            "def slugify(text):\n"
+            "    return re.sub(r'[^a-z0-9]+', '-', str(text).lower()).strip('-')\n"
+            "if __name__ == '__main__':\n"
+            "    print(slugify(sys.argv[1] if len(sys.argv) > 1 else ''))\n",
+            encoding="utf-8")
+        (wd10 / "README.md").write_text("usage: python convert.py \"text\"\n",
+                                        encoding="utf-8")
+        positive.append((t, metrics_for(
+            wd10, "Implemented convert.py; the conformance test passed.",
+            tool_names=["plan", "submit_done"], status="ok")))
         # T09: both defaults, which are the values in tinycmdr.py
         positive.append((eval_tasks.BY_ID["T09_code_grounding"],
                          metrics_for(BASE, "memory_index_max_chars is 3000 and "
