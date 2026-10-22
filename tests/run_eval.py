@@ -331,6 +331,11 @@ def stage_task(workdir, budget, task, overrides=None):
     cfg["agent"].update(DEFAULT_CONFIG)
     cfg["agent"].update(task.get("config") or {})
     cfg["agent"].update(overrides or {})
+    # A task whose shape invites one huge generation (the game build) can bound the
+    # per-call output here: the fixture's 16,384 cap let one call stream for over 30
+    # minutes against this endpoint and never reach a second turn. The task still builds
+    # across turns; this is the same cap a production small-output box would set.
+    cfg["llm"].update(task.get("llm") or {})
     cfg["llm"]["max_context_tokens"] = int(budget)
     (workdir / "config.json").write_text(json.dumps(cfg, indent=2),
                                          encoding="utf-8")

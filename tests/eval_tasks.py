@@ -549,6 +549,10 @@ TASKS = [
         "setup": {},
         "config": {"build_tools": True, "build_mode": True, "done_gate": True,
                    "max_steps": 100, "max_minutes": 30},
+        # The 16,384-token fixture cap let one code generation run for 30+ minutes
+        # against the measured endpoint. 4,096 is the production-shaped cap for a
+        # small-output box; the task still has 100 steps to build across turns.
+        "llm": {"max_tokens": 4096},
         "check": {"files": {"game.py": {"exists": True, "contains": "--selftest"},
                             "README.md": {"exists": True,
                                           "contains": "game.py"}},

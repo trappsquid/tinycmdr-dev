@@ -551,6 +551,14 @@ No model calls. Two directions per task:
             check((wd6 / "tinycmdr.py").exists(), "the staged install has tinycmdr.py")
         finally:
             shutil.rmtree(wd6, ignore_errors=True)
+        t = eval_tasks.BY_ID["T21_build_game"]
+        wd11 = staged(t)
+        try:
+            cfg = json.loads((wd11 / "config.json").read_text(encoding="utf-8"))
+            check(cfg["llm"]["max_tokens"] == 4096,
+                  "a task can bound its per-call output (T21)")
+        finally:
+            shutil.rmtree(wd11, ignore_errors=True)
 
         # 5. task set sanity
         ids = [t["id"] for t in eval_tasks.TASKS]
