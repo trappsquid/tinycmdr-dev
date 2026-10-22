@@ -4015,6 +4015,17 @@
       },
       "detail": "The image path worked, but the model never used it: `read_file`'s description said only `Read a file (or list a directory). Use tail for logs.`, so `find_tools` for image analysis surfaced nothing and a desktop PNG was decoded with Pillow, Tesseract and an ASCII colour map instead; the description and the system prompt now say an image opens as a picture for one request and forbid Python/PIL/OCR.",
       "gate": "tests/test_delivery_surface.py grades the description and the prompt (red on the 1.1.41 build)"
+    },
+    {
+      "id": "build-in-code",
+      "title": "a coding run plans, proves and reviews its own work",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "2938b97",
+        "expect": "untagged"
+      },
+      "detail": "The game-build run declared a buggy prototype done: nothing defined completion, build output flooded the window, no plan was required before the first write, and the run's file changes could not be reviewed or undone; `agent.build_tools` adds submit_done, run_tests, changes and build_project, `agent.done_gate` challenges an unproven completion, and `agent.build_mode` refuses a mutating call until the model records its own plan.",
+      "gate": "tests/test_build_surface.py covers the gates and the change ledger model-free; eval T20-T22 grade a CLI, a headless 3D game and a supplied contract against a live endpoint."
     }
   ]
 }
