@@ -18601,7 +18601,10 @@ if build_tools_on():
                        "description": "Command to run; e.g. 'python -m pytest -q' or "
                                       "'python app.py --selftest'"},
              "expect_exit": {"type": "integer",
-                             "description": "Exit code that proves completion (default 0)"},
+                             "description": "Exit code that proves completion (default 0; "
+                                            "on Windows PowerShell reports 1 for any "
+                                            "nonzero native exit, so 0 is the portable "
+                                            "pass/fail check)"},
              "timeout": {"type": "integer",
                          "description": "Seconds before the check is killed"},
              "max_chars": {"type": "integer",
