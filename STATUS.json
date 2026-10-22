@@ -4019,10 +4019,10 @@
     {
       "id": "page-probe-bound-address",
       "title": "a LAN-bound page answers its own probe",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "6ab9eb7",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The page probe always asked 127.0.0.1, so a page bound to a specific LAN address answered 200 on that address and was reported dark by doctor and the web verb; the probe now asks web.host, keeping loopback only for a wildcard bind.",
       "gate": "tests/test_verbs.py captures the probed URL and grades the bound address and the wildcard fallback."
@@ -4030,10 +4030,10 @@
     {
       "id": "where-remote-from-git-tree",
       "title": "where.py --remote works on a package install",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "d31f38f",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The shipped live tree is a package install with no .git, so --remote printed no ORIGIN or GitHub block and the release line asked the clone's origin, which has no releases; both facts now come from the declared git tree and the install surface the updater names.",
       "gate": "tests/test_where.py pins the tree choice, the install-surface repo and the no-origin answer."
@@ -4041,10 +4041,10 @@
     {
       "id": "build-in-code",
       "title": "a coding run plans, proves and reviews its own work",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "2938b97",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The game-build run declared a buggy prototype done: nothing defined completion, build output flooded the window, no plan was required before the first write, and the run's file changes could not be reviewed or undone; `agent.build_tools` adds submit_done, run_tests, changes and build_project, `agent.done_gate` challenges an unproven completion, and `agent.build_mode` refuses a mutating call until the model records its own plan.",
       "gate": "tests/test_build_surface.py covers the gates and the change ledger model-free; eval T20-T22 grade a CLI, a headless 3D game and a supplied contract against a live endpoint."
