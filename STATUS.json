@@ -4017,6 +4017,28 @@
       "gate": "tests/test_delivery_surface.py grades the description and the prompt (red on the 1.1.41 build)"
     },
     {
+      "id": "page-probe-bound-address",
+      "title": "a LAN-bound page answers its own probe",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "6ab9eb7",
+        "expect": "untagged"
+      },
+      "detail": "The page probe always asked 127.0.0.1, so a page bound to a specific LAN address answered 200 on that address and was reported dark by doctor and the web verb; the probe now asks web.host, keeping loopback only for a wildcard bind.",
+      "gate": "tests/test_verbs.py captures the probed URL and grades the bound address and the wildcard fallback."
+    },
+    {
+      "id": "where-remote-from-git-tree",
+      "title": "where.py --remote works on a package install",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "d31f38f",
+        "expect": "untagged"
+      },
+      "detail": "The shipped live tree is a package install with no .git, so --remote printed no ORIGIN or GitHub block and the release line asked the clone's origin, which has no releases; both facts now come from the declared git tree and the install surface the updater names.",
+      "gate": "tests/test_where.py pins the tree choice, the install-surface repo and the no-origin answer."
+    },
+    {
       "id": "build-in-code",
       "title": "a coding run plans, proves and reviews its own work",
       "state": "unreleased",

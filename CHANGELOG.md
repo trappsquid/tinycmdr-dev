@@ -5,6 +5,19 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.45] - 2026-10-22
+
+### Added
+- **Build-in-code is an opt-in surface, not a new prompt:** `agent.build_tools` registers four hidden tools - `submit_done` runs a check command and requires its exit code before a run can call a job complete, `run_tests` returns only the failure-shaped lines under the window cap, `changes` lists, diffs and restores this run's files, and `build_project` names and optionally attaches the artifact - and all are off by default so a clean unpack's fixed prompt is unchanged (tests/test_build_surface.py, docs/tinycmdr-what-it-is.md).
+- **A build run can be made to prove itself:** `agent.done_gate` challenges a completion answer that changed files but has no passing `submit_done` and marks the answer if it still stops, while `agent.build_mode` refuses a mutating call until the model records its own plan (tests/test_build_surface.py).
+- **The graded set covers building and replication:** T20 builds a CLI, T21 builds a headless terminal 3D prototype and T22 implements a supplied contract, each graded by a process exit plus the required plan and submission calls (tests/eval_tasks.py, tests/eval_baseline.json, tests/test_eval_surface.py).
+
+### Changed
+- **`where.py --remote` works on a package install:** it reads the release and GitHub facts from the declared git tree and asks the install surface named by the updater, instead of dropping both blocks when the live tree has no `.git` (tests/test_where.py).
+
+### Fixed
+- **A LAN-bound page answers its own probe:** `doctor` and `tinycmdr web` probe the address the page is bound to (`web.host`) and keep loopback only for a wildcard bind, so a page bound to a LAN address is not reported dark (tests/test_verbs.py).
+
 ## [1.1.44] - 2026-10-21
 
 ### Fixed
