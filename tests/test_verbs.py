@@ -474,6 +474,46 @@ def _body():
               "page      : on, port" in out
               and "no token yet - the next start mints one" in out, out[-500:])
 
+        # ---- the page probe uses the address the page is BOUND to --------------
+        # A page bound to a specific LAN address does not answer on 127.0.0.1; the
+        # old probe called it dark while the page was live (measured 2026-10-21:
+        # 127.0.0.1 -> 000, the bound address -> 200). Capture the URL instead of
+        # opening a socket.
+        _saved_host = fb.CONFIG["web"].get("host")
+        _saved_urlopen = urllib.request.urlopen
+        _seen = []
+
+        class _Resp:
+            status = 200
+
+            def read(self, n=-1):
+                return b'{"lanes": []}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def _fake_urlopen(url, timeout=None):
+            _seen.append(url)
+            return _Resp()
+
+        urllib.request.urlopen = _fake_urlopen
+        try:
+            fb.CONFIG["web"]["host"] = "192.0.2.10"
+            check("the page probe uses the configured bind address",
+                  fb._web_answers(8787) and
+                  _seen == ["http://192.0.2.10:8787/api/health"], _seen)
+            _seen.clear()
+            fb.CONFIG["web"]["host"] = "0.0.0.0"
+            check("...and a wildcard bind probes loopback",
+                  fb._web_answers(8787) and
+                  _seen == ["http://127.0.0.1:8787/api/health"], _seen)
+        finally:
+            urllib.request.urlopen = _saved_urlopen
+            fb.CONFIG["web"]["host"] = _saved_host
+
         fb._detect_window = lambda url, headers=None: 0
         forget_probes()
         rc, out, err = call(fb, ["doctor"])

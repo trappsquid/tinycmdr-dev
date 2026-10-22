@@ -37267,13 +37267,24 @@ def _web_base_urls(port, host=None):
     return [("http://%s:%d/" % (_url_host(host or "127.0.0.1"), port), True)]
 
 
-def _web_answers(port, timeout=2.0):
+def _web_answers(port, timeout=2.0, host=None):
     """Is a tinycmdr page already serving on this port? (/api/health is auth-free
     by design, and its JSON carries `lanes` - specific enough not to confuse it
-    with whatever else might answer on the number.)"""
+    with whatever else might answer on the number.)
+
+    Probe the address the page is BOUND to (`web.host`), not loopback: a LAN-only
+    bind does not answer on 127.0.0.1, so the old probe called a live page dark
+    (measured 2026-10-21: 127.0.0.1 -> 000, the bound LAN address -> 200). A
+    wildcard bind still probes loopback.
+    """
+    if host is None:
+        host = (CONFIG.get("web") or {}).get("host")
+    host = str(host or "127.0.0.1").strip()
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
     try:
         import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % int(port),
+        with urllib.request.urlopen("http://%s:%d/api/health" % (_url_host(host), int(port)),
                                     timeout=timeout) as r:
             return r.status == 200 and b"lanes" in r.read(4096)
     except Exception:
