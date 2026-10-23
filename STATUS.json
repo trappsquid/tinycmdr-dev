@@ -4052,10 +4052,10 @@
     {
       "id": "vision-follows-the-declaration",
       "title": "an endpoint that declares vision turns the images on",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "caa4edd",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The switch shipped auto but a declaration lived only in a one-minute cache and only two of the endpoint's three surfaces were read, so a metadata probe that went silent put a known vision model back to text; the doors now read /props, /health and /v1/models in that order and remember the answer per endpoint and model.",
       "gate": "tests/test_delivery_surface.py grades the /health surface, the remembered yes and the per-model scoping (red on the 1.1.45 build)."
