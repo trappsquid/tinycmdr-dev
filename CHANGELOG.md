@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.46] - 2026-10-22
+
+### Fixed
+- **An endpoint's vision declaration turns the images on:** the image doors read `/props`, `/health` and `/v1/models` in that order and remember what the endpoint declared per endpoint and model, so a metadata probe that goes silent no longer puts a known vision model back to text and `doctor` says on when auto resolves on (tests/test_delivery_surface.py).
+
 ## [1.1.45] - 2026-10-22
 
 ### Added
