@@ -417,8 +417,15 @@ most if it broke:
 
     def main():
         keep_flag = fb.CONFIG["agent"].get("vision")
+        keep_model = fb.CONFIG["llm"].get("model")
         real_props = fb._llama_props
         real_models = getattr(fb, "_models_image_input", None)
+        real_health = getattr(fb, "_health_image_input", None)
+        # No local server to ask: every declaration surface is silent unless a check
+        # sets it, so no check here waits on a timeout. On a build without the /health
+        # probe this assigns a name nothing reads, and the checks below FAIL rather
+        # than skip - a guard here would grade the build against itself.
+        fb._health_image_input = lambda *a, **k: None
         img = _png(TMP / "screen.png")
 
         # ---- 5. the estimate is the measured cost -----------------------
@@ -500,8 +507,14 @@ most if it broke:
             fb._TOOL_IMAGES.clear()
             getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
             fb._llama_props = lambda *a, **k: None
-            note = fb.stash_tool_images("silent", [{"path": img, "w": 8, "h": 8}], "t")
-            check("...and an endpoint that says nothing is not consent",
+            # A model id this endpoint has never declared anything for: what it
+            # remembers belongs to the id it was learned for, not to the endpoint.
+            fb.CONFIG["llm"]["model"] = "never-declared"
+            try:
+                note = fb.stash_tool_images("silent", [{"path": img, "w": 8, "h": 8}], "t")
+            finally:
+                fb.CONFIG["llm"]["model"] = keep_model
+            check("...and a model the endpoint has never declared is not consent",
                   fb.peek_tool_images("silent") == []
                   and "does not declare image input" in note, note)
             fb._TOOL_IMAGES.clear()
@@ -512,6 +525,35 @@ most if it broke:
                   fb.peek_tool_images("said-no") == []
                   and "declares no image input" in note, note)
             fb._models_image_input = lambda *a, **k: None
+
+            # ---- the other declaration surfaces, and a remembered yes ----------
+            fb._health_image_input = lambda *a, **k: True
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+            fb._TOOL_IMAGES.clear()
+            note = fb.stash_tool_images("health", [{"path": img, "w": 8, "h": 8}], "t")
+            check("auto attaches when only /health declares image input",
+                  note == "" and len(fb.peek_tool_images("health")) == 1, note)
+
+            # The endpoint goes quiet: the declaration it made is remembered.
+            fb._health_image_input = lambda *a, **k: None
+            getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+            fb._TOOL_IMAGES.clear()
+            note = fb.stash_tool_images("remembered", [{"path": img, "w": 8, "h": 8}], "t")
+            check("a declared yes survives a silent probe",
+                  note == "" and len(fb.peek_tool_images("remembered")) == 1, note)
+
+            # ... for the model it was declared for, not for the next one loaded.
+            fb.CONFIG["llm"]["model"] = "text-only-other"
+            try:
+                getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
+                fb._TOOL_IMAGES.clear()
+                note = fb.stash_tool_images("other-model",
+                                            [{"path": img, "w": 8, "h": 8}], "t")
+            finally:
+                fb.CONFIG["llm"]["model"] = keep_model
+            check("another model on the same endpoint does not inherit the yes",
+                  fb.peek_tool_images("other-model") == [], note)
+            fb._health_image_input = lambda *a, **k: None
 
             # ---- 4. read_file on an image is a look, not bytes ------------------
             fb.CONFIG["agent"]["vision"] = "auto"
@@ -584,8 +626,11 @@ most if it broke:
                   fb.pending_image_tokens("budget"))
         finally:
             fb.CONFIG["agent"]["vision"] = keep_flag
+            fb.CONFIG["llm"]["model"] = keep_model
             fb._llama_props = real_props
             fb._models_image_input = real_models
+            if real_health is not None:
+                fb._health_image_input = real_health
             getattr(fb, "_IMAGE_INPUT_CACHE", {}).clear()
             fb._TOOL_IMAGES.clear()
 

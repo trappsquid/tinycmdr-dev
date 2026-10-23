@@ -1730,18 +1730,87 @@ def _models_image_input(base_url, timeout=5):
     return any(str(m).strip().lower() in ("image", "images", "vision") for m in mods)
 
 
-def endpoint_image_input(url=None):
-    """(True/False/None, why) - what the endpoint says about taking images.
+def _health_image_input(base_url, timeout=5):
+    """True/False/None from llama-swap's /health `images` flag.
 
-    /props is the serving process's own declaration and wins; /v1/models is the generic
-    fallback. None (nothing said, or no answer) is not a no and not a yes: an auto
-    decision treats it as "cannot show", while an explicit agent.vision true overrides.
+    A server that swaps models knows which one is loaded and whether it was started with
+    a vision projector, and /health is where it says so. Only a JSON object that also
+    names the model or its status is trusted, so an unrelated 200 on /health (vLLM
+    answers an empty one) is not read as a capability.
     """
-    base = str(url or CONFIG["llm"].get("base_url") or "").rstrip("/")
-    hit = _IMAGE_INPUT_CACHE.get(base)
-    if hit and (time.time() - hit[2]) < _IMAGE_INPUT_TTL:
-        return hit[0], hit[1]
-    state, why = None, "the endpoint does not declare image input"
+    root = _endpoint_root(base_url)
+    if not root:
+        return None
+    try:
+        got = requests.get(root + "/health",
+                           headers={"Content-Type": "application/json"},
+                           timeout=_probe_timeout(timeout)).json()
+    except Exception as e:                       # noqa: BLE001 - a probe must not break a run
+        log.debug("image probe: /health on %s did not answer: %s", root, e)
+        return None
+    if not isinstance(got, dict) or "images" not in got:
+        return None
+    if not (got.get("model") or got.get("status")):
+        return None
+    return bool(got.get("images"))
+
+
+def _remembered_vision(base_url):
+    """(state, source, at) the endpoint last declared, or None.
+
+    The declaration is remembered per endpoint AND model: a server that swaps models
+    must not inherit the last one's answer, and a harness restart must not forget what
+    the endpoint said. Only read when the live probe answers nothing - a live answer
+    always wins.
+    """
+    try:
+        ent = _endpoint_facts(base_url) or {}
+        caps = ent.get("capabilities") if isinstance(ent, dict) else None
+        rec = caps.get("vision") if isinstance(caps, dict) else None
+    except Exception:                            # noqa: BLE001 - a probe must not break a run
+        return None
+    if not isinstance(rec, dict) or not isinstance(rec.get("value"), bool):
+        return None
+    if str(rec.get("model") or "") != str(CONFIG["llm"].get("model") or ""):
+        return None
+    try:
+        at = float(rec.get("at") or 0)
+    except (TypeError, ValueError):
+        at = 0.0
+    return rec["value"], str(rec.get("source") or "the endpoint's last answer"), at
+
+
+def _remember_vision(base_url, state, source):
+    """Record what the endpoint declared; a silent probe then keeps the answer."""
+    model = str(CONFIG["llm"].get("model") or "")
+    try:
+        ent = _endpoint_facts(base_url) or {}
+        caps = ent.get("capabilities") if isinstance(ent, dict) else None
+        rec = caps.get("vision") if isinstance(caps, dict) else None
+        if (isinstance(rec, dict) and rec.get("value") is state
+                and rec.get("source") == source and rec.get("model") == model):
+            return
+
+        def mutate(ent):
+            caps = dict(ent.get("capabilities") or {})
+            caps["vision"] = {"value": bool(state), "source": source,
+                              "model": model, "at": time.time()}
+            ent["capabilities"] = caps
+
+        _endpoint_update(base_url, mutate)
+    except Exception as e:                       # noqa: BLE001 - recording is best effort
+        log.debug("image probe: could not record %s for %s: %s", state, base_url, e)
+
+
+def _probe_image_input(base):
+    """(state, detail, source) from the endpoint's own declarations, live only.
+
+    Asked in order of how much the answer is about the model that is loaded right now:
+    /props `modalities` (llama.cpp's own), /health `images` (llama-swap's own), then
+    /v1/models `architecture.input_modalities` (the generic model list).
+    """
+    state, source = None, ""
+    why = "the endpoint does not declare image input"
     try:
         props = _llama_props(base)
     except Exception:                            # noqa: BLE001 - a probe must not break a run
@@ -1750,32 +1819,92 @@ def endpoint_image_input(url=None):
         mods = props.get("modalities")
         if isinstance(mods, dict) and "vision" in mods:
             state = bool(mods.get("vision"))
+            source = "/props modalities.vision=%s" % ("true" if state else "false")
             why = "" if state else "the endpoint's /props reports modalities.vision=false"
         elif props.get("media_marker"):
-            state, why = True, ""
+            state, source = True, "/props media_marker"
+    if state is None:
+        said = _health_image_input(base)
+        if said is not None:
+            state = said
+            source = "/health images=%s" % ("true" if said else "false")
+            why = "" if said else "the endpoint's /health reports images=false"
     if state is None:
         said = _models_image_input(base)
         if said is not None:
             state = said
-            why = ("" if state else
+            source = "/v1/models architecture.input_modalities"
+            why = ("" if said else
                    "the endpoint's /v1/models declares no image input for this model")
+    if state is True:
+        why = "the endpoint declares image input (%s)" % source
+    return state, why, source
+
+
+def endpoint_image_input(url=None):
+    """(True/False/None, detail) - what the endpoint says about taking images.
+
+    The live declaration is asked first and remembered; when the endpoint answers
+    nothing, the last declaration for this endpoint and model is used, so a restart or a
+    moment of silence does not flip a known vision model back to text. None means
+    nothing was ever declared, which is not a no: an auto decision treats it as "cannot
+    show", while an explicit agent.vision true overrides.
+    """
+    base = str(url or CONFIG["llm"].get("base_url") or "").rstrip("/")
+    hit = _IMAGE_INPUT_CACHE.get(base)
+    if hit and (time.time() - hit[2]) < _IMAGE_INPUT_TTL:
+        return hit[0], hit[1]
+    state, detail, source = _probe_image_input(base)
+    if state is not None:
+        _remember_vision(base, state, source)
+    else:
+        rec = _remembered_vision(base)
+        if rec is not None:
+            rstate, rsource, rat = rec
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(rat)) if rat else "earlier"
+            if rstate:
+                state = True
+                detail = ("the endpoint last declared image input (%s, %s); it answers "
+                          "nothing now" % (rsource, when))
+            else:
+                state = False
+                detail = ("the endpoint last declared no image input (%s, %s)"
+                          % (rsource, when))
     if len(_IMAGE_INPUT_CACHE) > 32:
         _IMAGE_INPUT_CACHE.clear()
-    _IMAGE_INPUT_CACHE[base] = (state, why, time.time())
-    return state, why
+    _IMAGE_INPUT_CACHE[base] = (state, detail, time.time())
+    return state, detail
 
 
 def _endpoint_vision(url=None):
     """(ok, why) - the veto form: only a positive "no" refuses.
 
-    Kept for callers that ask "would an assertion of yes be obeyed?" - the doctor and the
-    model-profile notes. The doors themselves ask image_switch(), which also reads the
-    operator's setting.
+    For the model-profile notes at add time, which ask "would an assertion of yes be
+    obeyed?" without reading the operator's own setting. The doors ask image_switch().
     """
     state, why = endpoint_image_input(url)
     if state is False:
         return False, why
     return True, ""
+
+
+def _vision_setting():
+    """(True/False/None, raw) - `agent.vision` as the ONE switch reads it.
+
+    None is "auto". A tri-state key can be a JSON boolean or one of the words `config
+    set` accepts, and both spellings resolve here once so no caller can read one of them
+    as auto.
+    """
+    raw = CONFIG["agent"].get("vision")
+    if isinstance(raw, bool):
+        return raw, raw
+    if isinstance(raw, str):
+        word = raw.strip().lower()
+        if word in ("true", "on", "yes", "1"):
+            return True, raw
+        if word in ("false", "off", "no", "0"):
+            return False, raw
+    return None, raw
 
 
 def image_switch(url=None):
@@ -1786,16 +1915,7 @@ def image_switch(url=None):
     vetoes; false never attaches. A model that says it takes images no longer needs an
     operator to guess a flag, and an endpoint that says nothing is never guessed at.
     """
-    raw = CONFIG["agent"].get("vision")
-    want = None                      # auto
-    if isinstance(raw, bool):
-        want = raw
-    elif isinstance(raw, str):
-        word = raw.strip().lower()
-        if word in ("true", "on", "yes", "1"):
-            want = True
-        elif word in ("false", "off", "no", "0"):
-            want = False
+    want, _raw = _vision_setting()
     state, why = endpoint_image_input(url)
     if want is False:
         return False, "agent.vision is off"
@@ -46457,20 +46577,19 @@ def _verb_doctor():
 
     # The image switch: does an image the operator sends - a chat upload, a path
     # read_file opens, a computer_use screenshot - reach the model? "auto" reads the
-    # endpoint's own declaration; true forces it for an endpoint that says nothing;
-    # false never attaches. A positive "no" always wins.
-    _vset = CONFIG["agent"].get("vision")
+    # endpoint's own declaration (live first, then what it last declared); true forces
+    # it for an endpoint that says nothing; false never attaches. A positive "no" wins.
+    _vwant, _vraw = _vision_setting()
     _vstate, _vwhy = endpoint_image_input()
     _vok, _voff = image_switch()
     if _vok:
-        print("  vision    : %s - images ride one request (%s)" % (
-            "on" if _vset is True else "auto",
-            "agent.vision forces it" if _vset is True
-            else "the endpoint declares image input"))
-    elif _vset is True and _vstate is False:
+        print("  vision    : on - images ride one request (%s)" % (
+            "agent.vision forces it" if _vwant is True
+            else "auto: %s" % _vwhy))
+    elif _vwant is True and _vstate is False:
         problems.append("agent.vision is on but %s; an image would be sent to an "
                         "endpoint that cannot see it" % _vwhy)
-    elif _vset is False:
+    elif _vwant is False:
         print("  vision    : off - images are saved, not shown; `tinycmdr config set "
               "agent.vision auto` follows the endpoint's own answer")
     else:

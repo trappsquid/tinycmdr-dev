@@ -80,8 +80,13 @@ Today screenshots travel to the SAME endpoint as the conversation, in the same r
 the text:
 
 - `agent.vision: "auto"` (the shipped value) attaches an image only when the endpoint
-  declares image input - `/props` `modalities.vision`, or `/v1/models`
-  `architecture.input_modalities`. A model that says it takes images needs no flag.
+  declares image input - `/props` `modalities.vision`, llama-swap's `/health` `images`,
+  or `/v1/models` `architecture.input_modalities`, asked in that order. A model that says
+  it takes images needs no flag.
+- What the endpoint declared is remembered per endpoint and model (`logs/state.json`),
+  so a restart or a metadata probe that goes silent keeps a known vision model on; a
+  live answer always wins, and a declaration learned for another model on the same
+  address is not inherited.
 - `agent.vision: true` is the operator's assertion for an endpoint that says nothing (a
   cloud API, an older server), and a positive `modalities.vision=false` still vetoes;
   `agent.vision: false` never attaches.
