@@ -4048,6 +4048,17 @@
       },
       "detail": "The game-build run declared a buggy prototype done: nothing defined completion, build output flooded the window, no plan was required before the first write, and the run's file changes could not be reviewed or undone; `agent.build_tools` adds submit_done, run_tests, changes and build_project, `agent.done_gate` challenges an unproven completion, and `agent.build_mode` refuses a mutating call until the model records its own plan.",
       "gate": "tests/test_build_surface.py covers the gates and the change ledger model-free; eval T20-T22 grade a CLI, a headless 3D game and a supplied contract against a live endpoint."
+    },
+    {
+      "id": "vision-follows-the-declaration",
+      "title": "an endpoint that declares vision turns the images on",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "caa4edd",
+        "expect": "untagged"
+      },
+      "detail": "The switch shipped auto but a declaration lived only in a one-minute cache and only two of the endpoint's three surfaces were read, so a metadata probe that went silent put a known vision model back to text; the doors now read /props, /health and /v1/models in that order and remember the answer per endpoint and model.",
+      "gate": "tests/test_delivery_surface.py grades the /health surface, the remembered yes and the per-model scoping (red on the 1.1.45 build)."
     }
   ]
 }
