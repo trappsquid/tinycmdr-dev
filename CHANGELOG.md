@@ -5,6 +5,16 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.47] - 2026-10-23
+
+### Fixed
+- **A read-only A2A cohort refuses the model configuration words:** `web.a2a_policy: read_only` refused only `model --global`, so a peer's `/model add`, remove, endpoint, failover or use ran the management verb and rewrote `config.json` for every conversation - the gate now reads the same word list the verb routes and refuses them (tests/test_a2_surface.py).
+- **Two processes cannot erase each other's `logs/state.json`:** the lane record and the learned endpoint facts were read-modify-written under a thread lock only, so a read taken before another process's write was written back over it - both writers now hold the file's inter-process lock for the whole merge (tests/test_lane_surface.py).
+- **A write fed to an interpreter on stdin is gated:** build mode and the done gate judged `python -c` but not `python - <<'PY'`, so the same body counted as a write on one route and as read-only on the other - the stdin form now takes the same predicate as `execute_code` (tests/test_build_surface.py).
+
+### Changed
+- **The "what it is" safety block names the authority it has:** it said there was no per-tool prompt and no policy engine, while `agent.approval_mode`, `agent.tool_policy` and the confirm/allow/blocked patterns decide every action - the block now says what those do and that they are per tool and per pattern, not per path or per argument (docs/tinycmdr-what-it-is.md).
+
 ## [1.1.46] - 2026-10-22
 
 ### Fixed
