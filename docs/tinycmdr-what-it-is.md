@@ -378,11 +378,15 @@ Grouped by what a team-managed project would treat as table stakes.
 ```
 Execution safety
   no container or VM sandbox per session (OpenHands runs each session in its own Docker runtime)
-  no security analyzer or policy engine on individual actions
-  no per-tool or per-path permission prompt; no allow/deny rules per command beyond the regex list
+  no security analyzer: an action is judged by patterns and a tier table, nothing reads intent
+  a coarse authority layer, not a sandbox: agent.approval_mode asks before write- and exec-tier
+  tools ('auto', the default, asks nothing), agent.tool_policy denies or prompts for a whole
+  tool by name, and the confirm/blocked/allow patterns match command and write text; a tool no
+  table names is exec, so a stricter mode fails closed. It is per tool and per pattern, never
+  per path or per argument - the bot's own memory/notes is the one path that must be asked about
   no diff-approval step or sandbox: plan mode (operator approval) and build mode (the
   model's own plan before the first mutation) gate writes, and `changes` reviews and
-  restores a run's file edits - none of those is a permission model
+  restores a run's file edits - none of those is a sandbox
 
 Interop and ecosystem
   an MCP CLIENT (stdio, off until agent.mcp_servers names one; the hidden `mcp` tool
