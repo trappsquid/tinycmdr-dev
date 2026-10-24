@@ -4063,10 +4063,10 @@
     {
       "id": "a2a-read-only-refuses-model-config",
       "title": "a read-only A2A cohort refuses the model configuration words",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "08db942",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "web.a2a_policy read_only refused only `model --global`, so an inbound SendMessage could run `/model add`, remove, endpoint, failover, use or set and write config.json for every conversation; the gate now reads the same management-word list the model verb routes.",
       "gate": "tests/test_a2_surface.py refuses every management word and grades that an endpoint add leaves config.json byte-identical."
@@ -4074,10 +4074,10 @@
     {
       "id": "state-file-writes-serialize-across-processes",
       "title": "two processes cannot erase each other's logs/state.json update",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "c52d244",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The lane record and the learned endpoint facts were read-modify-written under a thread lock only, so a read taken before another process's write was written back over it; both writers now hold the file's inter-process lock for the whole merge.",
       "gate": "tests/test_lane_surface.py pauses a lane write after its read while a real child process records an endpoint fact, and requires both to survive."
@@ -4085,10 +4085,10 @@
     {
       "id": "stdin-code-is-a-write-for-the-gates",
       "title": "a write fed to an interpreter on stdin is gated",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "1124202",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Build mode and the done gate judged inline code passed with -c/-e but read a heredoc fed to the same interpreter as read-only, so the plan gate let the write through and the done gate never counted it; the stdin form now takes the same write predicate as execute_code.",
       "gate": "tests/test_build_surface.py grades the stdin form as a mutation and a read-only heredoc as not one."
