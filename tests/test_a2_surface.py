@@ -417,6 +417,30 @@ registers no tool at all.
             check("read_only refuses a host-changing command over A2A",
                   err is None and "REFUSED" in answer and "read-only" in answer,
                   (err, answer[:80]))
+            # The /model management words are config writes too. The gate used to know
+            # only `--global`, so a peer could add a fallback endpoint (or make a new
+            # global default) under read_only and config.json changed (2026-10-23).
+            # The literal is pinned here, not read off the build, so the pre-fix build
+            # FAILS these checks instead of dying on a constant it does not have.
+            model_words = ("add", "remove", "rm", "endpoint", "url", "host", "setup",
+                           "wizard", "new", "change", "failover", "cloud-failover",
+                           "use", "set")
+            check("the model config words are one list",
+                  set(getattr(OFF, "_MODEL_CONFIG_WORDS", model_words)) == set(model_words))
+            for word in model_words:
+                refusal = OFF._a2a_command_refusal("/model %s probe" % word)
+                check("read_only refuses /model %s" % word,
+                      "REFUSED" in refusal and "read-only" in refusal, refusal[:80])
+            check("...while /model list stays a conversation read",
+                  OFF._a2a_command_refusal("/model list") == "")
+            cfg_path = STAGE / "off" / "config.json"
+            before = cfg_path.read_text(encoding="utf-8")
+            err, answer = send("/model add --force http://127.0.0.1:9/v1 "
+                               "--model probe", "task-cmd-ro-model")
+            check("read_only refuses an endpoint add over A2A",
+                  err is None and "REFUSED" in answer, (err, answer[:100]))
+            check("...and the box's config.json is unchanged",
+                  cfg_path.read_text(encoding="utf-8") == before)
             err, answer = send("/status", "task-cmd-ro-read")
             check("...while reads still answer", err is None and "tinycmdr v" in answer,
                   (err, answer[:80]))

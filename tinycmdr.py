@@ -5780,6 +5780,17 @@ def _a2a_policy():
     return "full"
 
 
+# The `/model` words that ARE the `model` management verb rather than a choice for this
+# conversation. Split from the read-only words because the ones below WRITE config.json
+# (an endpoint, the global default, the failover chain) and web.a2a_policy=read_only must
+# refuse them; the gate used to know only `--global`, so a peer could add an endpoint or
+# make a new global default (2026-10-23). ONE list, read by model_command and the gate.
+_MODEL_CONFIG_WORDS = ("add", "remove", "rm", "endpoint", "url", "host", "setup",
+                       "wizard", "new", "change", "failover", "cloud-failover",
+                       "use", "set")
+_MODEL_VERB_WORDS = _MODEL_CONFIG_WORDS + ("profiles", "profile")
+
+
 def _a2a_command_refusal(text):
     """The refusal a read-only cohort answers for a command that would change it.
 
@@ -5797,10 +5808,17 @@ def _a2a_command_refusal(text):
     if verb in ("update", "restart", "clean", "config", "approvals"):
         return ("REFUSED: this box answers A2A peers read-only (web.a2a_policy), "
                 "and `/%s` changes it. Its own page still has every command." % verb)
-    if verb == "model" and "--global" in words:
-        return ("REFUSED: this box answers A2A peers read-only (web.a2a_policy), "
-                "and `--global` changes the model for every conversation. Drop "
-                "`--global` to switch this conversation only.")
+    if verb == "model":
+        sub = words[1] if len(words) > 1 else ""
+        if sub in _MODEL_CONFIG_WORDS:
+            return ("REFUSED: this box answers A2A peers read-only (web.a2a_policy), "
+                    "and `/%s %s` changes the box's model configuration for every "
+                    "conversation. Its own page still has every command."
+                    % (verb, sub))
+        if "--global" in words:
+            return ("REFUSED: this box answers A2A peers read-only (web.a2a_policy), "
+                    "and `--global` changes the model for every conversation. Drop "
+                    "`--global` to switch this conversation only.")
     return ""
 
 
@@ -31049,9 +31067,7 @@ def model_command(session_key, arg):
     # Any other word means the wizard was abandoned - a question it never answers must
     # not linger to swallow a message meant for the model.
     _model_wizard_end(session_key)
-    if _sub in ("add", "remove", "rm", "endpoint", "url", "host", "setup", "wizard",
-                "new", "change", "failover", "cloud-failover", "use", "set",
-                "profiles", "profile"):
+    if _sub in _MODEL_VERB_WORDS:
         return verb_from_chat("model " + arg)
     is_global = any(t.lstrip("-").lower() in ("global", "g", "all")
                     for t in tokens if t.startswith("-"))
