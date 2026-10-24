@@ -3077,10 +3077,14 @@ def _endpoint_update(url, mutate):
 
     ONE write path for the facts store: the request path MERGES what it learned and the
     picker replaces its own seed, and both are read-modify-writes on logs/state.json.
+    The lock is the PATH lock, not only _LANE_LOCK: the file has other writers (the lane
+    record, the pair-lane service, a `--once` run), and a read taken before their write
+    used to be written back over it - 200 of 600 learned facts survived two processes
+    writing 600 times each (measured 2026-10-23).
     """
     key = _endpoint_origin(url)
     try:
-        with _LANE_LOCK:
+        with _LANE_LOCK, _path_lock(str(LANE_STATE_FILE)):
             data = _load_json_state(LANE_STATE_FILE, "the endpoint facts")
             data = data if isinstance(data, dict) else {}
             ents = data.get("endpoints")
@@ -40152,10 +40156,13 @@ def _lane_state_write():
     written are authoritative here; every other lane's on-disk record is carried over."""
     try:
         LANE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        # The whole read-merge-write is under the lock: the pair-lane process has the
-        # Mattermost lane and the Telegram lane in two threads, and two same-process
-        # writers must not read the same "before" and lose one lane's update.
-        with _LANE_LOCK:
+        # The whole read-merge-write is under the PATH lock as well as the thread lock:
+        # the pair-lane process has the Mattermost lane and the Telegram lane in two
+        # threads, and two PROCESSES (that service, a `--once` run, the endpoint facts'
+        # writer) must not read the same "before" and lose one lane's update - the file
+        # is shared, and a read taken before the other process's write used to be
+        # written back over it (measured 2026-10-23).
+        with _LANE_LOCK, _path_lock(str(LANE_STATE_FILE)):
             lanes = json.loads(json.dumps(LANE_STATE))
             fails = json.loads(json.dumps(LANE_FAILS))
             touched = set(_LANE_TOUCHED)

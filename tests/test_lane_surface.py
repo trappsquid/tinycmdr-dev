@@ -654,6 +654,53 @@ Hermetic: the staged copy is the module, so `logs/state.json` lands in the stage
               "mattermost", {}).get("detail") == "connected as @me",
           T._lane_state_read().get("lanes"))
 
+    # A-181 residual: the merge above is only a merge when the read is fresh. Two
+    # PROCESSES share logs/state.json (the pair-lane service, a `--once` run, the
+    # endpoint facts' writer); a read taken before the other process's write used to be
+    # written back over it, so a learned fact and a lane record could each erase the
+    # other (2026-10-23). Reproduced with two real processes: 400 of 600 facts survived.
+    _race_url = "http://127.0.0.1:1/v1"
+    _real_atomic = T.atomic_write_text
+    _race_started = threading.Event()
+
+    def _slow_write(path, text, *a, **k):
+        # The parent has READ and has not written yet - exactly the window the other
+        # process used to write in. The PATH lock, when the RMW holds it, keeps the
+        # child out until this write lands.
+        _race_started.set()
+        time.sleep(3.0)
+        return _real_atomic(path, text, *a, **k)
+
+    T.LANE_STATE["mattermost"] = {"ok": True, "detail": "parent", "since": 2.0}
+    T._LANE_TOUCHED.add("mattermost")
+    T.atomic_write_text = _slow_write
+    try:
+        _writer = threading.Thread(target=T._lane_state_write)
+        _writer.start()
+        _race_started.wait(5.0)
+        _child = subprocess.run(
+            [sys.executable, "-c",
+             "import importlib.util, sys\n"
+             "spec = importlib.util.spec_from_file_location('tinycmdr_race', sys.argv[1])\n"
+             "fb = importlib.util.module_from_spec(spec)\n"
+             "sys.modules['tinycmdr_race'] = fb\n"
+             "spec.loader.exec_module(fb)\n"
+             "fb._endpoint_update(sys.argv[2], lambda e: e.__setitem__('from_child', 1))\n",
+             str(STAGE / "tinycmdr.py"), _race_url],
+            capture_output=True, text=True, timeout=180)
+        _writer.join(60)
+    finally:
+        T.atomic_write_text = _real_atomic
+    _race = T._lane_state_read()
+    _race_fact = ((_race.get("endpoints") or {})
+                  .get(T._endpoint_origin(_race_url)) or {})
+    check("A-181 residual: a concurrent process's endpoint fact survives this write",
+          _race_fact.get("from_child") == 1,
+          (_race.get("endpoints"), _child.stderr[-300:]))
+    check("...and this process's lane record survives the other process's write",
+          ((_race.get("lanes") or {}).get("mattermost") or {}).get("detail") == "parent",
+          _race.get("lanes"))
+
     # A-182: a wall clock that steps backwards must not silence the poll-failure report.
     check("A-182: a clock that stepped backwards reports the lane, not silence",
           T.lane_poll_failure_due(1000.0, 10.0) is True
