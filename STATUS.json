@@ -4076,7 +4076,7 @@
       "title": "two processes cannot erase each other's logs/state.json update",
       "state": "unreleased",
       "anchor": {
-        "commit": "71fe42a",
+        "commit": "c52d244",
         "expect": "untagged"
       },
       "detail": "The lane record and the learned endpoint facts were read-modify-written under a thread lock only, so a read taken before another process's write was written back over it; both writers now hold the file's inter-process lock for the whole merge.",
@@ -4087,7 +4087,7 @@
       "title": "a write fed to an interpreter on stdin is gated",
       "state": "unreleased",
       "anchor": {
-        "commit": "f9bec77",
+        "commit": "1124202",
         "expect": "untagged"
       },
       "detail": "Build mode and the done gate judged inline code passed with -c/-e but read a heredoc fed to the same interpreter as read-only, so the plan gate let the write through and the done gate never counted it; the stdin form now takes the same write predicate as execute_code.",
