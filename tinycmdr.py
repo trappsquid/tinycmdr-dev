@@ -16448,8 +16448,13 @@ def _shell_has_side_effects(command):
     if re.search(r"\b(?:ba|z|k|da)?sh\s+-c\b|\b(?:pwsh|powershell)\b[^\n]*"
                  r"-(?:c|command)\b", live, re.I):
         return bool(_BUILD_SHELL_WRITE_RX.search(text))
-    # Code passed with -c/-e is a command too: `python -c "open('x','w')"` is a write.
-    if re.search(r"\b(?:python3?|node|ruby|perl)\s+(?:-c|-e)\b", live, re.I):
+    # Code passed inline (-c/-e) is a command too: `python -c "open('x','w')"` is a
+    # write. Code fed to an interpreter on stdin is the SAME code by another route
+    # (`python3 - <<'PY' ... PY`), and it used to read as clean, so build mode let a
+    # heredoc write past the plan gate and the done gate never counted it - judged by
+    # the same predicate execute_code uses, one body has one verdict however it arrives.
+    if (re.search(r"\b(?:python3?|node|ruby|perl)\s+(?:-c|-e)\b", live, re.I)
+            or re.search(r"\b(?:python3?|node|ruby|perl)\b[^\n]*<<", live, re.I)):
         return bool(_BUILD_CODE_WRITE_RX.search(text))
     return False
 

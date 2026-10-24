@@ -191,6 +191,21 @@ def main():
               "a redirect inside bash -c is gated")
         check(not fb._shell_has_side_effects("bash -c \"git status\""),
               "...while a read-only bash -c is not")
+        check(fb._shell_has_side_effects(
+                  "python3 - <<'PY'\n"
+                  "import pathlib\n"
+                  "pathlib.Path('out.txt').write_text('x')\n"
+                  "PY"),
+              "a write fed to python on stdin is gated too")
+        check(not fb._shell_has_side_effects(
+                  "python3 - <<'PY'\nprint(1 + 1)\nPY"),
+              "...while a read-only stdin snippet is not")
+        check(fb._call_is_build_mutation(
+                  "execute_code", {"code": "pathlib.Path('x').write_text('y')"})
+              and fb._call_is_build_mutation(
+                  "shell", {"command": "python3 - <<'PY'\n"
+                                       "pathlib.Path('x').write_text('y')\nPY"}),
+              "the same body has one verdict whether it arrives as code or on stdin")
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
