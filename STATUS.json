@@ -4096,10 +4096,10 @@
     {
       "id": "legion-handover-code-not-token",
       "title": "a linked box's page is signed in with a one-time code, not its token",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "aa162c2",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The legion rail wrote a cohort's page token into the URL fragment, so opening another box put that box's access token in the address bar, the browser history and any screenshot; the hub now asks the cohort for a single-use 120-second code through its token-gated POST /api/handoff and redirects with only that, the cohort's page claims it at /api/login for the HttpOnly cookie, a cohort without the door is opened bare to ask for its own token, and older #token= links still work.",
       "gate": "tests/test_webui.py grades the code mint, claim, single use and expiry and that the select door and the POST open carry no token; tests/test_webui_page.py runs the real page script on a #code= link and on a used one and sends no token."
