@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.48] - 2026-10-25
+
+### Fixed
+- **A linked box's page is signed in with a one-time code, not its token:** the legion rail wrote a cohort's token into the URL fragment, so clicking another box put that token in the address bar, the history and any screenshot - the hub now asks the cohort for a single-use 120-second code and the page claims it at `/api/login`, while an older cohort is opened bare to ask for its own token and older `#token=` links still work (tests/test_webui.py, tests/test_webui_page.py).
+
 ## [1.1.47] - 2026-10-23
 
 ### Fixed
