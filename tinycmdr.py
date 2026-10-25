@@ -811,6 +811,15 @@ DEFAULT_CONFIG = {
         # Hard wall-clock cap per sub-agent, independent of the parent's own runway: one
         # hung child used to hold a thread for the parent's whole max_minutes (75).
         "subagent_timeout_seconds": 900,
+        # The default ceiling for a delegated child: read (inspect only), write (files,
+        # no commands) or full. The tool can name a different one per call; read is the
+        # ship default because a hallucinating child with shell is the likelier incident.
+        "subagent_capabilities": "read",
+        # An SSH public key (line or file) that signs release SHA256SUMS. Empty = the
+        # update checks the digest only, as before; set it and a release without a valid
+        # signature is refused before anything is unpacked. The private key never lives
+        # on an install; maintenance/release-keygen.sh creates one outside the tree.
+        "release_pubkey": "",
         # A shell command still running after this many seconds is handed to the process
         # table (guards included) instead of holding the turn; the settled-jobs block
         # announces its exit. 0 = always block (the old behaviour).
@@ -5670,6 +5679,10 @@ _TOOL_TIERS = {
     "read_file": "read", "search_files": "read", "list_tools": "read",
     "find_tools": "read", "skill": "read", "search_sessions": "read",
     "ask_user": "read", "plan": "read",
+    # The web readers were unlisted, so a read-only sub-agent would have lost the
+    # very tools its task needs; they read pages and indexes, they do not change
+    # this machine.
+    "fetch_url": "read", "web_search": "read",
     "write_file": "write", "edit_file": "write", "create_tool": "write",
     "memory": "write", "experiment": "write", "render_ui": "read",
     "send_file": "write",
@@ -5875,6 +5888,37 @@ def resolve_approval(name, args, ctx):
             "agent.tool_policy/approval_mode asks before this tool (%s tier) runs" % tier,
             (ctx or {}).get("confirm_cb"))
     return None
+
+
+_CAPABILITIES = ("read", "write", "full")
+
+
+def _capability_refusal(name, ctx):
+    """The ceiling a delegated child runs under; "" for the parent's own runs.
+
+    A sub-agent used to inherit the parent's whole surface, including shell. The most
+    likely local incident is a hallucinating child with shell, not a hostile peer, so
+    delegation now names a capability: read (the default), write (files, no commands)
+    or full. An unknown value fails closed to read. This is a ceiling checked before
+    every handler; the ordinary approval tiers still run underneath it.
+    """
+    raw = (ctx or {}).get("capabilities")
+    cap = str(raw or "full").strip().lower()
+    if cap not in _CAPABILITIES:
+        cap = "read"
+    if cap == "full":
+        return ""
+    tier = tool_tier(name)
+    if cap == "read" and tier != "read":
+        return ("REFUSED (sub-agent capability read): this sub-agent is read-only, and "
+                "`%s` is a %s-tier tool. Report what you would change and why; the "
+                "parent run can do it with the operator's authority." % (name, tier))
+    if cap == "write" and tier == "exec":
+        return ("REFUSED (sub-agent capability write): this sub-agent may write files "
+                "but may not run commands (`%s` is exec). Report the command you would "
+                "run and why; the parent run can run it with the operator's authority."
+                % name)
+    return ""
 
 
 # ---- the never tier reads the COMMAND, not one spelling of it -------------------------
@@ -16985,11 +17029,14 @@ def _spill_subagent_answer(answer, ctx, cap=2000):
         return ""
 
 
-def _run_delegate_one(task, context, model, timeout, ctx):
+def _run_delegate_one(task, context, model, timeout, ctx, capabilities="read"):
     """One child run, always returning a parseable result. Never raises (except /stop).
 
     The child gets the SUBAGENT prompt, a wall-clock cap of its own, its own model when
     asked, and anything it leaves behind (typed result + cost) is returned to the parent.
+    `capabilities` is the ceiling the child runs under; read is the default because a
+    hallucinating child with shell is the likelier incident, and the parent can ask for
+    write or full when the task genuinely needs it.
     """
     key = "sub-%d-%d" % (int(time.time()), next(_SUB_KEYS))
     inherited = model or CONFIG["agent"].get("subagent_model") or ctx.get("model")
@@ -17000,6 +17047,12 @@ def _run_delegate_one(task, context, model, timeout, ctx):
     if context:
         body = ("[shared context for every task in this batch]\n%s\n\n%s"
                 % (context, body))
+    if capabilities != "full":
+        body += ("\n[HARNESS: this sub-agent runs %s. The dispatch refuses tools above "
+                 "that ceiling; report what the parent should do instead of treating the "
+                 "refusal as an obstacle.]"
+                 % ("read-only" if capabilities == "read"
+                    else "write-capable but without shell"))
     cap = float(timeout or CONFIG["agent"].get("subagent_timeout_seconds", 900) or 0)
     # The child cannot be used to launder what the parent was warned about: the
     # session's artifacts and allowed destinations follow it, so a check-in URL or a
@@ -17022,6 +17075,7 @@ def _run_delegate_one(task, context, model, timeout, ctx):
                                cancel_event=ctx.get("cancel_event"),
                                system_prompt=build_system_prompt(subagent=True),
                                max_seconds=(cap or None),
+                               capabilities=capabilities,
                                **_relay_callbacks(ctx, sub_src))
     except Exception as e:                  # noqa: BLE001 - a crash is a typed failure
         log.warning("sub-agent %s raised %s: %s", sub_src, type(e).__name__, e)
@@ -17040,7 +17094,7 @@ def _run_delegate_one(task, context, model, timeout, ctx):
     return out
 
 
-def _run_delegate_batch(items, context, ctx):
+def _run_delegate_batch(items, context, ctx, capabilities="read"):
     """Run a slice batch in parallel, sized to the endpoint's own slots, ordered out.
 
     This pool is per CALL; every child also passes the process-wide `_delegate_gate`,
@@ -17057,12 +17111,13 @@ def _run_delegate_batch(items, context, ctx):
         clean.append(item)
     slots = endpoint_slots(AGENT.llm_url) or 1
     workers = max(1, min(len(clean), BATCH_MAX_WORKERS, slots))
-    log.info("delegating %d task(s) with %d worker(s) (endpoint slots: %s)",
-             len(clean), workers, slots)
+    log.info("delegating %d task(s) with %d worker(s), capabilities=%s "
+             "(endpoint slots: %s)", len(clean), workers, capabilities, slots)
     results = [None] * len(clean)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futs = {pool.submit(_run_delegate_one, str(it.get("task")), context,
-                            it.get("model"), it.get("timeout_seconds"), ctx): i
+                            it.get("model"), it.get("timeout_seconds"), ctx,
+                            capabilities): i
                 for i, it in enumerate(clean)}
         for fut in as_completed(futs):
             i = futs[fut]
@@ -17091,16 +17146,22 @@ def tool_delegate_task(args, ctx):
     """
     if ctx.get("depth", 0) >= 1:
         return "ERROR: sub-agents cannot spawn further sub-agents."
+    default_cap = str(CONFIG["agent"].get("subagent_capabilities") or "read").strip().lower()
+    capabilities = str(args.get("capabilities") or default_cap).strip().lower()
+    if capabilities not in _CAPABILITIES:
+        return ("ERROR: `capabilities` must be read, write or full (got %r). read is "
+                "the default; write adds file edits; full gives the parent's surface."
+                % capabilities)
     context = str(args.get("context") or "").strip()
     items = args.get("tasks")
     if isinstance(items, list) and items:
-        return _run_delegate_batch(items, context, ctx)
+        return _run_delegate_batch(items, context, ctx, capabilities)
     task = str(args.get("task") or "").strip()
     if not task:
         return ("ERROR: give `task` (one self-contained instruction) or `tasks` "
                 "(a batch sharing the top-level `context`).")
     return _run_delegate_one(task, context, args.get("model"),
-                             args.get("timeout_seconds"), ctx)
+                             args.get("timeout_seconds"), ctx, capabilities)
 
 
 # Skills — prose runbooks; drop skill folders into ./skills/
@@ -19469,7 +19530,9 @@ CORE_TOOLS = {
             "keep noisy log-digging out of your own context, or to have work checked "
             "by an agent that did not write it. One `task` for a single job, or "
             "`tasks` for a batch that shares the top-level `context` (Goal + Contract: "
-            "interfaces, files owned). Sub-agents cannot spawn further sub-agents.",
+            "interfaces, files owned). Children are READ-ONLY by default: ask for "
+            "`capabilities`: write to let them edit files, or full when they truly need "
+            "the parent's surface. Sub-agents cannot spawn further sub-agents.",
             {"task": {"type": "string",
                       "description": "One complete, self-contained instruction: "
                                      "Target (files, non-goals), Change (steps), "
@@ -19487,7 +19550,12 @@ CORE_TOOLS = {
                                       "defaults to the conversation's"},
              "timeout_seconds": {"type": "integer",
                                  "description": "Wall-clock cap for this child "
-                                                "(default agent.subagent_timeout_seconds)"}},
+                                                "(default agent.subagent_timeout_seconds)"},
+             "capabilities": {"type": "string", "enum": ["read", "write", "full"],
+                              "description": "The child's ceiling. read (default): "
+                                             "inspect only; write: edit files but run "
+                                             "no commands; full: the parent's surface. "
+                                             "A batch shares this value"}},
             []),
     },
     "memory": {
@@ -25932,6 +26000,12 @@ class Agent:
                     " different build - say so instead of hand-running its steps, and"
                     " create_tool writes a tool this box is missing.")
             return name, args, f"ERROR: unknown tool '{name}'.{hint}"
+        # A delegated child's capability ceiling comes before the ordinary authority:
+        # read-only and write-only children never reach a handler they cannot use, and
+        # the refusal says what the parent should do instead.
+        refusal = _capability_refusal(name, ctx)
+        if refusal:
+            return name, args, refusal
         # Per-tool authority before anything runs: deny-by-name, a per-tool prompt, and a
         # fail-closed tier for tools no content pattern happens to match. The regex tiers
         # inside each tool still apply (this is a ceiling, not a replacement).
@@ -26144,7 +26218,8 @@ class Agent:
             reasoning_cb=None,
             ask_door=None, source="main", send_file_cb=None, render_ui_cb=None,
             lane=None,
-            system_prompt=None, max_seconds=None, web_confirm_cb=None):
+            system_prompt=None, max_seconds=None, web_confirm_cb=None,
+            capabilities="full"):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
         replaces user_text for this turn only (history stores text only).
@@ -26270,6 +26345,9 @@ class Agent:
                    # grant for shell commands must not silently approve a page's
                    # callback. None means this lane cannot ask -> the gate declines.
                    "web_confirm_cb": web_confirm_cb,
+                   # A delegated child runs under a ceiling; the operator's own run is
+                   # full. _capability_refusal enforces it before any handler.
+                   "capabilities": capabilities,
                    # The operator's own words for THIS turn: the only free destinations,
                    # and the trust root the web boundary compares the rest against.
                    "user_text": str(user_text or ""),
@@ -48921,7 +48999,7 @@ _DEV_MAINTENANCE_DROP = ("atlas-merge.py", "batch.sh", "build-package.py",
                          "measured-block.py", "package_assets.py", "pre-push.sh", "product-manifest.json",
                          "publish-product.py",
                          "private_rules.example.py", "probe-web-sessions.py",
-                         "probe-web-surface.py", "release.sh", "smoke-install.py",
+                         "probe-web-surface.py", "release-keygen.sh", "release.sh", "smoke-install.py",
                          "smoke-install.sh", "stub-openai-endpoint.py",
                          "wait-for-endpoint.py", "where.py")
 _NARROW_NOTE = ("  dropped the project's own kit (tests/, .github/, docs/, changelog, "
@@ -49166,6 +49244,63 @@ def _verify_asset(asset_path, sums_path, asset_name):
     return True, ""
 
 
+def _release_pubkey():
+    """The host's pinned release key: an SSH public key line or a file holding one."""
+    raw = str(((CONFIG.get("agent") or {}).get("release_pubkey")
+               or os.environ.get("TINYCMDR_RELEASE_PUBKEY") or "")).strip()
+    if not raw:
+        return ""
+    try:
+        if "\n" not in raw and Path(raw).is_file():
+            raw = Path(raw).read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        pass
+    return raw.splitlines()[0].strip() if raw else ""
+
+
+def _verify_release_signature(sums_path, sig_path, pubkey):
+    """(ok, why): SHA256SUMS signed by the pinned key, via the platform's ssh-keygen.
+
+    The digest check proves the bytes arrived whole; this proves the sums themselves came
+    from the operator's key, so a compromised GitHub account cannot replace both the
+    archive and its sums. ssh-keygen is already on every host this fleet reaches over
+    SSH; a host that pins a key but has no ssh-keygen fails closed with a message rather
+    than waving the download through.
+    """
+    keyline = str(pubkey or "").strip().splitlines()[0].strip() if str(pubkey or "").strip() else ""
+    if not keyline:
+        return False, "no release public key is configured"
+    if not keyline.startswith(("ssh-", "sk-ssh-", "ecdsa-")):
+        return False, ("agent.release_pubkey does not look like an SSH public key "
+                       "(it must start with ssh-, sk-ssh- or ecdsa-)")
+    if not Path(sig_path).is_file():
+        return False, "the release has no SHA256SUMS.sig"
+    ssh = shutil.which("ssh-keygen")
+    if not ssh:
+        return False, ("this host pins a release key but has no ssh-keygen, so the "
+                       "signature cannot be checked")
+    work = Path(tempfile.mkdtemp(prefix="tinycmdr-sig-"))
+    try:
+        allowed = work / "allowed_signers"
+        allowed.write_text("tinycmdr-release %s\n" % keyline, encoding="utf-8")
+        with open(sums_path, "rb") as sums:
+            proc = subprocess.run(
+                [ssh, "-Y", "verify", "-f", str(allowed), "-I", "tinycmdr-release",
+                 "-n", "tinycmdr-release", "-s", str(sig_path)],
+                stdin=sums, capture_output=True, timeout=30)
+        out = (proc.stdout or b"") + (proc.stderr or b"")
+        text = out.decode("utf-8", "replace").strip()
+        if proc.returncode == 0:
+            return True, ""
+        return False, ("SHA256SUMS.sig does not verify against agent.release_pubkey: %s"
+                       % (text[:240] or "ssh-keygen exited %d" % proc.returncode))
+    except Exception as e:                                    # noqa: BLE001
+        return False, "the release signature could not be checked: %s: %s" % (
+            type(e).__name__, e)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _release_member_unsafe(member):
     """Why a tar member must not be extracted, or "".
 
@@ -49361,6 +49496,11 @@ def _verb_update(rest, ask=False):
             ok_sum, why_sum = _download(base + "/SHA256SUMS", sums)
             if not ok_sum:
                 if os.environ.get("TINYCMDR_NO_SUMS") == "1":
+                    if _release_pubkey():
+                        print("this host pins agent.release_pubkey, so TINYCMDR_NO_SUMS=1 "
+                              "cannot skip the digest or the signature - refusing.",
+                              file=sys.stderr)
+                        return 1
                     print("    (SHA256SUMS could not be fetched (%s) and TINYCMDR_NO_SUMS=1 "
                           "says carry on - this download is UNCHECKED)" % why_sum)
                 else:
@@ -49373,8 +49513,28 @@ def _verb_update(rest, ask=False):
                 if not ok:
                     print(why, file=sys.stderr)
                     return 1
-                print("    the download matches SHA256SUMS. Releases are unsigned, so this "
-                      "catches a corrupted or truncated transfer, not a replaced release.")
+                pubkey = _release_pubkey()
+                if pubkey and os.environ.get("TINYCMDR_NO_SIGNATURE") == "1":
+                    print("*** TINYCMDR_NO_SIGNATURE=1: the release signature is NOT "
+                          "checked, although agent.release_pubkey is set.", file=sys.stderr)
+                    pubkey = ""
+                if pubkey:
+                    sig = work / "SHA256SUMS.sig"
+                    ok_sig, why_sig = _download(base + "/SHA256SUMS.sig", sig)
+                    if not ok_sig:
+                        print("this host pins agent.release_pubkey, but the release "
+                              "signature could not be fetched (%s) - refusing."
+                              % why_sig, file=sys.stderr)
+                        return 1
+                    ok, why = _verify_release_signature(sums, sig, pubkey)
+                    if not ok:
+                        print(why, file=sys.stderr)
+                        return 1
+                    print("    the download matches SHA256SUMS and its signature.")
+                else:
+                    print("    the download matches SHA256SUMS. Releases are unsigned, so "
+                          "this catches a corrupted or truncated transfer, not a replaced "
+                          "release; set agent.release_pubkey to check the signature.")
             root = _extract_release(archive, work / "pkg")
             if root is None:
                 print("the archive did not contain a tinycmdr-* folder", file=sys.stderr)

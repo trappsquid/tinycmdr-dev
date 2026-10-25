@@ -91,6 +91,80 @@ fb._A2A_BUCKETS["198.51.100.7"] = (0.0, time.monotonic() - 3600)
 check("...and refills after the window", fb._a2a_rate_ok("198.51.100.7"))
 check("another peer is unaffected", fb._a2a_rate_ok("198.51.100.8"))
 
+# ---------------------------------------------------------------- sub-agent ceilings
+read_ctx = {"capabilities": "read"}
+write_ctx = {"capabilities": "write"}
+full_ctx = {"capabilities": "full"}
+check("a read-only child may read",
+      fb._capability_refusal("read_file", read_ctx) == "")
+check("a read-only child may browse",
+      fb._capability_refusal("fetch_url", read_ctx) == "")
+check("a read-only child may not write",
+      fb._capability_refusal("write_file", read_ctx).startswith("REFUSED"))
+check("a read-only child may not run a command",
+      fb._capability_refusal("shell", read_ctx).startswith("REFUSED"))
+check("a write child may write",
+      fb._capability_refusal("write_file", write_ctx) == "")
+check("a write child may not run a command",
+      fb._capability_refusal("shell", write_ctx).startswith("REFUSED"))
+check("a full child keeps the parent's surface",
+      fb._capability_refusal("shell", full_ctx) == "")
+check("an unknown ceiling fails closed to read",
+      fb._capability_refusal("shell", {"capabilities": "whatever"}).startswith("REFUSED"))
+check("the delegation tool rejects an unknown ceiling",
+      fb.tool_delegate_task({"capabilities": "bogus"}, {"depth": 0})
+      .startswith("ERROR: `capabilities` must be"))
+
+# ---------------------------------------------------------------- release signatures
+sigwork = Path(tempfile.mkdtemp(prefix="tinycmdr-sig-test-"))
+sums = sigwork / "SHA256SUMS"
+sig = sigwork / "SHA256SUMS.sig"
+sums.write_text("a" * 64 + "  tinycmdr-macos.zip\n", encoding="utf-8")
+sig.write_bytes(b"not-a-real-signature")
+pub = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY tinycmdr-test"
+
+class _Proc:
+    def __init__(self, code, out=b"", err=b""):
+        self.returncode = code
+        self.stdout = out
+        self.stderr = err
+
+
+saved_which, saved_run = fb.shutil.which, fb.subprocess.run
+saved_pub = fb.CONFIG["agent"].get("release_pubkey")
+try:
+    fb.shutil.which = lambda name: "/usr/bin/ssh-keygen"
+    fb.subprocess.run = lambda *a, **k: _Proc(0, b"Good \"tinycmdr-release\" "
+                                                 b"signature for ED25519 key\\n")
+    ok, why = fb._verify_release_signature(sums, sig, pub)
+    check("a good release signature passes", ok, why)
+    fb.subprocess.run = lambda *a, **k: _Proc(1, b"", b"Bad signature")
+    ok, why = fb._verify_release_signature(sums, sig, pub)
+    check("a bad release signature is refused",
+          not ok and "does not verify" in why, why)
+    fb.subprocess.run = lambda *a, **k: _Proc(0, b"Good")
+    ok, why = fb._verify_release_signature(sums, sigwork / "missing.sig", pub)
+    check("a missing signature is refused", not ok and "no SHA256SUMS.sig" in why, why)
+    ok, why = fb._verify_release_signature(sums, sig, "not a public key")
+    check("a non-key config is refused", not ok and "does not look like" in why, why)
+    fb.shutil.which = lambda name: None
+    ok, why = fb._verify_release_signature(sums, sig, pub)
+    check("a host without ssh-keygen fails closed",
+          not ok and "no ssh-keygen" in why, why)
+
+    fb.CONFIG["agent"]["release_pubkey"] = ""
+    check("an empty release_pubkey is the unsigned default", fb._release_pubkey() == "")
+    fb.CONFIG["agent"]["release_pubkey"] = pub
+    check("a configured release key is read", fb._release_pubkey() == pub)
+finally:
+    fb.shutil.which, fb.subprocess.run = saved_which, saved_run
+    fb.CONFIG["agent"]["release_pubkey"] = saved_pub
+    shutil.rmtree(sigwork, ignore_errors=True)
+check("the shipped default is unsigned",
+      fb.CONFIG["agent"].get("release_pubkey") == "")
+check("children are read-only by default",
+      fb.CONFIG["agent"].get("subagent_capabilities") == "read")
+
 got = [fb._A2A_RUN_SLOTS.acquire(blocking=False)
        for _ in range(fb.A2A_MAX_CONCURRENT)]
 check("every run slot can be taken", all(got), got)

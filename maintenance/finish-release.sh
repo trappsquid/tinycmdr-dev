@@ -127,6 +127,22 @@ if command -v sha256sum >/dev/null 2>&1; then SUM="sha256sum"; else SUM="shasum 
     install.sh install.ps1 update.sh update.ps1 > SHA256SUMS )
 cat dist/SHA256SUMS
 
+# A digest fetched from the same release proves the transfer, not who made it. Sign it
+# with the operator's SSH key when one is present; a keyless cut is still published
+# UNSIGNED and says so, and a host that pins agent.release_pubkey will refuse it.
+RELEASE_KEY="${TINYCMDR_RELEASE_KEY:-$HOME/.dsh/tinycmdr/release-signing}"
+if [ -f "$RELEASE_KEY" ]; then
+    command -v ssh-keygen >/dev/null 2>&1 || {
+        echo "*** a release key exists but ssh-keygen is missing - refusing to publish" >&2
+        exit 2; }
+    rm -f dist/SHA256SUMS.sig
+    ssh-keygen -Y sign -f "$RELEASE_KEY" -n tinycmdr-release dist/SHA256SUMS >/dev/null
+    echo "signed: dist/SHA256SUMS.sig"
+else
+    rm -f dist/SHA256SUMS.sig
+    echo "*** no release signing key at $RELEASE_KEY - publishing UNSIGNED" >&2
+fi
+
 if [ "$DRY" = "1" ]; then
     say "dry run: built and checked; NOT creating $TAG"
     exit 0
@@ -190,6 +206,9 @@ say "attach the stable names the README uses (the versioned files stay)"
 gh release upload "$TAG" --clobber \
     dist/tinycmdr-win.zip dist/tinycmdr-linux.tar.gz dist/tinycmdr-macos.zip \
     dist/SHA256SUMS
+if [ -f dist/SHA256SUMS.sig ]; then
+    gh release upload "$TAG" --clobber dist/SHA256SUMS.sig
+fi
 
 say "read the release back"
 gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
