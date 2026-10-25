@@ -448,12 +448,19 @@ envelope and caps, and the page suite's shim the renderer.
   refuses `send_file` (a peer has no `/api/download`).
 - **The legion** (linked boxes): with `agent.a2a_remotes` set, this box's page shows a
   rail row per configured box, and `/api/legion` answers `{cohorts, praetorium}` from
-  LOCAL state. `open` is SELECT COHORT: the configured URL with its token in the URL
-  fragment (never the query), which the browser navigates THIS tab to - the other box's
-  own page, every feature, with no relay (a modified click opens a new tab instead). The
-  rail's rows are REAL LINKS to `GET /api/legion/open?remote=<name>[&session=<key>]`,
-  which answers a 302 with the token minted into the fragment: the click changes the
-  tab even when no page script can run. A row whose address is the page being viewed is
+  LOCAL state. `open` is SELECT COHORT: the configured URL, which the browser navigates
+  THIS tab to - the other box's own page, every feature, with no relay (a modified click
+  opens a new tab instead). The rail's rows are REAL LINKS to
+  `GET /api/legion/open?remote=<name>[&session=<key>]`, which answers a 302: the click
+  changes the tab even when no page script can run. The redirect carries a ONE-TIME CODE
+  in the fragment, never the cohort's token: the hub asks the cohort's own
+  `POST /api/handoff` with the token it already holds for A2A (server to server), and the
+  code (32 random bytes, single use, `_WEB_HANDOFF_TTL` seconds) is traded by that page's
+  `POST /api/login` for its HttpOnly cookie. A cohort that does not answer that door - an
+  older build, or a refusal - is opened bare, and its page asks for its own token once;
+  the hub never falls back to writing the token into a URL. `#token=` links from older
+  builds are still read, but nothing mints one for another box any more. A row whose
+  address is the page being viewed is
   marked `self` and refused by `add-remote` / `update-remote`: a cohort is another
   machine. The census thread also
   reads each cohort's `/api/sessions` (bounded, no secrets) into the overview, so the
@@ -470,7 +477,7 @@ envelope and caps, and the page suite's shim the renderer.
   an unlink that leaves a hand-written `token_env` alone. A census thread refreshes each
   card for the row's version and liveness; an off-LAN URL warns once at startup. Tests:
   `tests/test_legion.py`, the page shim's legion scenario, and `tests/test_webui.py`'s
-  ADD/UPDATE/REMOVE/OPEN COHORT block.
+  ADD/UPDATE/REMOVE/OPEN COHORT block and its handover checks.
 
 Verify by hand: restart, then
 `curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with

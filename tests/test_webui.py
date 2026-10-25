@@ -422,6 +422,59 @@ def main():
           "a wrong token: 401")
     check(req("GET", "/api/tasks", TOK)[0] == 200, "the right token: 200")
 
+    # ---- the one-time login handover: a peer's hub asks, a browser claims ----------
+    # A legion hub must not put a cohort's token into a browser URL (a regression of
+    # the 2026-10-10 rule). It asks the cohort for a code instead; the code is single
+    # use, short lived, and only /api/login accepts it.
+    check(req("POST", "/api/handoff")[0] == 401,
+          "the handover door without the token: 401")
+    _hc, _hb, _hh = req("POST", "/api/handoff", TOK)
+    try:
+        _hj = json.loads(_hb)
+    except Exception:                                            # noqa: BLE001
+        _hj = {}
+    _code = str(_hj.get("code") or "")
+    check(_hc == 200 and len(_code) >= 20 and int(_hj.get("expires") or 0) > 0,
+          "a peer with the token gets a one-time code", (_hc, _hb[:100]))
+    check(bool(_code) and _code != token and token not in _code,
+          "and the code is not the page token")
+    check(req("GET", "/api/tasks", {"X-Tinycmdr-Handoff": _code})[0] == 401,
+          "a code opens no route but the login")
+    _lc, _lb, _lh = req("POST", "/api/login", {"X-Tinycmdr-Handoff": _code})
+    _cookie = (_lh.get("Set-Cookie") or "").split(";", 1)[0]
+    check(_lc == 200 and _cookie.startswith("tinycmdr_token_%d=" % port),
+          "the box's own page trades the code for its HttpOnly cookie",
+          (_lc, _cookie[:40]))
+    check(req("GET", "/api/tasks", {"Cookie": _cookie})[0] == 200,
+          "and the cookie it bought authenticates")
+    check(req("POST", "/api/login", {"X-Tinycmdr-Handoff": _code})[0] == 401,
+          "the code is single-use: a second login with it is refused")
+    _mint = getattr(fb, "_web_handoff_mint", None)
+    if callable(_mint):
+        _old = _mint()
+        with fb._WEB_HANDOFF_LOCK:
+            fb._WEB_HANDOFF[_old]["at"] -= (fb._WEB_HANDOFF_TTL + 5)
+        check(req("POST", "/api/login",
+                  {"X-Tinycmdr-Handoff": _old})[0] == 401,
+              "an expired code is refused")
+    else:
+        check(False, "the build has the one-time handover (a pre-fix build has none)")
+    # The hub's own call and the page's own claim, against THIS real server: the fake
+    # cohort below grades the rail, this grades the door the two builds actually meet at.
+    _hub = getattr(fb, "_cohort_handoff", None)
+    if callable(_hub):
+        _code3, _why3 = _hub(base, token)
+        check(bool(_code3) and not _why3,
+              "the hub's handover call reaches a real page", _why3)
+        check(bool(_code3) and req("POST", "/api/login",
+                                   {"X-Tinycmdr-Handoff": _code3})[0] == 200,
+              "and the code it got buys a login there")
+        _bad, _why_bad = _hub(base, "not-the-token")
+        check(not _bad and "401" in _why_bad,
+              "a wrong token is reported, never a code", _why_bad)
+    else:
+        check(False, "the build has the hub-side handover call")
+
     # ---- the legion routes: token-gated like everything, empty without cohorts -------
     check(req("GET", "/api/legion")[0] == 401,
           "the legion route without a token: 401")
@@ -446,6 +499,11 @@ def main():
     # nothing. The token lands in .env under a name ending in _TOKEN on purpose: it
     # is the same sweep every other secret rides, and the hub must resolve it with
     # no restart (this process was just handed the value).
+    _CNAME = "TINYCMDR_COHORT_STORAGE_TOKEN"
+    _CTOK = "tok-cohort-suite-0123456789"
+    _COHORT_CODE = "code-cohort-suite-0123456789"
+    _COHORT_SEEN = {"handoff": 0, "auth": "", "off": False}
+
     class _CohortHandler(BaseHTTPRequestHandler):
         def log_message(self, *a):                              # keep the suite quiet
             pass
@@ -466,6 +524,22 @@ def main():
             else:
                 self._send({"error": "not found"}, 404)
 
+        def do_POST(self):
+            # The handover door a hub uses instead of putting this box's token into a
+            # browser URL. It checks the same Bearer token the real route does.
+            if self.path.startswith("/api/handoff"):
+                _COHORT_SEEN["handoff"] += 1
+                _COHORT_SEEN["auth"] = self.headers.get("Authorization") or ""
+                if _COHORT_SEEN["off"]:
+                    self._send({"error": "not found"}, 404)
+                    return
+                if _COHORT_SEEN["auth"] != "Bearer " + _CTOK:
+                    self._send({"error": "unauthorized"}, 401)
+                    return
+                self._send({"code": _COHORT_CODE, "expires": 120})
+                return
+            self._send({"error": "not found"}, 404)
+
     class _CohortServer(ThreadingHTTPServer):
         daemon_threads = True
 
@@ -475,8 +549,6 @@ def main():
     _cohort = _CohortServer(("127.0.0.1", 0), _CohortHandler)
     threading.Thread(target=_cohort.serve_forever, daemon=True).start()
     cohort_url = "http://127.0.0.1:%d" % _cohort.server_address[1]
-    _CNAME = "TINYCMDR_COHORT_STORAGE_TOKEN"
-    _CTOK = "tok-cohort-suite-0123456789"
 
     def _add(payload):
         code, body, _h = req("POST", "/api/legion", TOK, json.dumps(payload).encode())
@@ -521,10 +593,19 @@ def main():
           "the legion overview never echoes the token")
     code, j = _add({"op": "open", "remote": "storage"})
     _url = j.get("url") or ""
-    check(code == 200 and _url.startswith(cohort_url + "/#token=")
-          and _CTOK not in _url.split("#", 1)[0]
-          and urllib.parse.unquote(_url.split("#token=", 1)[-1]) == _CTOK,
-          "OPEN COHORT answers its own page, token in the fragment only", (code, j))
+    check(code == 200 and _url == cohort_url + "/#code=" + _COHORT_CODE
+          and _CTOK not in _url,
+          "OPEN COHORT answers a one-time code, never that box's token", (code, j))
+    check(_COHORT_SEEN["auth"] == "Bearer " + _CTOK,
+          "the token reached the cohort in a server-to-server header, not the URL",
+          _COHORT_SEEN["auth"][:24])
+    _COHORT_SEEN["off"] = True
+    code, j = _add({"op": "open", "remote": "storage"})
+    check(code == 502 and "one-time" in (j.get("error") or "")
+          and _CTOK not in json.dumps(j),
+          "a cohort with no handover door is refused, never handed its token",
+          (code, j))
+    _COHORT_SEEN["off"] = False
     code, j = _add({"op": "open", "remote": "ghost"})
     check(code == 404 and j.get("error"),
           "OPEN COHORT for a name this hub does not have: 404", (code, j))
@@ -548,11 +629,20 @@ def main():
 
     code, _b, h = _get_open("/api/legion/open?remote=storage", TOK)
     loc = h.get("Location") or ""
-    check(code == 302 and loc.startswith(cohort_url + "/#token=")
+    check(code == 302 and loc.startswith(cohort_url + "/#code=" + _COHORT_CODE)
+          and _CTOK not in loc and "token=" not in loc
           and ("from=http%%3A%%2F%%2F127.0.0.1%%3A%d" % port) in loc
           and "fromhost=" in loc and "session=" not in loc,
-          "the SELECT door redirects to the cohort's page, token in the fragment",
+          "the SELECT door redirects with a one-time code, never the token",
           (code, loc))
+    _COHORT_SEEN["off"] = True
+    code, _b, h = _get_open("/api/legion/open?remote=storage", TOK)
+    loc = h.get("Location") or ""
+    check(code == 302 and loc.startswith(cohort_url + "/#from=")
+          and _CTOK not in loc and "token=" not in loc,
+          "a cohort with no handover door is opened bare, which asks for its token",
+          (code, loc))
+    _COHORT_SEEN["off"] = False
     code, _b, h = _get_open("/api/legion/open?remote=storage&session=web-2", TOK)
     check(code == 302 and "&session=web-2" in (h.get("Location") or ""),
           "...and carries a conversation key when one was picked",

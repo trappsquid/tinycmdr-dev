@@ -14572,6 +14572,37 @@ def a2a_headers(token):
     return headers
 
 
+def _cohort_handoff(url, token, timeout=4.0):
+    """(code, why): a single-use login code minted by a peer's own page.
+
+    A legion hub holds each cohort's page token (it needs it for A2A). Putting that
+    token into the browser's URL put another box's shell access in an address bar, a
+    history entry, a screenshot and any link the operator shared - a regression of the
+    2026-10-10 rule that a cohort's token never reaches the browser. So the hub asks
+    the cohort itself for a code over this server-to-server call, and the browser only
+    ever sees the code: single use, _WEB_HANDOFF_TTL seconds, traded by the cohort's own
+    page for its HttpOnly cookie. A peer from before this door answers 404; the caller
+    opens its page bare, and that page asks for its own token once.
+    """
+    if not token:
+        return "", "this hub has no token value for that box"
+    try:
+        r = requests.post(url.rstrip("/") + "/api/handoff",
+                          headers=a2a_headers(token), timeout=timeout,
+                          allow_redirects=False)
+    except Exception as e:                                       # noqa: BLE001
+        return "", "the box did not answer: %s" % e
+    if r.status_code != 200:
+        return "", "the box answered %d for the handover door" % r.status_code
+    try:
+        code = str((r.json() or {}).get("code") or "").strip()
+    except Exception:                                            # noqa: BLE001
+        return "", "the box answered something that is not a handover code"
+    if not code:
+        return "", "the box handed over no code"
+    return code, ""
+
+
 def a2a_post(url, token, payload, timeout):
     """One JSON-RPC POST to a peer: (status, data or None). Raises like requests does."""
     r = requests.post(url + "/a2a", json=payload, headers=a2a_headers(token),
@@ -33700,11 +33731,13 @@ function paintChan(opening){
  chanEl.textContent='COMMAND CHANNEL'+(pageHost?' \u00b7 '+pageHost:'');
 }
 // The token comes from the link first (the installer prints one that contains it), then from
-// last time. The old prompt said "leave empty if loopback", which was wrong the moment an
+// last time. A RAIL PICK from another box carries a one-time code instead (`#code=`), never
+// that box's token: the code buys this one login and is burned by it.
+// The old prompt said "leave empty if loopback", which was wrong the moment an
 // install HAD a token: empty means unauthorized, and nothing said where the token was.
-let token='',pageFrom='',pageFromHost='',pageFromName='',pageSession='';
+let token='',pageCode='',pageFrom='',pageFromHost='',pageFromName='',pageSession='';
 // A page opened from another box's rail carries that box's address as `from` in the
-// same fragment that carried the token, its host name as `fromhost`, and - when a
+// same fragment that carried the code, its host name as `fromhost`, and - when a
 // conversation was picked from the hub's archive - that conversation's key as
 // `session`. They are HINTS, not instructions: only a bare http(s) origin and a plain
 // name/key are accepted, because the rail turns them into a link and a javascript:
@@ -33731,6 +33764,11 @@ try{
  // The FRAGMENT first: it never reaches the server, its logs, or a Referer header.
  const frag=new URLSearchParams(location.hash.replace(/^#/,''));
  token=frag.get('token')||new URLSearchParams(location.search).get('token')||'';
+ // Another box's rail hands over a code, not its token. Both are read here and the
+ // fragment is scrubbed below, so neither survives in the address bar; only the code
+ // is short-lived and single-use, so a URL that is copied or screenshotted late is
+ // worth nothing.
+ pageCode=frag.get('code')||'';
  // The way back belongs to the BROWSER, not to the tab: the fragment is scrubbed
  // below, this page reloads itself on a version change, and a box the reader visits
  // again later must still know where it came from - a tab-scoped address vanished
@@ -33768,10 +33806,33 @@ function askToken(retry){
  return a;
 }
 if(token){localStorage.fb_token=token;}
-// Hand the token to the server ONCE (a POST with the header) and take an HttpOnly
-// cookie back: from then on the browser authenticates by cookie, so the token is in no
-// URL, no history entry, and - once the handover lands - no localStorage either (a
-// script on this page can read localStorage; it cannot read an HttpOnly cookie).
+// A one-time code from another box's rail: sent back in a HEADER (never the URL,
+// never localStorage) and traded for the same HttpOnly cookie the token buys. One
+// retry for a network blip; a refused code is used or expired and is not retried.
+async function claimCode(){
+ const c=pageCode;pageCode='';
+ if(!c){return false;}
+ for(let i=0;i<2;i++){
+  try{
+   const r=await fetch('/api/login',{method:'POST',
+    headers:{'Content-Type':'application/json','X-Tinycmdr-Handoff':c}});
+   if(r.ok){
+    // The cookie is the login now; a token this browser remembered must not
+    // shadow it (A-2026-10-08-162), and the code itself was never stored.
+    try{localStorage.removeItem('fb_token');}catch(e){}
+    token='';
+    return true;
+   }
+   return false;
+  }catch(e){}
+ }
+ return false;
+}
+// Hand the token - or the one-time code - to the server ONCE (a POST) and take an
+// HttpOnly cookie back: from then on the browser authenticates by cookie, so neither
+// is in a URL, a history entry, and - once the handover lands - no localStorage
+// either (a script on this page can read localStorage; it cannot read an HttpOnly
+// cookie).
 async function login(){
  if(!token){
   // Nothing readable: ask the SERVER before asking the operator. GET /api/login
@@ -33790,6 +33851,15 @@ async function login(){
     return;
    }
   }catch(e){return;}
+ }
+ // The code is tried BEFORE the prompt: it is the login this click was handed. A
+ // failed code falls through to the token path, so an old or already-used link still
+ // lands on a page that can ask.
+ if(pageCode){
+  if(await claimCode()){return;}
+  note('that one-time link was already used or has expired - enter the token for this box');
+ }
+ if(!token){
   if(!askToken(false)){return;}
   localStorage.fb_token=token;
  }
@@ -33805,8 +33875,8 @@ async function login(){
   }
  }catch(e){}
 }
-// Keep the address bar usable as a bookmark without the token sitting in it - and
-// scrub both carriers: ?token= reached the server's log, #token= never did.
+// Keep the address bar usable as a bookmark without a secret sitting in it - and
+// scrub both carriers: ?token= reached the server's log, #token= and #code= never did.
 if(location.search||location.hash){
  try{history.replaceState(null,'',location.pathname);}catch(e){}
 }
@@ -36634,10 +36704,12 @@ def run_webui():
             elif self.path.startswith("/api/legion/open"):
                 # SELECT a box in THIS tab: the rail's rows are real links to this door,
                 # so the click changes the tab even when the page's script is stale or
-                # a fetch would be refused. The token is minted into the redirect's
-                # FRAGMENT - the cohort's server never sees it and this box's request
-                # log carries only the cohort's name. `from` is this hub's own origin as
-                # the browser addressed it, so the way back cannot be aimed elsewhere.
+                # a fetch would be refused. The ONE-TIME CODE is minted into the
+                # redirect's FRAGMENT, never the cohort's token: the code buys a single
+                # login on that box and is burned with it, while a token in an address
+                # bar is shell access in a history entry and a screenshot. `from` is
+                # this hub's own origin as the browser addressed it, so the way back
+                # cannot be aimed elsewhere.
                 if not self._auth_ok():
                     # A browser that followed a link lands on a page that can ask,
                     # instead of a JSON 401 it cannot act on.
@@ -36656,16 +36728,27 @@ def run_webui():
                     self._json({"error": "no token value is present for %s - "
                                          "check its token_env" % name}, 500)
                     return
-                frag = "token=" + urllib.parse.quote(cohort_token, safe="")
+                code, why = _cohort_handoff(url, cohort_token)
+                if not code:
+                    # An older cohort has no handover door, or it refused this hub:
+                    # open its page bare and let it ask for its own token once. That
+                    # costs a prompt; writing that box's token into a URL to skip it
+                    # is the flaw this door exists to close.
+                    log.warning("legion: no one-time login from %s: %s", name, why)
+                frag = ("code=" + urllib.parse.quote(code, safe="")) if code else ""
                 host = (self.headers.get("Host") or "").strip()
                 if host:
-                    frag += "&from=" + urllib.parse.quote("http://" + host, safe="")
+                    if frag:
+                        frag += "&"
+                    frag += "from=" + urllib.parse.quote("http://" + host, safe="")
                     frag += "&fromhost=" + urllib.parse.quote(
                         socket.gethostname(), safe="")
                 session = str(q.get("session") or "").strip()
                 if session and _LEGION_SESSION_RX.fullmatch(session):
-                    frag += "&session=" + urllib.parse.quote(session, safe="")
-                self._redirect(url + "/#" + frag)
+                    if frag:
+                        frag += "&"
+                    frag += "session=" + urllib.parse.quote(session, safe="")
+                self._redirect(url + ("/#" + frag if frag else "/"))
             elif self.path.startswith("/api/legion"):
                 # The LEGION rail (see the legion block): the boxes this host was
                 # configured with. Every read here is LOCAL state - cohorts are
@@ -37113,13 +37196,30 @@ def run_webui():
                                            self.headers.get("A2A-Version"))
                 self._json(payload, status)
                 return
-            if self.path.startswith("/api/login"):
-                # The browser's one handover: the page reads the token from the URL
-                # fragment, POSTs it here with the header, and gets an HttpOnly cookie
-                # back. After this the token is in no URL, no history entry and no
-                # localStorage, and the page authenticates by cookie alone.
-                self._drain()
+            if self.path.startswith("/api/handoff"):
+                # A PEER'S hub asks for a code for its own browser. The cohort's token
+                # arrives in the header and stays here - the peer already holds it for
+                # A2A - and what leaves is a single-use code, so the browser never
+                # carries that box's token in a URL. Token-gated like every other
+                # route; a caller without the token learns nothing from this door.
                 if not self._auth_ok():
+                    self._drain()
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._drain()
+                self._json({"code": _web_handoff_mint(),
+                            "expires": int(_WEB_HANDOFF_TTL)})
+                return
+            if self.path.startswith("/api/login"):
+                # The browser's one handover: a link carries either the long-lived
+                # token (an older link, the installer's own) or - from another box's
+                # rail - a one-time code in a header. Either becomes the HttpOnly
+                # cookie, and the page scrubs the URL, so after this neither is in a
+                # URL, a history entry or localStorage. The code is burned by the
+                # first login, so a link that leaks after the page loaded buys nothing.
+                self._drain()
+                if not self._auth_ok() and not _web_handoff_take(
+                        self.headers.get("X-Tinycmdr-Handoff") or ""):
                     self._json({"error": "unauthorized"}, 401)
                     return
                 self._json({"ok": True}, 200, extra=[
@@ -37408,11 +37508,12 @@ def run_webui():
                 name = str(body.get("remote") or "").strip()
                 if op == "open":
                     # The parity door: the cohort's OWN page, at its own address,
-                    # exactly as if this browser opened that box by hand. The token
-                    # rides the fragment - never the query - so it reaches neither
-                    # that box's log nor a Referer, and its page scrubs it from
-                    # history after the HttpOnly-cookie handover. Only an
-                    # authenticated page of this hub can ask for it.
+                    # exactly as if this browser opened that box by hand. The URL
+                    # carries a ONE-TIME CODE, never the cohort's token: the token is
+                    # this hub's own secret for that box and stays server-side, and the
+                    # code is burned by the box's first login. An older cohort with no
+                    # handover door is refused here rather than handed its token to
+                    # make the click work.
                     if name not in legion_cohorts():
                         self._json({"error": "no such cohort"}, 404)
                         return
@@ -37424,9 +37525,16 @@ def run_webui():
                         self._json({"error": "no token value is present for %s - "
                                              "check its token_env" % name}, 500)
                         return
+                    code, why = _cohort_handoff(url, cohort_token)
+                    if not code:
+                        self._json({"name": name,
+                                    "error": "%s did not hand over a one-time login "
+                                             "(%s) - open its page and enter its token, "
+                                             "or update that box" % (name, why)}, 502)
+                        return
                     self._json({"name": name,
-                                "url": url + "/#token="
-                                       + urllib.parse.quote(cohort_token, safe="")})
+                                "url": url + "/#code="
+                                       + urllib.parse.quote(code, safe="")})
                     return
                 if op == "add-remote":
                     added, code = legion_add_remote(name, body.get("url"),
@@ -37736,6 +37844,47 @@ def _web_token():
     """The token a server run would require: web.token, else .env's TINYCMDR_WEB_TOKEN."""
     return str((CONFIG.get("web") or {}).get("token")
                or os.environ.get("TINYCMDR_WEB_TOKEN") or "").strip()
+
+
+# The one-time login handover between a hub and a cohort's page (see
+# _cohort_handoff): the hub holds the cohort's token, the browser gets a code that
+# buys exactly ONE login and dies with it. In memory only - a restart drops pending
+# codes, so there is nothing to leak and nothing to age on disk - and bounded, so a
+# run of rail clicks cannot grow it without end.
+_WEB_HANDOFF = {}
+_WEB_HANDOFF_LOCK = threading.Lock()
+_WEB_HANDOFF_TTL = 120.0
+_WEB_HANDOFF_MAX = 64
+
+
+def _web_handoff_mint():
+    """A fresh single-use login code: 32 random bytes, good for _WEB_HANDOFF_TTL."""
+    import secrets as _secrets
+    code = _secrets.token_urlsafe(32)
+    now = time.time()
+    with _WEB_HANDOFF_LOCK:
+        for old, rec in list(_WEB_HANDOFF.items()):
+            if now - float(rec.get("at") or 0.0) > _WEB_HANDOFF_TTL:
+                _WEB_HANDOFF.pop(old, None)
+        while len(_WEB_HANDOFF) >= _WEB_HANDOFF_MAX:
+            oldest = min(_WEB_HANDOFF,
+                         key=lambda c: _WEB_HANDOFF[c].get("at") or 0.0)
+            _WEB_HANDOFF.pop(oldest, None)
+        _WEB_HANDOFF[code] = {"at": now}
+    return code
+
+
+def _web_handoff_take(code):
+    """True for a live code, and BURN it; False for unknown, used or expired."""
+    code = str(code or "").strip()
+    if not code or len(code) > 200:
+        return False
+    now = time.time()
+    with _WEB_HANDOFF_LOCK:
+        rec = _WEB_HANDOFF.pop(code, None)
+    if rec is None:
+        return False
+    return (now - float(rec.get("at") or 0.0)) <= _WEB_HANDOFF_TTL
 
 
 def _web_cookie_name(port):

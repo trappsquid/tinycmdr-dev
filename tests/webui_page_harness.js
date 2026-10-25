@@ -239,6 +239,7 @@ globalThis.URL.revokeObjectURL = () => {};
 const authSeen = [];
 let authFlaked = false;
 const loginCalls = [];
+const handoffs = [];                   // every one-time code the page claimed
 const uploads = [];
 let healthFetches = 0;
 let legionFetches = 0;
@@ -451,7 +452,17 @@ function fetchShim(url, opts) {
   if (url.indexOf('/api/tasks') === 0) { return jres({ items: [], next_id: 1 }); }
   if (url.indexOf('/api/jobs') === 0) { return jres({ jobs: [], scheduler: false }); }
   if (url.indexOf('/api/login') === 0) {
+    // A #code= link from another box's rail claims in a HEADER, never a token:
+    // record it so the suite can prove the page sent it and that it never reached
+    // localStorage. scenario.handoff_bad is a used/expired code, which must fall
+    // through to the token prompt rather than leave the page stuck.
+    const hcode = (opts && opts.headers && opts.headers['X-Tinycmdr-Handoff']) || '';
+    if (hcode) { handoffs.push(hcode); }
     loginCalls.push(((opts && opts.method) || 'GET') + ':' + ((opts && opts.headers && opts.headers['X-Tinycmdr-Token']) ? 'hdr' : 'no-hdr'));
+    if ((opts && opts.method) === 'POST' && hcode && scenario.handoff_bad) {
+      return Promise.resolve({ ok: false, status: 401,
+                               json: () => Promise.resolve({ error: 'unauthorized' }) });
+    }
     // GET is the page's "does this browser already authenticate?" probe (the HttpOnly
     // cookie is unreadable to the page, readable to the server). A browser with no
     // token and no cookie is refused - the default, and what a fresh profile looks
@@ -486,7 +497,7 @@ function fetchShim(url, opts) {
       if (body.op === 'open') {
         legionOpens.push({ name: body.remote });
         return jres({ name: body.remote,
-                      url: 'http://' + body.remote + ':8790/#token=tok-' + body.remote });
+                      url: 'http://' + body.remote + ':8790/#code=hub-code-' + body.remote });
       }
       if (body.op === 'add-remote') {
         legionAdds.push({ name: body.remote, url: body.url, token: body.token });
@@ -788,6 +799,7 @@ async function main() {
     promptMsg: promptMsg,
     replaced: replaced,
     auth: authSeen,
+    handoffs: handoffs,
     token: store.fb_token,
     uploads: uploads,
     modelPosts: modelPosts,

@@ -717,6 +717,37 @@ def main():
           f"and the address bar is scrubbed ({res['replaced'][:2]})")
     check(has(res, "the fragment worked"), "the task it sent came back answered")
 
+    # -- the rail's handover: another box sends a ONE-TIME CODE, never its token ---
+    # A legion hub asks the cohort for a code and redirects with #code=. The page
+    # claims it in a HEADER, so the code is in no request line and no localStorage,
+    # and the login burns it. The address bar is scrubbed like the token link above.
+    sc = {
+        "hash": "#code=code-from-the-hub&from=http%3A%2F%2F127.0.0.1%3A90&fromhost=hub",
+        "no_token": True,
+        "runs": [[["final", "the handover worked"]]],
+        "steps": [{"kind": "message", "text": "hello from the rail", "polls": 14}],
+    }
+    res = run_page(sc, script)
+    check(not res["errors"], f"the code page runs clean ({res['errors'][:1]})")
+    check(res["prompts"] == 0,
+          f"a one-time code link does not ask for a token ({res['prompts']})")
+    check(res.get("handoffs") == ["code-from-the-hub"],
+          f"the code rides the login POST as a header ({res.get('handoffs')!r})")
+    check(res.get("token") is None,
+          f"and no token is stored from a code link ({res.get('token')!r})")
+    check(not any(res["auth"]),
+          f"the login sends no token at all ({res['auth'][:3]})")
+    check(res["replaced"] == ["/"],
+          f"and the address bar is scrubbed of the code ({res['replaced'][:2]})")
+    check(has(res, "the handover worked"), "the task it sent came back answered")
+    # A used or expired code must not strand the page: it falls through to the prompt.
+    sc = {"hash": "#code=used-code", "no_token": True, "handoff_bad": True,
+          "runs": [], "steps": [{"kind": "polls", "n": 3}]}
+    res = run_page(sc, script)
+    check(res["prompts"] == 1,
+          f"a used or expired code falls through to the token prompt ({res['prompts']})")
+    check(not res["errors"], f"and the page runs clean ({res['errors'][:1]})")
+
     # -- a 'file' line is a download link, not prose ------------------------------
     sc = {
         "runs": [[["file", "uploads/123_report final.txt"], ["final", "sent"]]],
