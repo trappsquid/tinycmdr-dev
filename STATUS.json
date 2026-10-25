@@ -4107,10 +4107,10 @@
     {
       "id": "web-untrusted-content",
       "title": "untrusted web content cannot authorize an action",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "10ccabb",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A fetched page, a search snippet, a peer or MCP answer, or an instruction-shaped file could steer a tool call with nothing but a one-shot hint in the way, so remote content is now fenced with its source and hash, its URLs, codes and commands enter a per-session ledger, and egress, self-modification, delegation and credential reads need a fresh operator decision rather than the page's text.",
       "gate": "tests/test_web_boundary.py grades the sanitizer, unforgeable fence, detector, taint ledger, authority gate, delegation inheritance and a no-phrase callback the detector never sees."
@@ -4118,10 +4118,10 @@
     {
       "id": "web-service-hardening",
       "title": "web refusals are logged, A2A runs are bounded, operator state is private",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "36795e4",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A refused web request answered 401/403 and wrote nothing, a peer's SendMessage had no per-source or per-run bound, logs/ and proc-*.log were world-readable, and tools-provenance recorded filenames only, so refusals now log one structured line with a per-peer window counter, SendMessage takes a token bucket and two process-wide slots, logs and spools are owner-only, and every custom tool carries a sha256 that names a changed file at the next start.",
       "gate": "tests/test_security_surface.py grades the refusal log and counter, the A2A bucket and slots, the log modes and the release-signature verifier; tests/test_tool_load_surface.py grades the provenance hash and the changed-file warning."
@@ -4129,10 +4129,10 @@
     {
       "id": "release-signature-pin",
       "title": "release digests can be pinned and signed",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "0ced12d",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The updater verified SHA256SUMS fetched from the same GitHub release over TLS but nothing proved who wrote it, so a host may now pin agent.release_pubkey, update fetches and verifies SHA256SUMS.sig with ssh-keygen before unpacking, and the release scripts sign the digest with the operator's key and upload the signature.",
       "gate": "tests/test_security_surface.py grades a good and a tampered signature, a missing signature, a non-key config and a host without ssh-keygen; tests/test_update_surface.py grades the update door."
@@ -4140,10 +4140,10 @@
     {
       "id": "subagent-capability-ceiling",
       "title": "delegated children are read-only by default",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "0ced12d",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A delegated child inherited the parent's whole surface including shell, so delegate_task now takes capabilities read/write/full with read as the default and the dispatch refuses a child's write or exec tool before any handler runs, while fetch_url and web_search remain available to a read-only child.",
       "gate": "tests/test_security_surface.py grades the read, write, full and unknown ceilings and the delegation argument; tests/test_delegation.py grades the delegation path."
