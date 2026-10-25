@@ -32,6 +32,7 @@
     "tests/test_process_surface.py",
     "tests/test_route_surface.py",
     "tests/test_safety_surface.py",
+    "tests/test_security_surface.py",
     "tests/test_spill_state_surface.py",
     "tests/test_stall.py",
     "tests/test_status.py",

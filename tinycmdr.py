@@ -135,6 +135,17 @@ class _LoudRotatingFileHandler(logging.handlers.RotatingFileHandler):
 
     _warned = False
 
+    def _open(self):
+        stream = super()._open()
+        # The log carries operator orders and tool output. RotatingFileHandler opens
+        # with the process umask (0644 on a default box), so tighten the file at the
+        # one place it is opened, including the reopen after a failed write.
+        try:
+            os.chmod(self.baseFilename, 0o600)
+        except OSError:
+            pass
+        return stream
+
     def _warn(self, why, err):
         if self._warned:
             return
@@ -8723,6 +8734,30 @@ MINT_HINT_TOOLS = ("shell", "execute_code", "process")
 _GUI_TOOL_RX = re.compile(
     r"(?i)(?:^|_)(?:computer|gui|screen|screenshot|vision|desktop|mouse|keyboard|pyautogui)(?:$|_)")
 PROC_CENSUS_FILE = BASE_DIR / "logs" / "procedure-census.json"
+
+
+def _tighten_log_perms():
+    """logs/ is operator evidence: owner-only, and the files in it too.
+
+    The directory is what makes a 0644 proc log unreadable to another local user, so
+    tightening the mode here covers files this process did not create. A default umask
+    made logs/ 0755 on the live install (measured 2026-10-25); one sweep at startup is
+    enough because every file created afterwards lives under the 0700 directory.
+    """
+    log_dir = BASE_DIR / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(log_dir, 0o700)
+        for path in log_dir.iterdir():
+            if path.is_file():
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 _PROC_LOCK = threading.Lock()
 # A distinct command vocabulary per key, and a busy box mints new ones for ever; the cap
 # is generous against the real corpus (the runbook shapes) and exists so the file is
@@ -14982,6 +15017,38 @@ _A2A_FRAMES = {}              # task id -> the live line frame (bounded WITH _A2
 _A2A_LOCK = threading.Lock()
 _A2A_RUN_HOOK = None          # tests replace the model half
 
+# A peer's SendMessage starts a whole agent run on this box. The page token makes the
+# caller legitimate; it does not make an unlimited number of runs legitimate, and a
+# compromised peer or a looping hub can spend the endpoint's budget for every other
+# lane. One token bucket per source address (12/min, burst 4 - a mesh exchanges a few
+# orders, not a flood) and a process-wide slot ceiling for the RUNNING half. A refusal
+# is a 429 with a reason, never a silent queue: the peer can retry.
+A2A_RATE_PER_MINUTE = 12.0
+A2A_RATE_BURST = 4.0
+A2A_MAX_CONCURRENT = 2
+_A2A_BUCKETS = {}             # peer -> (tokens, last monotonic)
+_A2A_RATE_LOCK = threading.Lock()
+_A2A_RUN_SLOTS = threading.BoundedSemaphore(A2A_MAX_CONCURRENT)
+
+
+def _a2a_rate_ok(peer):
+    """Take one token for this peer, or False. Monotonic, bounded, no sleep."""
+    peer = str(peer or "?")
+    now = time.monotonic()
+    with _A2A_RATE_LOCK:
+        if len(_A2A_BUCKETS) > 256:
+            for key in [k for k, (_t, last) in _A2A_BUCKETS.items()
+                        if now - last > 600]:
+                _A2A_BUCKETS.pop(key, None)
+        tokens, last = _A2A_BUCKETS.get(peer, (A2A_RATE_BURST, now))
+        tokens = min(A2A_RATE_BURST,
+                     tokens + max(0.0, now - last) * A2A_RATE_PER_MINUTE / 60.0)
+        if tokens < 1.0:
+            _A2A_BUCKETS[peer] = (tokens, now)
+            return False
+        _A2A_BUCKETS[peer] = (tokens - 1.0, now)
+        return True
+
 
 def _a2a_id(prefix):
     return "%s-%s" % (prefix, os.urandom(6).hex())
@@ -20006,8 +20073,9 @@ class ToolRegistry:
         pattern), so existing tools are never mistaken for planted ones.
         Deliberately no per-write bookkeeping: a create_tool call is flagged at
         the next start too, which is honest noise rather than a second source of
-        truth. ponytail: names only, no hashes - hash the files if a plant ever
-        needs attribution.
+        truth. Each file also carries its sha256, so a CHANGED tool is named at the
+        next start even when its name was already known - the filename-only record
+        could not tell a planted edit from the file the agent minted yesterday.
         """
         global _PROVENANCE_DONE
         if _PROVENANCE_DONE:
@@ -20018,11 +20086,18 @@ class ToolRegistry:
         known = None
         if record.exists():
             try:
-                known = {str(n) for n in
-                         (json.loads(record.read_text(encoding="utf-8"))
-                          .get("files") or [])}
+                data = json.loads(record.read_text(encoding="utf-8"))
+                sums = data.get("sha256") or {}
+                known = {str(n): str(sums.get(str(n)) or "")
+                         for n in (data.get("files") or [])}
             except Exception:
-                known = set()
+                known = {}
+        current = {}
+        for name in files:
+            try:
+                current[name] = _sha256(self.tools_dir / name)
+            except OSError:
+                current[name] = ""
         if known is not None:
             for name in files:
                 if name not in known:
@@ -20034,10 +20109,15 @@ class ToolRegistry:
                                     t for t, tool in (self.custom or {}).items()
                                     if str(tool.get("source") or "").endswith(name))
                                 ) or "NOTHING - see the failed-to-load line above")
+                elif known.get(name) and current.get(name) \
+                        and known[name] != current[name]:
+                    log.warning("custom tool %s CHANGED since the last start - "
+                                "it runs now, as the bot user: review the diff "
+                                "(tools-provenance.json carries the old sha256)", name)
         if files:
             try:
-                record.write_text(json.dumps({"files": files}, indent=1),
-                                  encoding="utf-8")
+                record.write_text(json.dumps({"files": files, "sha256": current},
+                                             indent=1), encoding="utf-8")
             except Exception:
                 pass
 
@@ -34227,6 +34307,41 @@ WEB_BODY_MAX = 1048576
 # length and then trickles bytes cannot hold a worker for the whole minute.
 WEB_BODY_DEADLINE = 15
 
+# Every refused web request used to answer 401/403 and write NOTHING: a token guessing
+# attempt and an idle box looked identical. One structured line per refusal, plus a
+# per-peer counter for the window, so a burst is visible without a token ever entering
+# the log. The route is logged without its query string (a handoff code can live there).
+_AUTH_FAILS = {}
+_AUTH_FAILS_LOCK = threading.Lock()
+_AUTH_FAIL_WINDOW = 300.0
+_AUTH_FAIL_WARN = 10
+
+
+def _auth_refused(peer, route, reason):
+    """Record one refused request and say so; return the peer's window count."""
+    peer = str(peer or "?")
+    route = str(route or "").split("?", 1)[0][:120]
+    now = time.monotonic()
+    with _AUTH_FAILS_LOCK:
+        rows = [t for t in _AUTH_FAILS.get(peer, []) if now - t <= _AUTH_FAIL_WINDOW]
+        rows.append(now)
+        if len(rows) > 200:
+            del rows[:-200]
+        _AUTH_FAILS[peer] = rows
+        if len(_AUTH_FAILS) > 1024:
+            # A scanner can present many source addresses; keep the table bounded. The
+            # window rows of the peers that are still active stay.
+            for key in [k for k, v in _AUTH_FAILS.items()
+                        if not v or now - v[-1] > _AUTH_FAIL_WINDOW]:
+                _AUTH_FAILS.pop(key, None)
+        count = len(rows)
+    log.warning("web: refused an unauthenticated request: peer=%s route=%s reason=%s",
+                peer, route, reason or "no token")
+    if count and count % _AUTH_FAIL_WARN == 0:
+        log.warning("web: %d auth failures from %s in %ds - possible token guessing",
+                    count, peer, int(_AUTH_FAIL_WINDOW))
+    return count
+
 # One recv's worth per loop in _body_read: the deadline is the WHOLE body's, so the
 # read runs one syscall at a time instead of inside the buffered reader's own loop.
 WEB_BODY_CHUNK = 65536
@@ -37306,8 +37421,26 @@ def run_webui():
                         given = value
                         self._cookie_given = True      # so a 401 can clear a stale one
                         break
-            return hmac.compare_digest(
+            # Why a refusal happened, for the line _unauthorized writes. Never the value.
+            self._auth_reason = ("no token presented" if not given else
+                                 "bad cookie" if self._cookie_given else "bad token")
+            ok = hmac.compare_digest(
                 given.encode("utf-8", "replace"), token.encode("utf-8"))
+            if ok:
+                self._auth_reason = ""
+            return ok
+
+        def _unauthorized(self):
+            """Answer 401 AND leave a record: a silent refusal is indistinguishable
+            from nobody knocking, and this token is shell access."""
+            try:
+                _auth_refused((self.client_address or ("?",))[0],
+                              str(self.path or ""),
+                              getattr(self, "_auth_reason", "no token presented"))
+            except Exception:                                # noqa: BLE001
+                log.debug("auth refusal log failed", exc_info=True)
+            self._drain()
+            self._json({"error": "unauthorized"}, 401)
 
         def _origin_ok(self, opaque_ok=False):
             """Same-origin/Host check for EVERY route.
@@ -37341,8 +37474,6 @@ def run_webui():
             if configured and configured not in ("0.0.0.0", "::"):
                 allowed.add(configured.rsplit(":", 1)[0].strip("[]"))
             if name not in allowed:
-                log.warning("web: refused a request with Host %r (not a loopback/"
-                            "configured name)", host_hdr)
                 self._refuse_why = "host"
                 return False
             origin = (self.headers.get("Origin") or "").strip()
@@ -37359,14 +37490,22 @@ def run_webui():
             oauth = origin.split("://", 1)[-1].split("/", 1)[0].lower()
             if _web_authority(oauth) == _web_authority(host_hdr):
                 return True
-            log.warning("web: refused a cross-origin request (Origin %r, Host %r)",
-                        origin, host_hdr)
             self._refuse_why = "origin"
             self._refuse_origin = origin
             return False
 
         def _forbidden(self):
             self._drain()
+            # One record for the 403 too: the counter is what turns a scan or a
+            # misconfigured proxy into a number instead of a quiet body.
+            try:
+                reason = (("origin %s" % (self._refuse_origin or "")
+                           if self._refuse_why == "origin"
+                           else "host %s" % (self.headers.get("Host") or "")))
+                _auth_refused((self.client_address or ("?",))[0],
+                              str(self.path or ""), reason[:120])
+            except Exception:                                # noqa: BLE001
+                log.debug("forbidden log failed", exc_info=True)
             # Say what WOULD work. The old body was four words of jargon, and the operator
             # who hit it (2026-09-28, browsing to a live install by IP) had no way to learn
             # that the page accepts only particular names - or which.
@@ -37483,8 +37622,7 @@ def run_webui():
                 self._json(a2a_card())
             elif self.path.startswith("/api/events"):
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 q = self._query()
                 run = WEB_RUNS.get(q.get("run_id", ""))
@@ -37507,7 +37645,7 @@ def run_webui():
                 # attached so a result reads like a conversation. Two characters is the
                 # floor: a 1-char query matches everything and costs a full scan.
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 _q = self._query().get("q") or ""
                 q = (_q[0] if isinstance(_q, list) else _q) or ""
@@ -37534,7 +37672,7 @@ def run_webui():
                 # (A-236). Mutation stays scoped to the owning client (A-235); the
                 # page's toggle title says exactly what this view is.
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 q = self._query()
                 client = _web_client(self.headers)
@@ -37552,7 +37690,7 @@ def run_webui():
                 # paints, so a browser that lost its localStorage still sees the
                 # conversation and can go on with it instead of a blank page.
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 q = self._query()
                 client = _web_client(self.headers)
@@ -37567,7 +37705,7 @@ def run_webui():
                 # the operator saw their message twice in the transcript. Ask
                 # instead, then re-attach to that run and keep polling it.
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 q = self._query()
                 live = _web_active_run(
@@ -37627,12 +37765,12 @@ def run_webui():
                 # configured with. Every read here is LOCAL state - cohorts are
                 # contacted by the census thread, never by this route.
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 self._json(legion_overview(self.headers.get("Host") or ""))
             elif self.path.startswith("/api/commands"):
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 client = _web_client(self.headers)
                 q = self._query()
@@ -37643,7 +37781,7 @@ def run_webui():
                 # the chat `/model list` read (the configured model first, then every
                 # endpoint's), resolved live like the picker does.
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 client = _web_client(self.headers)
                 q = self._query()
@@ -37661,12 +37799,12 @@ def run_webui():
                                if e.get("name")]})
             elif self.path.startswith("/api/tasks"):
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 self._json(web_tasks_view())
             elif self.path.startswith("/api/jobs"):
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 self._json(web_jobs_view())
             elif self.path.startswith("/api/login"):
@@ -37675,23 +37813,25 @@ def run_webui():
                 # POST does the handover itself, in the POST chain - and this branch
                 # must sit ABOVE /api/log, whose prefix would otherwise swallow
                 # /api/login (tests/test_contracts.py grades the whole ordering class).
+                # The 401 here is the page's boot probe, not a refused caller: it is
+                # deliberately not counted as an auth failure.
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
                     return
                 self._json({"ok": True})
             elif self.path.startswith("/api/log"):
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 self._json(web_log_tail(self._query().get("lines")))
             elif self.path.startswith("/api/inventory"):
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 self._json(web_inventory())
             elif self.path.startswith("/api/download"):
                 if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 q = self._query()
                 # _query() has already percent-decoded both values, so no second
@@ -38049,8 +38189,7 @@ def run_webui():
                 # the JSON-RPC path as an empty request - "Invalid Request" instead of
                 # the status that names what was wrong (A-121).
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 body = self._need_body()
                 if body is None:
@@ -38059,14 +38198,37 @@ def run_webui():
                 # box, and the first thing a security review asks for is the record
                 # of who asked for what. Peer, method and - for an order - its task
                 # id and first words, scrubbed like every other log line.
-                if isinstance(body, dict) and body.get("method") == "SendMessage":
+                _is_send = (isinstance(body, dict)
+                            and body.get("method") == "SendMessage")
+                _peer = (self.client_address or ("?",))[0]
+                if _is_send:
                     _msg = ((body.get("params") or {}).get("message") or {})
                     _first = " ".join(str(_a2a_text_of(_msg)[0] or "").split())[:120]
                     log.info("a2a: SendMessage from %s (task %s): %s",
-                             self.client_address[0], _msg.get("taskId") or "-",
-                             scrub(_first))
-                status, payload = a2a_http(self.path, body, True,
-                                           self.headers.get("A2A-Version"))
+                             _peer, _msg.get("taskId") or "-", scrub(_first))
+                    # The token makes the caller legitimate; it does not make an
+                    # unlimited number of full agent runs legitimate.
+                    if not _a2a_rate_ok(_peer):
+                        log.warning("a2a: rate limited %s (token bucket %g/min, burst %g)",
+                                    _peer, A2A_RATE_PER_MINUTE, A2A_RATE_BURST)
+                        self._json({"error": "rate limited; retry shortly"}, 429,
+                                   extra=[("Retry-After", "5")])
+                        return
+                _slot = False
+                if _is_send:
+                    _slot = _A2A_RUN_SLOTS.acquire(blocking=False)
+                    if not _slot:
+                        log.warning("a2a: busy - %d run(s) already in flight, refusing %s",
+                                    A2A_MAX_CONCURRENT, _peer)
+                        self._json({"error": "busy: another A2A run is in flight"},
+                                   429, extra=[("Retry-After", "5")])
+                        return
+                try:
+                    status, payload = a2a_http(self.path, body, True,
+                                               self.headers.get("A2A-Version"))
+                finally:
+                    if _slot:
+                        _A2A_RUN_SLOTS.release()
                 self._json(payload, status)
                 return
             if self.path.startswith("/api/handoff"):
@@ -38076,8 +38238,7 @@ def run_webui():
                 # carries that box's token in a URL. Token-gated like every other
                 # route; a caller without the token learns nothing from this door.
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 self._drain()
                 self._json({"code": _web_handoff_mint(),
@@ -38093,7 +38254,7 @@ def run_webui():
                 self._drain()
                 if not self._auth_ok() and not _web_handoff_take(
                         self.headers.get("X-Tinycmdr-Handoff") or ""):
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 self._json({"ok": True}, 200, extra=[
                     ("Set-Cookie", "%s=%s; Path=/; HttpOnly; SameSite=Strict; "
@@ -38102,8 +38263,7 @@ def run_webui():
                 return
             if self.path.startswith("/api/run"):
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 body = self._need_body()
                 if body is None:
@@ -38138,8 +38298,7 @@ def run_webui():
                 # drift; `global` is the shell picker's semantics (config.json, every
                 # conversation), and the reply says which happened.
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 body = self._need_body()
                 if body is None:
@@ -38160,8 +38319,7 @@ def run_webui():
                 return
             if self.path.startswith("/api/upload"):
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 data = self._raw(WEB_UPLOAD_MAX)
                 if data is None:
@@ -38212,8 +38370,7 @@ def run_webui():
                 return
             if self.path.startswith("/api/sessions"):
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 body = self._need_body()
                 if body is None:
@@ -38277,8 +38434,7 @@ def run_webui():
                 return
             if self.path.startswith("/api/steer"):
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 body = self._need_body()
                 if body is None:
@@ -38327,8 +38483,7 @@ def run_webui():
                 return
             if self.path.startswith("/api/stop"):
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 body = self._need_body()
                 if body is None:
@@ -38371,8 +38526,7 @@ def run_webui():
                 # rotated token, or take it out again - the values they would
                 # otherwise edit in by hand.
                 if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
+                    self._unauthorized()
                     return
                 body = self._need_body()
                 if body is None:
@@ -51537,6 +51691,7 @@ def _root_warning():
 
 
 def main():
+    _tighten_log_perms()
     _rw = _root_warning()
     if _rw:
         log.warning("%s", _rw)

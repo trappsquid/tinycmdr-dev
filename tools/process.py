@@ -63,6 +63,19 @@ MUTATES = True
 
 BASE = Path(__file__).resolve().parent.parent
 JOBS_FILE = BASE / "logs" / "process-jobs.json"
+
+
+def _owner_only(path, mode=0o600):
+    """A job's log and stdin spool: the operator's evidence, owner-only.
+
+    The directory is what protects these on a multi-user box, and the harness tightens
+    it at startup; the mode here covers a job started by a path that did not (a verb, a
+    test, an older install).
+    """
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
 _PROCS = {}          # id -> Popen, for jobs THIS session started
 STILL_ACTIVE = 259
 
@@ -303,12 +316,15 @@ def spawn_detached(jid, argv, shell):
     """
     log_path = BASE / "logs" / f"proc-{jid}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _owner_only(log_path.parent, 0o700)
     spool = BASE / "logs" / f"proc-{jid}.in"
     try:
         spool.write_bytes(b"")
+        _owner_only(spool)
     except OSError:
         pass
     with open(log_path, "wb") as fout:
+        _owner_only(log_path)
         proc = subprocess.Popen(
             [sys.executable, "-c", _WRAPPER, json.dumps(argv),
              "1" if shell else "0", str(spool), _HIDE_CHILD],
@@ -368,6 +384,7 @@ def spawn_probe(argv, shell):
              "done": threading.Event(), "spool": None}
     try:
         spool.write_bytes(b"")
+        _owner_only(spool)
         state["spool"] = str(spool)
     except OSError:
         state["spool"] = ""
@@ -406,10 +423,12 @@ def promote_probe(jid, proc, state, cmd_text):
     reader keeps writing there until the job ends. Returns (log_path, spool)."""
     log_path = BASE / "logs" / f"proc-{jid}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    _owner_only(log_path.parent, 0o700)
     with state["lock"]:
         data = bytes(state["buf"])
         state["buf"].clear()
     log_path.write_bytes(data)
+    _owner_only(log_path)
     fh = open(log_path, "ab", buffering=0)
     with state["lock"]:
         state["sink"] = fh

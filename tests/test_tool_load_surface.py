@@ -568,6 +568,18 @@ in a temp tree, no network and no Mattermost connection.
             check("provenance: ...and both names are in the record",
                   sorted(json.loads(rec.read_text(encoding="utf-8"))["files"])
                   == ["later.py", "old_hand.py"], rec.read_text(encoding="utf-8"))
+            data = json.loads(rec.read_text(encoding="utf-8"))
+            check("provenance: every file carries a sha256",
+                  set(data.get("sha256") or {}) == {"later.py", "old_hand.py"}
+                  and all(len(v) == 64 for v in (data.get("sha256") or {}).values()),
+                  data)
+            (d / "old_hand.py").write_text(_tool("old_hand") + "# changed\n",
+                                           encoding="utf-8")
+            seen.clear()
+            fb._PROVENANCE_DONE = False
+            reg.note_provenance()
+            check("provenance: a known file whose bytes changed announces itself",
+                  any("CHANGED" in m and "old_hand.py" in m for m in seen), seen)
         finally:
             fb.log.removeHandler(handler)
 
