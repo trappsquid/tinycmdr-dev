@@ -42,6 +42,7 @@
     "tests/test_tui.py",
     "tests/test_update_surface.py",
     "tests/test_verbs.py",
+    "tests/test_web_boundary.py",
     "tests/test_webui.py",
     "tests/test_webui_page.py",
     "tests/test_wording.py",

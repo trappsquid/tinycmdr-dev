@@ -741,7 +741,7 @@ failure to answer.
           out.startswith("ERROR:") and "500" in out, out[:200])
 
     # ---------------------- A-2026-10-08-150: a byte cut inside a <script> is not page text
-    _script_page = fb._fetch_page(BASE_URL + "/bigscript", 1000)
+    _script_page, _script_meta = fb._fetch_page(BASE_URL + "/bigscript", 1000)
     check("a cut landing inside an inline <script> does not return the script source",
           "JS_SOURCE_MARKER" not in _script_page, _script_page[:200])
     check("...and the text before the block is kept",

@@ -447,12 +447,16 @@ produces on a real box.
             fb._HINTS_SHOWN.clear()
             fb.SESSIONS_DIR.mkdir(exist_ok=True)   # a real run has saved its session by now
             fb._hints_path("hp").unlink(missing_ok=True)
-            first = fb.result_hint("fetch_url", {}, "page", session_key="hp")
-            check("DATA" in first, "a hint attaches once", first)
+            first = fb.result_hint("shell", {"command": "echo read_file"},
+                                   "read_file", session_key="hp")
+            check("not a call" in first, "a hint attaches once", first)
             fb._HINTS_SHOWN.clear()             # simulate a restart
-            check(fb.result_hint("fetch_url", {}, "page", session_key="hp") == "",
+            check(fb.result_hint("shell", {"command": "echo read_file"},
+                                 "read_file", session_key="hp") == "",
                   "...and does not come back after a restart")
-            check("DATA" in fb.result_hint("fetch_url", {}, "page", session_key="hp2"),
+            check("not a call" in fb.result_hint(
+                      "shell", {"command": "echo read_file"}, "read_file",
+                      session_key="hp2"),
                   "a different session still gets it")
 
             # ---------------------------------------------------------- read receipts
