@@ -5,6 +5,20 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.49] - 2026-10-25
+
+### Added
+- **Web content cannot authorize an action:** fetched pages, search snippets, peer and MCP answers and instruction-shaped files are fenced with their source and hash, their URLs/codes/commands enter a session ledger, and egress, self-modification, delegation and credential reads need the operator's fresh yes rather than a page's text (tests/test_web_boundary.py).
+- **Release digests can be pinned and signed:** a host may set `agent.release_pubkey` and `update` then verifies `SHA256SUMS.sig` with `ssh-keygen` before unpacking, while `release.sh` and `finish-release.sh` sign the digest when the operator's key exists so a compromised GitHub account cannot replace both the archive and its sums (tests/test_security_surface.py, tests/test_update_surface.py).
+
+### Changed
+- **Delegated children are read-only by default:** `delegate_task` takes `capabilities` read/write/full (default `agent.subagent_capabilities: read`) and the dispatch refuses a child's write or exec tool before it runs, while `fetch_url` and `web_search` stay available as read tools (tests/test_security_surface.py, tests/test_delegation.py).
+
+### Fixed
+- **A refused web request is no longer silent:** token, cookie, Host and Origin refusals log one structured line with a per-peer window counter, and only the page's `GET /api/login` probe stays quiet (tests/test_security_surface.py).
+- **A peer's SendMessage is bounded:** a per-source token bucket and two concurrent run slots return 429 instead of letting one peer spend the endpoint for every lane (tests/test_security_surface.py).
+- **Operator state is owner-only:** `logs/` is 0700 and its files 0600 at startup and at creation, job logs and stdin spools are 0600, and the tool provenance record carries a sha256 and names a changed tool at the next start (tests/test_security_surface.py, tests/test_tool_load_surface.py).
+
 ## [1.1.48] - 2026-10-25
 
 ### Fixed
