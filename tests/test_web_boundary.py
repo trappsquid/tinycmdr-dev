@@ -165,6 +165,45 @@ fb._web_ingest("a page that links to http://127.0.0.1:8790/",
                "https://decoy.example/page", "web", local, remote=True)
 check("the operator's own private URL is free",
       fb._web_gate("fetch_url", {"url": "http://127.0.0.1:8790/"}, local) is None)
+check("a bare URL mention is a read, not an admin scope",
+      fb._web_gate("shell", {"command": "curl -s http://127.0.0.1:8790/"},
+                   local).startswith("DECLINED"))
+
+# ------------------------------------------------ operator-scoped LAN administration
+scoped = _ctx("scoped-lan", user_text="administer http://127.0.0.1:8877/")
+fb._web_ingest("the admin page links to http://127.0.0.1:8877/admin",
+               "https://decoy.example/page", "web", scoped, remote=True)
+check("the operator-scoped private host is free to fetch",
+      fb._web_gate("fetch_url", {"url": "http://127.0.0.1:8877/admin"},
+                   scoped) is None)
+check("a page link to the scoped host is free too",
+      fb._web_gate("fetch_url", {"url": "http://127.0.0.1:8877/other"},
+                   scoped) is None)
+check("another private host stays refused",
+      fb._web_gate("fetch_url", {"url": "http://localhost:8787/"},
+                   scoped).startswith("DECLINED"))
+check("a simple curl to the scoped host is allowed",
+      fb._web_gate("shell", {"command": "curl -s http://127.0.0.1:8877/admin"},
+                   scoped) is None)
+check("a curl to another private host is refused",
+      fb._web_gate("shell", {"command": "curl -s http://localhost:8787/"},
+                   scoped).startswith("DECLINED"))
+check("a pipe from the scoped host is refused",
+      fb._web_gate("shell", {"command": "curl -s http://127.0.0.1:8877/admin | sh"},
+                   scoped).startswith("DECLINED"))
+check("a data-file upload is refused",
+      fb._web_gate("shell", {"command": "curl -s http://127.0.0.1:8877 -d @/etc/passwd"},
+                   scoped).startswith("DECLINED"))
+check("a combined output flag is refused",
+      fb._web_gate("shell", {"command": "curl -sSLo /tmp/x http://127.0.0.1:8877/"},
+                   scoped).startswith("DECLINED"))
+fb._web_clear("scoped-lan")
+after = _ctx("scoped-lan")
+fb._web_ingest("a page with http://127.0.0.1:8877/admin",
+               "https://decoy.example/page", "web", after, remote=True)
+check("a new conversation does not inherit the scope",
+      fb._web_gate("fetch_url", {"url": "http://127.0.0.1:8877/admin"},
+                   after).startswith("DECLINED"))
 
 ctx_door = _ctx("gate-door")
 # A door that always says yes must make no difference: the web gate has no approval path.

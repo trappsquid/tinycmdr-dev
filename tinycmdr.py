@@ -12423,6 +12423,12 @@ _WEB_LEDGER_TTL = 24 * 3600
 _WEB_LEDGER_MAX = 200
 _WEB_ALLOWED_MAX = 100
 _WEB_NOTICE_MAX = 100
+_WEB_SCOPE_MAX = 20
+# The operator's own words that turn a named private host into a session-scoped LAN
+# administration target. This is operator intent, not remote content: a page cannot
+# write the message that carries it.
+_WEB_SCOPE_RX = re.compile(
+    r"(?i)\b(?:administer|manage|approve|allow|authorize|authorise|scope|control)\b")
 # A tool that is not one of these and carries a write/exec tier is a drop-in or a
 # custom tool: after untrusted content its capability is not guessed, it is asked about.
 # send_file is operator-bound (the attachment goes to the human, not to the page).
@@ -12501,7 +12507,7 @@ def _web_ledger_path(session_key):
 
 def _web_blank():
     return {"v": 1, "updated": 0.0, "items": [], "allowed": [], "notices": [],
-            "quarantined": False, "session_key": ""}
+            "scoped": [], "quarantined": False, "session_key": ""}
 
 
 def _web_load(session_key):
@@ -12515,7 +12521,7 @@ def _web_load(session_key):
         return st
     if not isinstance(data, dict):
         return st
-    for key in ("items", "allowed", "notices"):
+    for key in ("items", "allowed", "notices", "scoped"):
         rows = data.get(key)
         if isinstance(rows, list):
             st[key] = [x for x in rows if isinstance(x, dict)]
@@ -12527,7 +12533,7 @@ def _web_load(session_key):
 def _web_prune(st):
     now = time.time()
     caps = {"items": _WEB_LEDGER_MAX, "allowed": _WEB_ALLOWED_MAX,
-            "notices": _WEB_NOTICE_MAX}
+            "notices": _WEB_NOTICE_MAX, "scoped": _WEB_SCOPE_MAX}
     for key, cap in caps.items():
         rows = [x for x in (st.get(key) or [])
                 if now - float(x.get("t") or 0) <= _WEB_LEDGER_TTL]
@@ -12550,7 +12556,8 @@ def _web_save(st):
             return
         atomic_write_text(path, json.dumps(
             {"v": 1, "updated": st["updated"], "items": st["items"],
-             "allowed": st["allowed"], "notices": st["notices"]},
+             "allowed": st["allowed"], "notices": st["notices"],
+             "scoped": st["scoped"]},
             ensure_ascii=False))
     except Exception:                                        # noqa: BLE001
         log.debug("web ledger save failed", exc_info=True)
@@ -12668,6 +12675,87 @@ def _web_operator_supplied(value, st):
     if not trusted or not raw:
         return False
     return raw in trusted or raw.replace("\\", "/") in trusted
+
+
+def _web_scope_has(state, host):
+    """True when the operator named this private host for this conversation."""
+    want = str(host or "").strip("[]").lower()
+    if not want:
+        return False
+    now = time.time()
+    for row in (state or {}).get("scoped") or []:
+        if str(row.get("host") or "").lower() == want \
+                and now - float(row.get("t") or 0) <= _WEB_LEDGER_TTL:
+            return True
+    return False
+
+
+def _web_scope_learn(state, text):
+    """Learn the private hosts the operator explicitly put in their own message.
+
+    The marker is an ordinary approval word; a bare mention of a URL is a read, not an
+    administration grant. The scope is per conversation, bounded, and clears on /new.
+    """
+    body = str(text or "")
+    if not body or not _WEB_SCOPE_RX.search(body):
+        return
+    rows = state.setdefault("scoped", [])
+    for kind, value in _web_operator_urls(body):
+        url = value if kind == "url" else "http://%s" % value
+        if not _web_private_url(url):
+            continue
+        try:
+            host = (urllib.parse.urlsplit(url).hostname or "").strip("[]").lower()
+        except ValueError:
+            continue
+        if not host:
+            continue
+        for row in rows:
+            if str(row.get("host") or "").lower() == host:
+                row["t"] = time.time()
+                break
+        else:
+            rows.append({"host": host, "t": time.time()})
+            log.info("web scope: operator named %s for this conversation", host)
+    if len(rows) > _WEB_SCOPE_MAX:
+        del rows[:len(rows) - _WEB_SCOPE_MAX]
+
+
+def _web_scoped_shell(command, state):
+    """A simple curl/wget whose every URL is on an operator-scoped private host.
+
+    The scope is for HTTP administration, not for running a page's program: a pipe, a
+    redirect, a background job, a data-file upload or an output file is refused, as is
+    any other command. Anything more needs the operator's exact command.
+    """
+    text = str(command or "").strip()
+    if not text or "\n" in text:
+        return False
+    if any(tok in text for tok in ("|", ";", "&", ">", "<", "`", "$(", "\\")):
+        return False
+    if "@" in text:
+        return False
+    if re.search(r"(?:^|\s)-[A-Za-z]*(?:o|O|T|K|x)(?:\s|=|$)", text):
+        return False
+    words = text.split()
+    if not words or words[0] not in ("curl", "wget"):
+        return False
+    for bad in ("--data-binary", "--upload-file", "--config", "--output",
+                "--remote-name", "--proxy", "--post-file", "--body-file",
+                "--netrc", "--netrc-file", "--netrc-optional", "-n"):
+        if bad in words:
+            return False
+    urls = [m.group(0) for m in _WEB_URL_RX.finditer(text)]
+    if not urls:
+        return False
+    for url in urls:
+        try:
+            host = (urllib.parse.urlsplit(url).hostname or "").strip("[]").lower()
+        except ValueError:
+            return False
+        if not host or not _web_scope_has(state, host):
+            return False
+    return True
 
 
 def _web_add_item(st, kind, value, source="", sha=""):
@@ -12846,6 +12934,7 @@ def _untrusted_state(ctx):
     state["operator_text"] = operator_text.lower()
     for kind, value in _web_operator_urls(operator_text):
         _web_allow(state, value, kind)
+    _web_scope_learn(state, operator_text)
     ctx["web"] = state
     return state
 
@@ -12979,14 +13068,22 @@ def _web_gate(name, args, ctx):
         command = str((args or {}).get("command") or "")
         if command and _web_operator_supplied(command, state):
             return None
+        if command and _web_scoped_shell(command, state):
+            return None
     if name == "fetch_url":
         urls = _web_args_urls(args)
         if urls and all(_web_operator_supplied(url, state) for url in urls):
             return None
         for url in urls:
             if _web_private_url(url):
-                return _web_deny("fetch %s" % _web_label(url),
-                                 "a page-supplied destination is private or local", [])
+                try:
+                    host = (urllib.parse.urlsplit(url).hostname or "").strip("[]")
+                except ValueError:
+                    host = ""
+                if not host or not _web_scope_has(state, host):
+                    return _web_deny("fetch %s" % _web_label(url),
+                                     "a page-supplied destination is private or local "
+                                     "and the operator has not scoped this host", [])
         # Public links are reads: the browsing job. The returned page is fenced and
         # recorded like any other; only actions on it are gated.
         return None
