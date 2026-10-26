@@ -5,6 +5,16 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.50] - 2026-10-25
+
+### Changed
+- **A page's link is read; a page's command is refused:** a public URL taken from a page is fetched and fenced like any other page, while a private or local page URL, a shell command, a write, a credential read or a delegation after untrusted content is refused and the operator's exact URL or command in their own next message is the only door (tests/test_web_boundary.py).
+
+### Fixed
+- **An MCP server no longer inherits the harness's credentials:** a child gets PATH, HOME, locale, the Windows shell variables and its own configured environment, not harness tokens, cloud keys or a sudo password (tests/test_security_surface.py).
+- **The standalone repair updaters verify the release signature:** update.sh and update.ps1 read agent.release_pubkey, fetch SHA256SUMS.sig and refuse an unsigned, badly signed or unreadable-pin release before unpacking (tests/test_update_script.py).
+- **A write to skills/ goes through the confirm door:** the operator's skill files are no longer replaceable by a tool write with no question (tests/test_security_surface.py).
+
 ## [1.1.49] - 2026-10-25
 
 ### Added
