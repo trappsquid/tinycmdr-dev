@@ -4249,6 +4249,17 @@
       },
       "detail": "read_file and search_files now refuse or skip .env, SSH, AWS, key and credential paths, while shell and execute_code refuse those reads and environment dumps, so a page cannot talk the model into printing the bot's tokens.",
       "gate": "tests/test_security_surface.py grades the secret path and command checks, a normal note still readable, and search_files skipping the secret file."
+    },
+    {
+      "id": "lan-access-is-an-approval",
+      "title": "a private destination asks for approval, not a config key",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "d5ba3be",
+        "expect": "untagged"
+      },
+      "detail": "A private or local destination was a config key the user had to learn, and its refusal printed the key name; it is now a confirm-tier approval - yes, no, session or always - asked in the page, chat or console, with always kept per address in confirm-allow.json beside the other approvals, and web.admin_hosts is removed.",
+      "gate": "tests/test_web_boundary.py grades the question, the per-address grant, the refusal and the command allow-all not opening the network; tests/test_search_surface.py grades a private redirect hop; tests/test_guard_battery.py grades the store."
     }
   ]
 }

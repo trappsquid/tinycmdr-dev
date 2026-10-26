@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.52] - 2026-10-26
+
+### Changed
+- **A private or local destination asks for approval, like every guarded command:** the page, chat and console show the same yes/no/session/always question, "always" is kept per address in `confirm-allow.json`, the `web.admin_hosts` key is removed, and a command allow-all does not open the network (tests/test_web_boundary.py, tests/test_search_surface.py, tests/test_guard_battery.py).
+
 ## [1.1.51] - 2026-10-25
 
 ### Changed
