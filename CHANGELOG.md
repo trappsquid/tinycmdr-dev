@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.51] - 2026-10-25
+
+### Changed
+- **The web policy is about destinations, not page taint:** a public page link is read, a write or shell command is judged by its own guards instead of being refused because a page was read, and a private or local host or CIDR is reachable only when `web.admin_hosts` names it, including at every redirect hop (tests/test_web_boundary.py, tests/test_search_surface.py).
+
+### Added
+- **The model cannot read credential files or environment dumps:** `read_file` and `search_files` skip `.env`, SSH/AWS/key/credential paths, while `shell` and `execute_code` refuse those reads and environment dumps, so a page cannot talk the model into printing the bot's tokens (tests/test_security_surface.py).
+
 ## [1.1.50] - 2026-10-25
 
 ### Changed

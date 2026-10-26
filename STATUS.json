@@ -4229,15 +4229,26 @@
       "gate": "tests/test_web_boundary.py grades a public page link read, a private page link refused, a shell command refused, and the operator's exact private URL and command allowed."
     },
     {
-      "id": "web-scoped-lan-approval",
-      "title": "an operator-named LAN host can be administered for the conversation",
+      "id": "web-destination-capability",
+      "title": "a page read is not an action; private destinations are configured",
       "state": "unreleased",
       "anchor": {
-        "commit": "b09f3bc",
+        "commit": "87e6575",
         "expect": "untagged"
       },
-      "detail": "The web gate refused every page-derived private action, which also blocked an operator-requested LAN admin workflow; an operator message that names a private URL with an approval word now scopes that one host for the conversation, so a page link and a simple curl/wget to it are allowed, while every other private host, a pipe, a download, a data-file upload, a write, a credential read or a delegation is still refused, and /new or the 24-hour TTL clears it.",
-      "gate": "tests/test_web_boundary.py grades the scoped host, another private host refused, pipe/upload/output refused, and /new clearing the scope."
+      "detail": "The 1.1.50 gate refused any write or command after a page read and blocked every page-derived private link, which broke normal shell and LAN work; a public page link is now read, a write or command is judged by its own guards, and a private or local host or CIDR is reachable only when web.admin_hosts names it, including at every redirect hop, with no approval prompt or keyword scope.",
+      "gate": "tests/test_web_boundary.py grades public reads, private/admin/CIDR destinations, shell and redirect policy and a normal write after a read; tests/test_search_surface.py grades the redirect hops."
+    },
+    {
+      "id": "secret-read-guard",
+      "title": "the model cannot read credential files or environment dumps",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "87e6575",
+        "expect": "untagged"
+      },
+      "detail": "read_file and search_files now refuse or skip .env, SSH, AWS, key and credential paths, while shell and execute_code refuse those reads and environment dumps, so a page cannot talk the model into printing the bot's tokens.",
+      "gate": "tests/test_security_surface.py grades the secret path and command checks, a normal note still readable, and search_files skipping the secret file."
     }
   ]
 }
