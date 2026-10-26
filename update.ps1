@@ -154,7 +154,7 @@ try {
     $HostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.json",
                    "field-notes.md", "atlas.md", "experiments.jsonl", "web-sessions.json",
                    "state.json", "jobs.json", "tasks.json", "tasks.journal.jsonl",
-                   "tasks.md", "confirm-allow.json", "web-allow.json", "tools-provenance.json", "theme.toml",
+                   "tasks.md", "confirm-allow.json", "tools-provenance.json", "theme.toml",
                    "tinycmdr.log", "tinycmdr.lock")
     $HostDirs = @("tools", "skills", "sessions", "snapshots", "logs", "spill", "venv",
                   "dist", ".git", "tmp")

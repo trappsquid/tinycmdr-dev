@@ -41,7 +41,6 @@ notes-archive.md
 notes-authored.json
 # the confirm gate's approvals (per-host: what the operator told it to stop asking)
 confirm-allow.json
-web-allow.json
 tests/eval-runs/
 snapshots/
 tmp/

@@ -71,8 +71,6 @@ description points at):
     user_text    the operator's own words for this turn; the trust root a tool compares against
     capabilities the run's ceiling: read, write or full (a delegated child defaults to read)
     web          this run's untrusted-content state (the ledger the web gate reads; do not mutate)
-    web_confirm_cb  a fresh yes/no for an action that follows untrusted content (None when
-                 the lane cannot ask; deliberately not the permanent confirm allowlist)
     send_file    hand the operator a file (None when the lane has no door)
     render_ui    draw a card (A2UI) when the lane has a renderer
     tool_images  True when this build attaches {"text":..., "images":[...]} returns to the model

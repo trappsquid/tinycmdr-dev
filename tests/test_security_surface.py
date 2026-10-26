@@ -189,14 +189,7 @@ finally:
     fb.os.environ.clear()
     fb.os.environ.update(saved_env)
 
-# ---------------------------------------------------------- approval trust roots
-check("a write to the web allowlist is refused",
-      fb._surface_write_gate(str(fb.WEB_ALLOW_FILE), "test", {})
-      .startswith("REFUSED"), "the gate must not let the model grant itself always")
-check("a shell redirect to the web allowlist is refused",
-      fb._approval_store_write("echo '{}' > web-allow.json") is not None)
-check("a python write to the web allowlist is refused",
-      fb._approval_store_write("open('web-allow.json', 'w').write('{}')") is not None)
+# ---------------------------------------------------------- approval trust root and skills
 skills_calls = []
 fb._surface_write_gate(str(fb.BASE_DIR / "skills" / "new.md"), "test",
                        {"confirm_cb": lambda q: (skills_calls.append(q), False)[1]})
