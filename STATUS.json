@@ -4227,6 +4227,17 @@
       },
       "detail": "The web gate had an approval prompt whose yes authorized a page-derived action, and a user who clicked without reading executed it; a public page-supplied link is now read and fenced like any other page, while a private or local page link, a shell command, a write, a credential read or a delegation after untrusted content is refused outright, with the operator's exact URL or command in their next message the only door.",
       "gate": "tests/test_web_boundary.py grades a public page link read, a private page link refused, a shell command refused, and the operator's exact private URL and command allowed."
+    },
+    {
+      "id": "web-scoped-lan-approval",
+      "title": "an operator-named LAN host can be administered for the conversation",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "b09f3bc",
+        "expect": "untagged"
+      },
+      "detail": "The web gate refused every page-derived private action, which also blocked an operator-requested LAN admin workflow; an operator message that names a private URL with an approval word now scopes that one host for the conversation, so a page link and a simple curl/wget to it are allowed, while every other private host, a pipe, a download, a data-file upload, a write, a credential read or a delegation is still refused, and /new or the 24-hour TTL clears it.",
+      "gate": "tests/test_web_boundary.py grades the scoped host, another private host refused, pipe/upload/output refused, and /new clearing the scope."
     }
   ]
 }
