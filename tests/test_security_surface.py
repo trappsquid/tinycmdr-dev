@@ -189,6 +189,34 @@ finally:
     fb.os.environ.clear()
     fb.os.environ.update(saved_env)
 
+# ---------------------------------------------------------- secret read guards
+check("a .env path is a secret", fb._secret_path(".env"))
+check("a key path is a secret", fb._secret_path("/Users/x/.ssh/id_ed25519"))
+check("a credentials file is a secret", fb._secret_path("credentials.json"))
+check("config.json is not a secret file", not fb._secret_path("config.json"))
+check("an ordinary note is not a secret file", not fb._secret_path("notes.md"))
+check("a shell read of .env is refused",
+      fb._secret_command_refusal("cat .env") is not None)
+check("an environment dump is refused",
+      fb._secret_command_refusal("printenv") is not None)
+check("a code read of os.environ is refused",
+      fb._secret_command_refusal("import os; print(os.environ)") is not None)
+check("an ordinary shell command is not refused",
+      fb._secret_command_refusal("ls -la") is None)
+check("reading config.json is not refused",
+      fb._secret_command_refusal("cat config.json") is None)
+secret_file = fb.BASE_DIR / ".env"
+secret_file.write_text("TINYCMDR_TEST_SECRET=do-not-read\n", encoding="utf-8")
+note_file = fb.BASE_DIR / "notes.md"
+note_file.write_text("an ordinary note\n", encoding="utf-8")
+check("read_file refuses .env",
+      fb.tool_read_file({"path": ".env"}, {}).startswith("REFUSED"))
+check("read_file still reads an ordinary note",
+      "ordinary note" in fb.tool_read_file({"path": "notes.md"}, {}))
+check("search_files skips the secret file",
+      "TINYCMDR_TEST_SECRET" not in fb.tool_search_files(
+          {"path": ".", "content": "TINYCMDR_TEST_SECRET"}, {}))
+
 # ---------------------------------------------------------- approval trust root and skills
 skills_calls = []
 fb._surface_write_gate(str(fb.BASE_DIR / "skills" / "new.md"), "test",

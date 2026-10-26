@@ -141,6 +141,8 @@
     "enabled": true,
     "host": "127.0.0.1",
     "port": 8790,
+    "_comment_admin_hosts": "Private/LAN hosts or CIDRs the model may reach through fetch_url or a shell command. Empty by default: a page cannot point the model at the LAN or this box. The operator names a target here, for example [\"192.0.2.10\", \"192.0.2.0/24\"]; public web reads do not need an entry.",
+    "admin_hosts": [],
     "a2a_policy": "full"
   },
   "search": {
