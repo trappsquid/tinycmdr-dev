@@ -4147,6 +4147,86 @@
       },
       "detail": "A delegated child inherited the parent's whole surface including shell, so delegate_task now takes capabilities read/write/full with read as the default and the dispatch refuses a child's write or exec tool before any handler runs, while fetch_url and web_search remain available to a read-only child.",
       "gate": "tests/test_security_surface.py grades the read, write, full and unknown ceilings and the delegation argument; tests/test_delegation.py grades the delegation path."
+    },
+    {
+      "id": "web-approval-scopes",
+      "title": "a web safety answer can cover one exact action for the session or for ever",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4e9a4c7",
+        "expect": "untagged"
+      },
+      "detail": "The web door had only yes and no, so a repeated link or command was an interrogation and a typed always was read as a refusal; yes, session and always now name an exact tool-and-args action, session lives in the conversation ledger and always in host-owned web-allow.json, a different action still asks, and a model write to the allowlist is refused.",
+      "gate": "tests/test_web_boundary.py grades the four answers, the exact-action session and always stores, the reload and the still-asks case; tests/test_security_surface.py grades the trust-root refusal."
+    },
+    {
+      "id": "mcp-child-environment",
+      "title": "an MCP server no longer inherits the harness's credentials",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4e9a4c7",
+        "expect": "untagged"
+      },
+      "detail": "Every stdio MCP child started with dict(os.environ), so one npm package could read TINYCMDR_WEB_TOKEN and every other token the bot could see; a child now gets PATH, HOME, locale, the Windows shell variables and its own config.env, and nothing else.",
+      "gate": "tests/test_security_surface.py grades that PATH and an explicit setting survive and that harness tokens and an AWS secret do not."
+    },
+    {
+      "id": "standalone-updater-signature",
+      "title": "the standalone updaters verify the release signature too",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4e9a4c7",
+        "expect": "untagged"
+      },
+      "detail": "The in-app updater verified SHA256SUMS.sig but update.sh and update.ps1 checked only the digest, so the repair door was a signature bypass on a pinned host; both now read agent.release_pubkey from config.json and refuse an unsigned, bad-signed or unreadable-pin release before unpacking.",
+      "gate": "tests/test_update_script.py serves a fake release with a bad signature and grades that a pinned install refuses it and stays on its old build."
+    },
+    {
+      "id": "skills-write-confirm",
+      "title": "a write to skills/ goes through the confirm door",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4e9a4c7",
+        "expect": "untagged"
+      },
+      "detail": "The file-write gate asked for memory/ but not skills/, so a write_file could replace the operator's skill files with no question; skills/ now takes the same confirm question as memory/ (tools/ is still the create_tool door).",
+      "gate": "tests/test_security_surface.py grades that a skills write reaches the confirm callback."
+    },
+    {
+      "id": "web-lan-cleartext",
+      "title": "the page can still be bound to the LAN without TLS",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "web.host 0.0.0.0 serves the page over cleartext, so the page token and the conversation cross the LAN in the clear; the code has no TLS listener, and the safe form is a loopback bind with an SSH tunnel or a TLS reverse proxy, which is the operator's network decision."
+    },
+    {
+      "id": "launchd-dedicated-user",
+      "title": "the launchd agent runs as the operator's admin account",
+      "state": "open",
+      "anchor": {
+        "file": "install/com.tinycmdr.agent.plist"
+      },
+      "detail": "The macOS agent runs in the operator's GUI domain as the operator's admin account, so a compromise of the bot has that user's file access; a dedicated service account is a deployment change, not something an in-place update can choose."
+    },
+    {
+      "id": "page-auth-rate-limit",
+      "title": "the page's own auth failures are logged but not rate-limited",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "Token, cookie, Host and Origin refusals leave one structured line and a window counter, but the page gate does not lock a peer out, so repeated guesses still reach the handler up to the connection cap; the A2A door has its own bucket."
+    },
+    {
+      "id": "execute-code-isolation",
+      "title": "execute_code runs in the harness's own process",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "execute_code is a Python snippet in the bot's process, so it can reach the same memory and credentials the bot can; a real sandbox is a separate design, not a flag on the current executor."
     }
   ]
 }
