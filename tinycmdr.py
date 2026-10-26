@@ -12592,6 +12592,33 @@ def _web_host(url):
         return ""
 
 
+def _web_private_url(url):
+    """A page-supplied destination that is this box or a private network.
+
+    Reading a page's public link is the browsing job; reading a page's link back into
+    localhost, the LAN, link-local or a cloud metadata address is how a read becomes an
+    SSRF probe. The operator's own message may still name a private URL explicitly.
+    """
+    try:
+        host = (urllib.parse.urlsplit(str(url or "")).hostname or "").strip("[]").lower()
+    except ValueError:
+        return True
+    if not host:
+        return True
+    if host in ("localhost", "localhost.localdomain", "ip6-localhost",
+                "metadata.google.internal"):
+        return True
+    if host.endswith((".local", ".lan", ".internal", ".home", ".localhost",
+                      ".localdomain")):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
 def _web_operator_urls(text):
     """Destinations the operator's own message supplied - the only free egress."""
     body = str(text or "")
@@ -12956,30 +12983,17 @@ def _web_gate(name, args, ctx):
         urls = _web_args_urls(args)
         if urls and all(_web_operator_supplied(url, state) for url in urls):
             return None
+        for url in urls:
+            if _web_private_url(url):
+                return _web_deny("fetch %s" % _web_label(url),
+                                 "a page-supplied destination is private or local", [])
+        # Public links are reads: the browsing job. The returned page is fenced and
+        # recorded like any other; only actions on it are gated.
+        return None
     hits = _web_hits(blob, state)
     quarantined = bool(state.get("quarantined"))
     subject = why = ""
-    if name == "fetch_url":
-        urls = _web_args_urls(args)
-        bad = []
-        for url in urls:
-            url_hits = _web_hits(url, state)
-            if url_hits:
-                bad.append((url, url_hits,
-                            "the URL or the code in it came from untrusted content"))
-            elif quarantined and not _web_allowed(url, state):
-                bad.append((url, [],
-                            "this destination was not supplied by the operator or a "
-                            "search result"))
-        if bad:
-            url, url_hits, why = bad[0]
-            subject = "fetch %s" % _web_label(url)
-            source = _web_hit_source(url_hits)
-            if source:
-                why += " (%s)" % _web_label(source)
-            if len(bad) > 1:
-                why += "; %d of the %d URLs are affected" % (len(bad), len(urls))
-    elif name == "web_search":
+    if name == "web_search":
         if hits:
             subject = "a web search"
             why = "the query carries a value from untrusted content"
