@@ -4149,17 +4149,6 @@
       "gate": "tests/test_security_surface.py grades the read, write, full and unknown ceilings and the delegation argument; tests/test_delegation.py grades the delegation path."
     },
     {
-      "id": "web-approval-scopes",
-      "title": "a web safety answer can cover one exact action for the session or for ever",
-      "state": "unreleased",
-      "anchor": {
-        "commit": "4e9a4c7",
-        "expect": "untagged"
-      },
-      "detail": "The web door had only yes and no, so a repeated link or command was an interrogation and a typed always was read as a refusal; yes, session and always now name an exact tool-and-args action, session lives in the conversation ledger and always in host-owned web-allow.json, a different action still asks, and a model write to the allowlist is refused.",
-      "gate": "tests/test_web_boundary.py grades the four answers, the exact-action session and always stores, the reload and the still-asks case; tests/test_security_surface.py grades the trust-root refusal."
-    },
-    {
       "id": "mcp-child-environment",
       "title": "an MCP server no longer inherits the harness's credentials",
       "state": "unreleased",
@@ -4227,6 +4216,17 @@
         "file": "tinycmdr.py"
       },
       "detail": "execute_code is a Python snippet in the bot's process, so it can reach the same memory and credentials the bot can; a real sandbox is a separate design, not a flag on the current executor."
+    },
+    {
+      "id": "web-derived-actions-denied",
+      "title": "a page-derived action is refused, not approved",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4e109b5",
+        "expect": "untagged"
+      },
+      "detail": "The web gate had an approval prompt whose yes authorized a page-derived URL, command, write or delegation, and a user who clicked without reading executed it; the gate now refuses those actions outright, no approval store or click-to-approve exists, and the only door is the operator's own next message naming the exact URL or command.",
+      "gate": "tests/test_web_boundary.py grades a confirmation door that always says yes still denied, the operator's exact URL and command allowed, and a page command the operator did not type refused."
     }
   ]
 }
