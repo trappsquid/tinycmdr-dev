@@ -4151,10 +4151,10 @@
     {
       "id": "mcp-child-environment",
       "title": "an MCP server no longer inherits the harness's credentials",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4e9a4c7",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Every stdio MCP child started with dict(os.environ), so one npm package could read TINYCMDR_WEB_TOKEN and every other token the bot could see; a child now gets PATH, HOME, locale, the Windows shell variables and its own config.env, and nothing else.",
       "gate": "tests/test_security_surface.py grades that PATH and an explicit setting survive and that harness tokens and an AWS secret do not."
@@ -4162,10 +4162,10 @@
     {
       "id": "standalone-updater-signature",
       "title": "the standalone updaters verify the release signature too",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4e9a4c7",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The in-app updater verified SHA256SUMS.sig but update.sh and update.ps1 checked only the digest, so the repair door was a signature bypass on a pinned host; both now read agent.release_pubkey from config.json and refuse an unsigned, bad-signed or unreadable-pin release before unpacking.",
       "gate": "tests/test_update_script.py serves a fake release with a bad signature and grades that a pinned install refuses it and stays on its old build."
@@ -4173,10 +4173,10 @@
     {
       "id": "skills-write-confirm",
       "title": "a write to skills/ goes through the confirm door",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4e9a4c7",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The file-write gate asked for memory/ but not skills/, so a write_file could replace the operator's skill files with no question; skills/ now takes the same confirm question as memory/ (tools/ is still the create_tool door).",
       "gate": "tests/test_security_surface.py grades that a skills write reaches the confirm callback."
@@ -4220,10 +4220,10 @@
     {
       "id": "web-derived-actions-denied",
       "title": "a page link is read; an action on it is refused",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "6c92d27",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The web gate had an approval prompt whose yes authorized a page-derived action, and a user who clicked without reading executed it; a public page-supplied link is now read and fenced like any other page, while a private or local page link, a shell command, a write, a credential read or a delegation after untrusted content is refused outright, with the operator's exact URL or command in their next message the only door.",
       "gate": "tests/test_web_boundary.py grades a public page link read, a private page link refused, a shell command refused, and the operator's exact private URL and command allowed."
