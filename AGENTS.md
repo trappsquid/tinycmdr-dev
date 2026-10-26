@@ -69,8 +69,10 @@ internal name, edit a setting, build a command or paste a snippet before it work
 needs a decision, it asks in the surface they are already using, offers named choices, and remembers
 the answer; a command may exist to automate a decision already made, never as the only door to one.
 A refusal that names a setting, a flag or a command is a bug in the refusal, not a boundary: it
-should say what happened and how to continue in the product. `web.admin_hosts` is the worked
-example - granted by one question in the page or chat, not by a key anybody has to learn.
+should say what happened and how to continue in the product. Reuse the one approval door - a
+private network destination is the worked example: the same yes/no/session/always question, and the
+same store, as a guarded command. A second question format or a new config key for a decision the
+operator already knows how to make is the bad habit this section exists to stop.
 
 ## Flow
 

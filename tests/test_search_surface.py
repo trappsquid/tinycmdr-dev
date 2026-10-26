@@ -528,8 +528,9 @@ failure to answer.
     check("and the flag does not break a LAN fetch", not out.startswith("BLOCKED"), out[:80])
 
     # ---------------------------------------------- a redirect stays under the same gate
-    _saved_admin_hosts = list(fb.CONFIG["web"].get("admin_hosts") or [])
-    fb.CONFIG["web"]["admin_hosts"] = ["127.0.0.1"]
+    # A private hop is a confirm-tier action; this suite has no human, so it records the
+    # operator's standing approval for the one address, exactly as an "always" answer does.
+    fb.confirm_allow("always", subject="lan:127.0.0.1")
     search_config([{"kind": "anysearch", "url": REMOTE}], False)
     _Stub.calls.clear()
     out = fb.tool_fetch_url({"url": BASE_URL + "/goto-page"}, {})
@@ -547,7 +548,7 @@ failure to answer.
     _Stub.calls.clear()
     out = fb.tool_fetch_url({"url": BASE_URL + "/goto-page"}, {})
     check("the flag lets a redirect run as usual", "Stub SearxNG hit" in out, out[:120])
-    fb.CONFIG["web"]["admin_hosts"] = _saved_admin_hosts
+    fb.confirm_allow("clear")
 
     # ---------------------------------------- a local fetch goes direct, not via a proxy
     # With http_proxy set, requests sent even http://127.0.0.1/ through the proxy (measured

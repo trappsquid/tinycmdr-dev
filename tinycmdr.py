@@ -438,10 +438,9 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "host": "127.0.0.1",
         "port": 8790,
-        # Exact hosts or CIDRs the model may reach on a private/LAN network. Empty by
-        # default: a page cannot point the model at the LAN, and an operator who wants
-        # LAN administration names the target here rather than answering a prompt.
-        "admin_hosts": [],
+        # No key for the local network: a private destination is a confirm-tier action,
+        # asked once in the lane the operator reads, and "always" stores that address in
+        # confirm-allow.json with the rest of the approvals.
         # The A2A door (Agent2Agent v1.0) rides the page: an AgentCard at
         # /.well-known/agent-card.json and JSON-RPC on POST /a2a exist whenever the
         # page serves, with the page token as a Bearer on /a2a. There is no separate
@@ -10998,6 +10997,10 @@ def steering_gap_note():
 # The per-command question is still the default; these are the ways OUT of being asked.
 CONFIRM_ALLOW_FILE = BASE_DIR / "confirm-allow.json"
 _CONFIRM_SESSION_ALLOW = set()
+# Per-thing session grants, for a confirmation that is about ONE destination rather than
+# the command tier: (session_key, subject). The network question uses this so "session"
+# means this address in this conversation, not every confirm-pattern command as well.
+_CONFIRM_SUBJECT_SESSION = set()
 # The gate's answers, as words. The options are four short ones - yes, no,
 # session, always - because the first cut made the operator retype a sentence
 # ("yes, all commands this session") to say one word (operator, 2026-10-02).
@@ -11033,14 +11036,31 @@ def _confirm_allow_read():
     return d if isinstance(d, dict) else {}
 
 
-def confirm_preapproved(session_key):
+def confirm_preapproved(session_key, subject=None):
     """(True, reason) when the gate is already approved, else (False, "").
 
     The reason NAMES THE SCOPE AND THE DATE: a later session used to read only
     "approved permanently" beside a command nobody could see, which reads like an ask
     that approved itself (reported 2026-10-06). "since" is stamped when the grant is
     written; a file from before that field says so instead of inventing a date.
+
+    `subject` is a per-thing grant - a private address, not the command tier. It has its
+    own record and its own session scope, and the permanent allow-all deliberately does
+    NOT cover it: answering "always" to a command must not quietly open this box's
+    network, and answering "always" to a network question must not approve every restart
+    command.
     """
+    if subject:
+        subj = str(subject).strip()
+        if session_key and (session_key, subj) in _CONFIRM_SUBJECT_SESSION:
+            return True, "approved for this session"
+        rows = _confirm_allow_read().get("subjects")
+        row = rows.get(subj) if isinstance(rows, dict) else None
+        if isinstance(row, dict):
+            since = str(row.get("since") or "").strip()
+            return True, ("approved permanently on %s" % since if since
+                          else "approved permanently (no date recorded)")
+        return False, ""
     if session_key and session_key in _CONFIRM_SESSION_ALLOW:
         return True, "approved for this session"
     d = _confirm_allow_read()
@@ -11052,29 +11072,46 @@ def confirm_preapproved(session_key):
 
 
 def confirm_allow_state():
-    return {"all": bool(_confirm_allow_read().get("all")),
-            "sessions": sorted(_CONFIRM_SESSION_ALLOW)}
+    d = _confirm_allow_read()
+    rows = d.get("subjects")
+    return {"all": bool(d.get("all")),
+            "sessions": sorted(_CONFIRM_SESSION_ALLOW),
+            "subjects": sorted(rows) if isinstance(rows, dict) else [],
+            "subject_sessions": sorted({subj for _sk, subj in _CONFIRM_SUBJECT_SESSION})}
 
 
-def confirm_allow(action, session_key=None):
+def confirm_allow(action, session_key=None, subject=None):
     """Grant or clear an approval. action: 'session' | 'always' | 'clear'.
 
     'always' is the permanent, never-ask-again answer: it is written to
-    confirm-allow.json (per-host state, gitignored) so it survives a restart.
-    'session' lives in this process only, keyed by the conversation. 'clear' wipes
-    both the file and every session of this process."""
+    confirm-allow.json (per-host state, gitignored) so it survives a restart. With a
+    `subject` the grant is for that one thing (a private address); without one it is the
+    command tier's allow-all. 'session' lives in this process only, keyed by the
+    conversation - and, with a subject, keyed by the pair. 'clear' wipes the file, every
+    session and every subject."""
     if action == "clear":
         _CONFIRM_SESSION_ALLOW.clear()
+        _CONFIRM_SUBJECT_SESSION.clear()
         atomic_write_text(CONFIRM_ALLOW_FILE, json.dumps({"all": False}, indent=2))
         return confirm_allow_state()
+    subj = str(subject or "").strip()
     if action == "session":
-        if session_key:
+        if subj:
+            _CONFIRM_SUBJECT_SESSION.add((str(session_key or ""), subj))
+        elif session_key:
             _CONFIRM_SESSION_ALLOW.add(session_key)
         return confirm_allow_state()
     d = _confirm_allow_read()
     if action == "always":
-        d["all"] = True
-        d.setdefault("since", time.strftime("%Y-%m-%d"))
+        if subj:
+            rows = d.get("subjects")
+            if not isinstance(rows, dict):
+                rows = {}
+            rows[subj] = {"since": time.strftime("%Y-%m-%d")}
+            d["subjects"] = rows
+        else:
+            d["all"] = True
+            d.setdefault("since", time.strftime("%Y-%m-%d"))
     atomic_write_text(CONFIRM_ALLOW_FILE, json.dumps(d, indent=2))
     return confirm_allow_state()
 
@@ -12822,40 +12859,18 @@ def _web_args_urls(args):
             if str(value or "").strip().lower().startswith(("http://", "https://"))]
 
 
-def _web_admin_host(host):
-    """True when the operator configured this private host in web.admin_hosts."""
-    want = str(host or "").strip().strip("[]").lower()
-    if not want:
-        return False
-    raw = (CONFIG.get("web") or {}).get("admin_hosts") or []
-    if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, (list, tuple)):
-        return False
-    for item in raw:
-        entry = str(item or "").strip().lower()
-        if not entry:
-            continue
-        if "/" in entry:
-            try:
-                if ipaddress.ip_address(want) in ipaddress.ip_network(entry, strict=False):
-                    return True
-            except ValueError:
-                continue
-        elif entry == want:
-            return True
-    return False
+# A private destination is an APPROVAL, not a setting: the same door, the same four
+# answers and the same store as a confirm-pattern command, with the address as the
+# subject. Answering "always" remembers that one address; it does not approve every
+# command, and a command allow-all does not open this box's network.
+def _web_lan_subject(host):
+    """The approval store's name for one private destination."""
+    return "lan:%s" % str(host or "").strip().strip("[]").lower()
 
 
-# The operator's answer is the one door to a private host. Editing web.admin_hosts by
-# hand - or typing a command that names it - was the only way, and the refusal printed a
-# config key at a user who had never been told it existed and had no way to answer. The
-# gate now ASKS, in the lane the operator is already reading, once per host: this
-# address, the whole local network, or no. The answer is saved in web.admin_hosts, so the
-# question is asked once and the model cannot answer it for them.
-_WEB_GRANT_ASKED = {}      # session key -> host -> {ok, why, entry, t}
-_WEB_GRANT_LOCK = threading.Lock()
-_WEB_GRANT_WAIT = 180      # seconds the run parks on the question
+def _web_host_approved(host, session_key=None):
+    """True when the operator already allowed this address, here or for ever."""
+    return confirm_preapproved(session_key, _web_lan_subject(host))[0]
 
 
 def _web_host_of_url(url):
@@ -12865,162 +12880,39 @@ def _web_host_of_url(url):
         return ""
 
 
-def _web_grant_network(host):
-    """The /24 around a private IPv4 host, or "" when there is no natural network."""
-    try:
-        ip = ipaddress.ip_address(str(host or "").strip("[]"))
-    except ValueError:
-        return ""
-    if ip.version != 4 or not ip.is_private or ip.is_loopback:
-        return ""
-    return str(ipaddress.ip_network("%s/24" % ip, strict=False))
+def _web_confirm_host(host, ctx):
+    """(True, "") when the operator allows this address, else (False, why).
 
-
-def _web_grant_choice(answer, options):
-    """Which option the operator's reply selects (0-based), or None.
-
-    A number is the selector; the option's own words work too, because a person who
-    copies "Yes - everything on ..." means that option, not the first one; "yes" is the
-    first and "no"/"stop" the last, the words someone types at a choice. Anything else
-    selects nothing, and selecting nothing is never a grant."""
-    text = " ".join(str(answer or "").split())
-    count = len(options)
-    if not text:
-        return None
-
-    def norm(value):
-        return " ".join(re.sub(r"[^a-z0-9/]+", " ", str(value).lower()).split())
-
-    want = norm(text)
-    for index, option in enumerate(options):
-        have = norm(option)
-        # A WORDS boundary, not a substring: "3" is inside "113", and matching it as
-        # text made the number 3 select the network option instead of "No".
-        if want and (want == have
-                     or re.search(r"\b%s\b" % re.escape(want), have)):
-            return index
-    match = re.match(r"^(?:option\s*)?(\d{1,2})\s*[.):\-]?\s*(.*)$", text, re.I)
-    if match and 1 <= int(match.group(1)) <= count:
-        return int(match.group(1)) - 1
-    low = text.lower()
-    if re.match(r"^(?:yes|yeah|yep|y|ok|okay|allow|allowed|sure)\b", low):
-        return 0
-    if re.search(r"\b(?:all|whole|network|subnet|everything|lan)\b", low):
-        return 1 if count > 2 else 0
-    if re.match(r"^(?:no|nope|n|deny|decline|stop|don't|dont)\b", low):
-        return count - 1
-    return None
-
-
-def _web_grant_remember(session_key, host, ok, why, entry=""):
-    with _WEB_GRANT_LOCK:
-        (_WEB_GRANT_ASKED.setdefault(str(session_key or ""), {})
-         )[host] = {"ok": bool(ok), "why": str(why or ""), "entry": entry,
-                    "t": time.time()}
-
-
-def _web_grant_seen(session_key, host):
-    with _WEB_GRANT_LOCK:
-        row = (_WEB_GRANT_ASKED.get(str(session_key or "")) or {}).get(host)
-        return dict(row) if isinstance(row, dict) else None
-
-
-def _web_grant_save(entry):
-    """Write one operator-approved host or CIDR into config.json. Error string or ""."""
-    raw, err = _config_raw()
-    if err:
-        return err
-    web = raw.get("web")
-    if not isinstance(web, dict):
-        web = raw["web"] = {}
-    rows = web.get("admin_hosts")
-    if isinstance(rows, str):
-        rows = [rows]
-    if not isinstance(rows, list):
-        rows = []
-    rows = [str(r).strip() for r in rows if str(r).strip()]
-    if entry not in rows:
-        rows.append(entry)
-    web["admin_hosts"] = rows
-    err = _config_write_raw(raw)
-    if err:
-        return err
-    _config_reload_live()
-    log.info("web admin host allowed by the operator: %s", entry)
-    return ""
-
-
-def _web_grant_tell(ctx, text):
-    try:
-        say = ((ctx or {}).get("report") or {}).get("say")
-        if callable(say):
-            say(text)
-    except Exception:                                        # noqa: BLE001
-        log.debug("web grant: could not tell the operator", exc_info=True)
-
-
-def _web_grant_ask(host, ctx):
-    """(True, entry) when the operator allows this private host, else (False, why).
-
-    One question per host per conversation: the first is the product, the second would
-    be an interrogation. A lane with nobody behind it - a job, a scheduled run, an A2A
-    caller, a script posting to /api/chat - gets a refusal that says so, with no wait.
+    The question goes through the one approval door - the same ask, the same four
+    answers (yes/no/session/always) and the same store as a confirm-pattern command -
+    with the address as the subject, so "always" remembers this address and nothing
+    else. A lane with nobody behind it gets no question and no access.
     """
     host = str(host or "").strip().strip("[]").lower()
     if not host:
         return False, "the destination could not be read"
-    key = str((ctx or {}).get("session_key") or "")
-    seen = _web_grant_seen(key, host)
-    if seen:
-        return bool(seen.get("ok")), str(seen.get("why") or "")
-    net = _web_grant_network(host)
-    options = ["Yes - just %s" % host]
-    if net:
-        options.append("Yes - everything on %s" % net)
-    options.append("No")
-    question = ("The bot tried to reach %s, which is on this box's local network. "
-                "Allow it? The answer is saved, so this is asked once." % host)
+    door = (ctx or {}).get("confirm_cb")
+    if not callable(door):
+        return False, "no operator is reachable on this lane"
     try:
-        status, answer = ask_operator(key, question, ctx=ctx, options=options,
-                                      timeout=_WEB_GRANT_WAIT)
+        allowed = door("reach %s, which is on this box's local network" % host,
+                       subject=_web_lan_subject(host))
+    except TypeError:
+        log.warning("web: this lane's confirmation door cannot scope a grant")
+        return False, "this lane cannot ask for an address"
     except Exception as e:                                   # noqa: BLE001
-        log.warning("web grant: could not ask the operator: %s", e)
-        status, answer = "unreadable", str(e)
-    if status != "answered":
-        why = {"stopped": "the run was stopped while the question was open",
-               "timeout": "no answer came within %ds" % _WEB_GRANT_WAIT,
-               "unreadable": "no operator is reachable on this lane"}.get(
-                   status, "the question could not be answered")
-        _web_grant_remember(key, host, False, why)
-        return False, why
-    chosen = _web_grant_choice(answer, options)
-    if chosen is None:
-        why = "the operator's answer did not allow it"
-        _web_grant_remember(key, host, False, why)
-        return False, why
-    if chosen == len(options) - 1:
-        why = "the operator said no"
-        _web_grant_remember(key, host, False, why)
-        return False, why
-    entry = net if (net and chosen == 1) else host
-    err = _web_grant_save(entry)
-    if err:
-        why = "the answer could not be saved (%s)" % err
-        _web_grant_remember(key, host, False, why)
-        return False, why
-    _web_grant_remember(key, host, True, "the operator allowed it", entry)
-    _web_grant_tell(ctx, "Allowed %s - saved, so the bot can reach it from now on."
-                    % entry)
-    return True, entry
+        log.warning("web: the approval door failed: %s", e)
+        return False, "the question could not be asked"
+    return (True, "") if allowed else (False, "the operator did not allow it")
 
 
-def _web_destination_allowed(url):
-    """A public URL is a read; a private/local one needs an explicit admin host."""
+def _web_destination_allowed(url, session_key=None):
+    """A public URL is a read; a private/local one needs the operator's approval."""
     try:
         host = (urllib.parse.urlsplit(str(url or "")).hostname or "").strip("[]")
     except ValueError:
         return False
-    if host and _web_admin_host(host):
+    if host and _web_host_approved(host, session_key):
         return True
     if _web_private_url(url):
         return False
@@ -13073,27 +12965,29 @@ def _web_deny(subject, why):
     log.info("web policy denied: %s - %s", _web_label(subject), why)
     return ("DECLINED: %s is a private or local destination on this box's network and "
             "the operator has not allowed it (%s). Nothing ran and nothing was fetched. "
-            "Do not route around it and do not edit the config: report it to the "
-            "operator." % (subject, why))
+            "Do not route around it: the operator's approval is the only door."
+            % (subject, why))
 
 
 def _web_gate(name, args, ctx):
-    """The destination capability decision, before any handler runs. None = proceed.
+    """The destination decision, before any handler runs. None = proceed.
 
-    An unlisted private host is not a dead end: the operator is asked, once, in the lane
-    they are already reading. At most two questions per call, so a page cannot turn a
-    command full of LAN addresses into an interrogation.
+    A private or local host is a confirm-tier action now: the operator is asked in the
+    lane they are already reading, with the four answers every other approval offers,
+    and "always" remembers that one address. At most two questions per call, so a page
+    cannot turn a command full of LAN addresses into an interrogation.
     """
+    session_key = (ctx or {}).get("session_key")
     if name == "fetch_url":
         asks = 0
         for url in _web_args_urls(args):
-            if _web_destination_allowed(url):
+            if _web_destination_allowed(url, session_key):
                 continue
             if asks >= 2:
                 return _web_deny("fetch %s" % _web_label(url),
                                  "more than two private destinations needed an answer "
                                  "in one call")
-            ok, why = _web_grant_ask(_web_host_of_url(url), ctx)
+            ok, why = _web_confirm_host(_web_host_of_url(url), ctx)
             asks += 1
             if not ok:
                 return _web_deny("fetch %s" % _web_label(url), why)
@@ -13104,13 +12998,13 @@ def _web_gate(name, args, ctx):
             return None
         asks = 0
         for host in _web_private_hosts(text):
-            if _web_admin_host(host):
+            if _web_host_approved(host, session_key):
                 continue
             if asks >= 2:
                 return _web_deny("a command touching %s" % host,
                                  "more than two private hosts needed an answer in one "
                                  "call")
-            ok, why = _web_grant_ask(host, ctx)
+            ok, why = _web_confirm_host(host, ctx)
             asks += 1
             if not ok:
                 return _web_deny("a command touching %s" % host, why)
@@ -14023,8 +13917,9 @@ def _fetch_page_raw(url, max_chars, ctx=None):
                     _next_host = (urllib.parse.urlsplit(nxt).hostname or "").strip("[]")
                 except ValueError:
                     _next_host = ""
-                if not _next_host or not _web_admin_host(_next_host):
-                    ok, why = _web_grant_ask(_next_host, ctx)
+                if not _next_host or not _web_host_approved(
+                        _next_host, (ctx or {}).get("session_key")):
+                    ok, why = _web_confirm_host(_next_host, ctx)
                     if not ok:
                         return ("BLOCKED: %s redirects to %s, a private/local "
                                 "destination the operator has not allowed (%s) - "
@@ -29106,8 +29001,8 @@ class RunReporter:
         return self.dest.ask(question, options, wait,
                              label or "this conversation", kind=kind)
 
-    def confirm(self, command, wait=300.0):
-        """A command matched agent.confirm_patterns, so ASK before running it.
+    def confirm(self, command, wait=300.0, subject=None):
+        """A command matched agent.confirm_patterns, or a run wants a private address.
 
         The shell tool treats "no confirm_cb" as no consent and returns DECLINED,
         so a lane that cannot ask cannot run that command at all - which is how a
@@ -29119,27 +29014,38 @@ class RunReporter:
         `agent.confirm_without_door` and nothing else: a preapproval answered a question
         THIS lane cannot ask, so it must not flip unattended runs (jobs, sub-agents,
         --once) to allow (A-2026-10-08-94).
+
+        `subject` names a per-thing grant - a private destination on this box's network.
+        The question, the four answers and the store are the command tier's, but
+        "always" remembers THAT address rather than every confirm-pattern command, and
+        the command tier's permanent allow-all does not open the network by itself.
         """
         if not self.dest.has_human:
             return CONFIG["agent"].get("confirm_without_door", "decline") == "allow"
-        ok_pre, why = confirm_preapproved(self.session_key)
+        subj = str(subject or "").strip()
+        shown = scrub(str(command or "").strip())[:120]
+        ok_pre, why = confirm_preapproved(self.session_key, subj or None)
         if ok_pre:
             # The line names WHAT is running and WHY it was not asked again: a bare
             # "approved permanently" beside no command read like an ask that approved
             # itself (reported 2026-10-06). The undo path rides along.
-            subject = scrub(str(command or "").strip())[:120]
             self._draw("system",
-                       f"✅ {why} - running: {subject}\n"
+                       f"✅ {why} - {'allowed: ' if subj else 'running: '}{shown}\n"
                        f"   (`tinycmdr approvals clear` asks again from now on)")
             return True
-        answer = self.ask(
-            "⚠️ This command matches a confirm-pattern. Allow it?\n"
-            f"```\n{str(command)[:800]}\n```\n"
-            "`session` = this conversation only · `always` = never ask again, for "
-            "EVERY confirm-pattern command on this box "
-            "(`tinycmdr approvals clear` to undo)",
-            list(_CONFIRM_CHOICES),
-            wait, "this conversation", kind="confirm")
+        if subj:
+            question = ("⚠️ The bot wants to %s. Allow it?\n"
+                        "`session` = this conversation only · `always` = never ask again "
+                        "for this address (`tinycmdr approvals clear` to undo)"
+                        % str(command)[:300])
+        else:
+            question = ("⚠️ This command matches a confirm-pattern. Allow it?\n"
+                        f"```\n{str(command)[:800]}\n```\n"
+                        "`session` = this conversation only · `always` = never ask again, "
+                        "for EVERY confirm-pattern command on this box "
+                        "(`tinycmdr approvals clear` to undo)")
+        answer = self.ask(question, list(_CONFIRM_CHOICES),
+                          wait, "this conversation", kind="confirm")
         if answer is None:
             if getattr(self.dest, "wait_outcome", "") == "stopped":
                 # The door already drew "stopped": a stop is not the operator's
@@ -29149,7 +29055,7 @@ class RunReporter:
             # Asked, and nobody said anything: that is a verdict, and the operator
             # finds out by reading it rather than by wondering why nothing ran.
             self._draw("system", f"⏱ no answer within {int(wait)}s — that "
-                                 f"command was skipped")
+                                 f"{'address' if subj else 'command'} was skipped")
             return False
         # The operator's answer is read by WORD, in every lane: a lane whose buttons
         # report the option they pressed and a terminal where the operator types both
@@ -29181,18 +29087,26 @@ class RunReporter:
             ok = True         # "always please", "just this session"
         if ok:
             if scope == "session":
-                confirm_allow("session", session_key=self.session_key)
+                confirm_allow("session", session_key=self.session_key,
+                              subject=subj or None)
                 self._draw("system", "✅ confirmed for this session — not asking again "
                                      "(`tinycmdr approvals clear` to undo)")
             elif scope == "always":
-                confirm_allow("always")
-                self._draw("system", "✅ confirmed permanently — every confirm-pattern "
-                                     "command, not asking again "
-                                     "(`tinycmdr approvals clear` to undo)")
+                confirm_allow("always", subject=subj or None)
+                if subj:
+                    self._draw("system", "✅ confirmed permanently for %s — not asking "
+                                         "again for this address "
+                                         "(`tinycmdr approvals clear` to undo)"
+                               % (subj.split(":", 1)[-1] or subj))
+                else:
+                    self._draw("system", "✅ confirmed permanently — every confirm-pattern "
+                                         "command, not asking again "
+                                         "(`tinycmdr approvals clear` to undo)")
             else:
                 self._draw("system", "✅ confirmed, running")
         else:
-            self._draw("system", "🚫 not confirmed - that command was skipped")
+            self._draw("system", "🚫 not confirmed - that %s was skipped"
+                       % ("address" if subj else "command"))
         return ok
 
     def finish(self, ok=True):
@@ -48185,18 +48099,17 @@ def _verb_doctor():
     if port_note:
         notes.append(port_note)
 
-    # The local network the bot may reach, in the words of the answer that allowed it.
-    # A grant nobody can see is a grant nobody can revoke; and an empty list used to be
-    # invisible until a run was refused, which is exactly the dead end this replaced.
-    _lan_raw = web.get("admin_hosts")
-    _lan = ([str(x).strip() for x in _lan_raw] if isinstance(_lan_raw, list)
-            else [str(_lan_raw).strip()] if isinstance(_lan_raw, str) else [])
-    _lan = [x for x in _lan if x]
+    # The private addresses the operator has allowed, read from the approval store so
+    # there is one place to see and clear them. A grant nobody can see is a grant nobody
+    # can revoke; before this, an empty allowlist was invisible until a run was refused.
+    _lan = [subj.split(":", 1)[-1] for subj in
+            (confirm_allow_state().get("subjects") or [])
+            if str(subj).startswith("lan:")]
     if _lan:
-        print("  local net : %s - allowed by your answer, the bot may reach these"
-              % ", ".join(_lan))
+        print("  local net : %s - allowed by your approval (`tinycmdr approvals clear` "
+              "revokes)" % ", ".join(_lan))
     else:
-        print("  local net : none yet - the bot asks you the first time it needs one")
+        print("  local net : none yet - a run that needs one asks you for approval")
 
     for mod, why in (("requests", "the HTTP layer"), ("croniter", "scheduling"),
                      ("mmpy_bot", "the Mattermost layer")):
@@ -49053,15 +48966,6 @@ def _verb_config(rest):
         unknown = _config_unknown_key(section, key, parts)
         if unknown:
             print(unknown, file=sys.stderr)
-            return 2
-        if section == "web" and key == "admin_hosts" and value not in ([], "", None):
-            # The operator's answer to the harness's own question is the one door: a
-            # setting the agent can write for itself is not a boundary, and a product
-            # whose only door is a key the user has to learn is not a product (operator,
-            # 2026-10-26). Clearing stays allowed: revocation narrows access.
-            print("web.admin_hosts is not a setting to type: when a run needs a local "
-                  "host the harness asks you and saves your answer. Clear every entry "
-                  "with `config set web.admin_hosts []`.", file=sys.stderr)
             return 2
         node[key] = value
     err = _config_write_raw(raw)
@@ -51634,16 +51538,20 @@ def _verb_approvals(rest):
     """`approvals [clear]`: what the confirm gate has been told to stop asking about.
 
     The operator's "session" and "always" answers live here, so the state they set is
-    visible and reversible without editing a file. Web-origin actions have no approval
-    store: the gate denies them outright."""
+    visible and reversible without editing a file. The same store holds the private
+    addresses a run was allowed to reach: a destination is a confirmation with a
+    subject, not a setting somewhere else."""
     if rest and rest[0] in ("clear", "reset", "off"):
         confirm_allow("clear")
-        print("cleared: the confirm gate asks again for every command.")
+        print("cleared: the confirm gate asks again for every command and address.")
         return 0
     st = confirm_allow_state()
+    subjects = [str(s).split(":", 1)[-1] if str(s).startswith("lan:") else str(s)
+                for s in st.get("subjects") or []]
     print("confirm gate allowlist: %s" % CONFIRM_ALLOW_FILE)
     print("  every command, for ever : %s" % ("yes" if st["all"] else "no"))
     print("  this session            : %s" % (", ".join(st["sessions"]) or "none"))
+    print("  private addresses       : %s" % (", ".join(subjects) or "none"))
     print("  clear with: tinycmdr approvals clear")
     return 0
 

@@ -197,9 +197,10 @@ tinycmdr web                            # print the tokenized link (checks the p
 | a plain message mid-run | steer: folded in at the next step |
 
 **Your local network:** the bot starts with no LAN access. The first time a task needs a
-device on your network — a router, a NAS, a printer — the page or chat shows one question:
-allow that address, the whole local network, or no. Pick one; the answer is saved in
-`web.admin_hosts` and that question is not asked again. `doctor` prints what is allowed.
+device on your network — a router, a NAS, a printer — it asks for approval the same way it
+does for a guarded command: yes, no, `session` (this conversation) or `always` (never ask
+again for that address). Answer in the page or in chat; nothing to configure.
+`tinycmdr approvals` shows what you allowed, and `approvals clear` revokes it.
 
 ## Extend
 

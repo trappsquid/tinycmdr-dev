@@ -786,7 +786,7 @@ def test_confirm_approval_scopes():
     finally:
         _logging.getLogger().removeHandler(_cap)
     check("a corrupt allowlist reads as empty, fails closed",
-          st == {"all": False, "sessions": []}, st)
+          st["all"] is False and st["sessions"] == [] and st["subjects"] == [], st)
     _kept = list(STAGE.glob("confirm-allow.json.damaged-*"))
     check("...the damaged file is KEPT beside itself", bool(_kept), _kept)
     check("...and the log says why",

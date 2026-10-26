@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                52,205 lines / 2.46 MB in ONE file, no package, no framework
+code                52,113 lines / 2.46 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -37,10 +37,10 @@ custom tools        4 example tools ship in ./tools/ (native .py, register-style
 chat commands       21 CLI verbs, 13 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               67 suites / 57,074 lines / 6,120 checks that need no model, plus a graded
+tests               67 suites / 57,074 lines / 6,119 checks that need no model, plus a graded
                     set of 22 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
-config              config.json, 6 blocks: llm 30, telegram 4, mattermost 6, web 5, search 3, agent 124
+config              config.json, 6 blocks: llm 30, telegram 4, mattermost 6, web 4, search 3, agent 124
                     (all of section 3 is configurable)
 state on disk       sessions/*.json (per channel), memory/ (OKF knowledge),
                     notes.md (legacy, still read), jobs.json (cron), uploads/, logs
@@ -246,13 +246,15 @@ blocked_patterns    regex blocklist before execution (shipped example blocks rm 
 confirm_patterns    optional chat yes/no gate for commands the operator picks
 tool_output caps    what a tool may inject back into the context
 redaction           keys/tokens kept out of argv by convention and by the tool wrappers
-lan destinations    none by default; the first LAN target asks once, with named choices
+lan destinations    a confirm-tier approval: yes/no/session/always, kept with the other
+                    approvals; a command allow-all does not open the network
 ```
 
-A private or local destination is a capability, not a taint: public page reads are free,
-and the first time a run needs a device on the operator's own network the page or chat asks
-one question - this address, the whole local network, or no - and saves the answer. The
-model cannot answer it for itself and no setting has to be found or typed.
+A private or local destination is a confirmation, not a setting: public page reads are
+free, and the first time a run needs a device on the operator's own network it asks the
+same question every guarded command asks - yes, no, this session, or always - and
+"always" remembers that one address in the approval store. The model cannot approve
+itself, no key has to be found, and the refusal never prints one.
 
 What that is not: a sandbox. There is no container, no seccomp, no capability drop, no per-tool
 permission model. The agent runs as the login user on the host, with that user's rights. The blocklist
@@ -502,7 +504,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 52,205-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 52,113-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -546,7 +548,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     measured by hand in section 4.1 - est_tokens as sent on
                           a clean unpack, plus the endpoint's own count when it
                           answers /tokenize; the command and both legs are there
-readability               52,205 lines, one file, no dependency tree to audit
+readability               52,113 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
