@@ -62,6 +62,16 @@ not authority.
   sentence per item. A rule stated here is the instruction; the incident behind it is not this
   file's business.
 
+## Design for the person using it
+
+The product is for someone who has never read this file. A feature may not require them to know an
+internal name, edit a setting, build a command or paste a snippet before it works. When the harness
+needs a decision, it asks in the surface they are already using, offers named choices, and remembers
+the answer; a command may exist to automate a decision already made, never as the only door to one.
+A refusal that names a setting, a flag or a command is a bug in the refusal, not a boundary: it
+should say what happened and how to continue in the product. `web.admin_hosts` is the worked
+example - granted by one question in the page or chat, not by a key anybody has to learn.
+
 ## Flow
 
 `git switch -c <topic>` -> edit -> `bash maintenance/batch.sh -m "scope: what it does"` (renders the

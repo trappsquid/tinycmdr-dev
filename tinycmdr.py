@@ -12847,6 +12847,173 @@ def _web_admin_host(host):
     return False
 
 
+# The operator's answer is the one door to a private host. Editing web.admin_hosts by
+# hand - or typing a command that names it - was the only way, and the refusal printed a
+# config key at a user who had never been told it existed and had no way to answer. The
+# gate now ASKS, in the lane the operator is already reading, once per host: this
+# address, the whole local network, or no. The answer is saved in web.admin_hosts, so the
+# question is asked once and the model cannot answer it for them.
+_WEB_GRANT_ASKED = {}      # session key -> host -> {ok, why, entry, t}
+_WEB_GRANT_LOCK = threading.Lock()
+_WEB_GRANT_WAIT = 180      # seconds the run parks on the question
+
+
+def _web_host_of_url(url):
+    try:
+        return (urllib.parse.urlsplit(str(url or "")).hostname or "").strip("[]")
+    except ValueError:
+        return ""
+
+
+def _web_grant_network(host):
+    """The /24 around a private IPv4 host, or "" when there is no natural network."""
+    try:
+        ip = ipaddress.ip_address(str(host or "").strip("[]"))
+    except ValueError:
+        return ""
+    if ip.version != 4 or not ip.is_private or ip.is_loopback:
+        return ""
+    return str(ipaddress.ip_network("%s/24" % ip, strict=False))
+
+
+def _web_grant_choice(answer, options):
+    """Which option the operator's reply selects (0-based), or None.
+
+    A number is the selector; the option's own words work too, because a person who
+    copies "Yes - everything on ..." means that option, not the first one; "yes" is the
+    first and "no"/"stop" the last, the words someone types at a choice. Anything else
+    selects nothing, and selecting nothing is never a grant."""
+    text = " ".join(str(answer or "").split())
+    count = len(options)
+    if not text:
+        return None
+
+    def norm(value):
+        return " ".join(re.sub(r"[^a-z0-9/]+", " ", str(value).lower()).split())
+
+    want = norm(text)
+    for index, option in enumerate(options):
+        have = norm(option)
+        # A WORDS boundary, not a substring: "3" is inside "113", and matching it as
+        # text made the number 3 select the network option instead of "No".
+        if want and (want == have
+                     or re.search(r"\b%s\b" % re.escape(want), have)):
+            return index
+    match = re.match(r"^(?:option\s*)?(\d{1,2})\s*[.):\-]?\s*(.*)$", text, re.I)
+    if match and 1 <= int(match.group(1)) <= count:
+        return int(match.group(1)) - 1
+    low = text.lower()
+    if re.match(r"^(?:yes|yeah|yep|y|ok|okay|allow|allowed|sure)\b", low):
+        return 0
+    if re.search(r"\b(?:all|whole|network|subnet|everything|lan)\b", low):
+        return 1 if count > 2 else 0
+    if re.match(r"^(?:no|nope|n|deny|decline|stop|don't|dont)\b", low):
+        return count - 1
+    return None
+
+
+def _web_grant_remember(session_key, host, ok, why, entry=""):
+    with _WEB_GRANT_LOCK:
+        (_WEB_GRANT_ASKED.setdefault(str(session_key or ""), {})
+         )[host] = {"ok": bool(ok), "why": str(why or ""), "entry": entry,
+                    "t": time.time()}
+
+
+def _web_grant_seen(session_key, host):
+    with _WEB_GRANT_LOCK:
+        row = (_WEB_GRANT_ASKED.get(str(session_key or "")) or {}).get(host)
+        return dict(row) if isinstance(row, dict) else None
+
+
+def _web_grant_save(entry):
+    """Write one operator-approved host or CIDR into config.json. Error string or ""."""
+    raw, err = _config_raw()
+    if err:
+        return err
+    web = raw.get("web")
+    if not isinstance(web, dict):
+        web = raw["web"] = {}
+    rows = web.get("admin_hosts")
+    if isinstance(rows, str):
+        rows = [rows]
+    if not isinstance(rows, list):
+        rows = []
+    rows = [str(r).strip() for r in rows if str(r).strip()]
+    if entry not in rows:
+        rows.append(entry)
+    web["admin_hosts"] = rows
+    err = _config_write_raw(raw)
+    if err:
+        return err
+    _config_reload_live()
+    log.info("web admin host allowed by the operator: %s", entry)
+    return ""
+
+
+def _web_grant_tell(ctx, text):
+    try:
+        say = ((ctx or {}).get("report") or {}).get("say")
+        if callable(say):
+            say(text)
+    except Exception:                                        # noqa: BLE001
+        log.debug("web grant: could not tell the operator", exc_info=True)
+
+
+def _web_grant_ask(host, ctx):
+    """(True, entry) when the operator allows this private host, else (False, why).
+
+    One question per host per conversation: the first is the product, the second would
+    be an interrogation. A lane with nobody behind it - a job, a scheduled run, an A2A
+    caller, a script posting to /api/chat - gets a refusal that says so, with no wait.
+    """
+    host = str(host or "").strip().strip("[]").lower()
+    if not host:
+        return False, "the destination could not be read"
+    key = str((ctx or {}).get("session_key") or "")
+    seen = _web_grant_seen(key, host)
+    if seen:
+        return bool(seen.get("ok")), str(seen.get("why") or "")
+    net = _web_grant_network(host)
+    options = ["Yes - just %s" % host]
+    if net:
+        options.append("Yes - everything on %s" % net)
+    options.append("No")
+    question = ("The bot tried to reach %s, which is on this box's local network. "
+                "Allow it? The answer is saved, so this is asked once." % host)
+    try:
+        status, answer = ask_operator(key, question, ctx=ctx, options=options,
+                                      timeout=_WEB_GRANT_WAIT)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("web grant: could not ask the operator: %s", e)
+        status, answer = "unreadable", str(e)
+    if status != "answered":
+        why = {"stopped": "the run was stopped while the question was open",
+               "timeout": "no answer came within %ds" % _WEB_GRANT_WAIT,
+               "unreadable": "no operator is reachable on this lane"}.get(
+                   status, "the question could not be answered")
+        _web_grant_remember(key, host, False, why)
+        return False, why
+    chosen = _web_grant_choice(answer, options)
+    if chosen is None:
+        why = "the operator's answer did not allow it"
+        _web_grant_remember(key, host, False, why)
+        return False, why
+    if chosen == len(options) - 1:
+        why = "the operator said no"
+        _web_grant_remember(key, host, False, why)
+        return False, why
+    entry = net if (net and chosen == 1) else host
+    err = _web_grant_save(entry)
+    if err:
+        why = "the answer could not be saved (%s)" % err
+        _web_grant_remember(key, host, False, why)
+        return False, why
+    _web_grant_remember(key, host, True, "the operator allowed it", entry)
+    _web_grant_tell(ctx, "Allowed %s - saved, so the bot can reach it from now on."
+                    % entry)
+    return True, entry
+
+
 def _web_destination_allowed(url):
     """A public URL is a read; a private/local one needs an explicit admin host."""
     try:
@@ -12902,29 +13069,51 @@ def _web_private_hosts(text):
 
 
 def _web_deny(subject, why):
-    """A private/local destination the operator has not configured as an admin host."""
+    """A private/local destination the operator did not allow."""
     log.info("web policy denied: %s - %s", _web_label(subject), why)
-    return ("DECLINED: %s is a private or local destination that is not in "
-            "web.admin_hosts. The model may not reach the LAN or this box this way; "
-            "the operator can add the host or CIDR to web.admin_hosts and restart. "
-            "Nothing ran and nothing was fetched." % subject)
+    return ("DECLINED: %s is a private or local destination on this box's network and "
+            "the operator has not allowed it (%s). Nothing ran and nothing was fetched. "
+            "Do not route around it and do not edit the config: report it to the "
+            "operator." % (subject, why))
 
 
 def _web_gate(name, args, ctx):
-    """The destination capability decision, before any handler runs. None = proceed."""
+    """The destination capability decision, before any handler runs. None = proceed.
+
+    An unlisted private host is not a dead end: the operator is asked, once, in the lane
+    they are already reading. At most two questions per call, so a page cannot turn a
+    command full of LAN addresses into an interrogation.
+    """
     if name == "fetch_url":
+        asks = 0
         for url in _web_args_urls(args):
-            if not _web_destination_allowed(url):
+            if _web_destination_allowed(url):
+                continue
+            if asks >= 2:
                 return _web_deny("fetch %s" % _web_label(url),
-                                 "the destination is private/local")
+                                 "more than two private destinations needed an answer "
+                                 "in one call")
+            ok, why = _web_grant_ask(_web_host_of_url(url), ctx)
+            asks += 1
+            if not ok:
+                return _web_deny("fetch %s" % _web_label(url), why)
         return None
     if name in ("shell", "execute_code"):
         text = str((args or {}).get("command") or (args or {}).get("code") or "")
-        if _WEB_EGRESS_RX.search(text):
-            for host in _web_private_hosts(text):
-                if not _web_admin_host(host):
-                    return _web_deny("a command touching %s" % host,
-                                     "the host is private/local")
+        if not _WEB_EGRESS_RX.search(text):
+            return None
+        asks = 0
+        for host in _web_private_hosts(text):
+            if _web_admin_host(host):
+                continue
+            if asks >= 2:
+                return _web_deny("a command touching %s" % host,
+                                 "more than two private hosts needed an answer in one "
+                                 "call")
+            ok, why = _web_grant_ask(host, ctx)
+            asks += 1
+            if not ok:
+                return _web_deny("a command touching %s" % host, why)
         return None
     return None
 
@@ -13797,7 +13986,7 @@ def _fetch_thin_note(raw_bytes, text):
             "(or refused a plain fetch) - try another source]" % what)
 
 
-def _fetch_page_raw(url, max_chars):
+def _fetch_page_raw(url, max_chars, ctx=None):
     """The page as text, before the cap: the ingest scan needs the whole body."""
     try:
         # stream=True and a BOUNDED read. resp.text materialised the whole body before
@@ -13835,9 +14024,11 @@ def _fetch_page_raw(url, max_chars):
                 except ValueError:
                     _next_host = ""
                 if not _next_host or not _web_admin_host(_next_host):
-                    return ("BLOCKED: %s redirects to %s, a private/local destination "
-                            "that is not in web.admin_hosts - nothing was fetched from "
-                            "it." % (url, nxt), True)
+                    ok, why = _web_grant_ask(_next_host, ctx)
+                    if not ok:
+                        return ("BLOCKED: %s redirects to %s, a private/local "
+                                "destination the operator has not allowed (%s) - "
+                                "nothing was fetched from it." % (url, nxt, why), True)
             if not _is_local_url(nxt) and not _search_egress_allowed():
                 return ("BLOCKED: %s redirects to %s, which is off this LAN, and "
                         "search.allow_cloud_egress is false, so nothing was fetched from "
@@ -13881,7 +14072,7 @@ def _fetch_page(url, max_chars, session=None, ctx=None):
     tail is not visible, but the URL/code it carries would still be an artifact the
     model could reach through the spill file, so the ledger has to see it.
     """
-    text, failed = _fetch_page_raw(url, max_chars)
+    text, failed = _fetch_page_raw(url, max_chars, ctx)
     if failed:
         return text, {}
     meta = _web_ingest(text, url, "web", ctx, remote=True)
@@ -47994,6 +48185,19 @@ def _verb_doctor():
     if port_note:
         notes.append(port_note)
 
+    # The local network the bot may reach, in the words of the answer that allowed it.
+    # A grant nobody can see is a grant nobody can revoke; and an empty list used to be
+    # invisible until a run was refused, which is exactly the dead end this replaced.
+    _lan_raw = web.get("admin_hosts")
+    _lan = ([str(x).strip() for x in _lan_raw] if isinstance(_lan_raw, list)
+            else [str(_lan_raw).strip()] if isinstance(_lan_raw, str) else [])
+    _lan = [x for x in _lan if x]
+    if _lan:
+        print("  local net : %s - allowed by your answer, the bot may reach these"
+              % ", ".join(_lan))
+    else:
+        print("  local net : none yet - the bot asks you the first time it needs one")
+
     for mod, why in (("requests", "the HTTP layer"), ("croniter", "scheduling"),
                      ("mmpy_bot", "the Mattermost layer")):
         try:
@@ -48849,6 +49053,15 @@ def _verb_config(rest):
         unknown = _config_unknown_key(section, key, parts)
         if unknown:
             print(unknown, file=sys.stderr)
+            return 2
+        if section == "web" and key == "admin_hosts" and value not in ([], "", None):
+            # The operator's answer to the harness's own question is the one door: a
+            # setting the agent can write for itself is not a boundary, and a product
+            # whose only door is a key the user has to learn is not a product (operator,
+            # 2026-10-26). Clearing stays allowed: revocation narrows access.
+            print("web.admin_hosts is not a setting to type: when a run needs a local "
+                  "host the harness asks you and saves your answer. Clear every entry "
+                  "with `config set web.admin_hosts []`.", file=sys.stderr)
             return 2
         node[key] = value
     err = _config_write_raw(raw)

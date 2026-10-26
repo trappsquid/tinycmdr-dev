@@ -196,6 +196,11 @@ tinycmdr web                            # print the tokenized link (checks the p
 | `/stop` in the session/chat | cancel the run now |
 | a plain message mid-run | steer: folded in at the next step |
 
+**Your local network:** the bot starts with no LAN access. The first time a task needs a
+device on your network — a router, a NAS, a printer — the page or chat shows one question:
+allow that address, the whole local network, or no. Pick one; the answer is saved in
+`web.admin_hosts` and that question is not asked again. `doctor` prints what is allowed.
+
 ## Extend
 
 | Drop this | Get this |

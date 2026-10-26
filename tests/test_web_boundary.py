@@ -4,9 +4,11 @@ The case that built this: a decoy page carried a polite "safety checkpoint" note
 told the reader to stop, report and identify itself at a check-in address. A phrase
 filter would have to guess whether that was a friend or a foe; the boundary does not
 guess. Remote text is fenced and labelled, and the only destinations the model may
-reach are public reads plus the private hosts the operator names in web.admin_hosts.
-There is no page-derived action gate and no approval prompt: a page link is a read, a
-public page is normal browsing, and the operator's configured LAN hosts are usable.
+reach are public reads plus the private hosts the operator has allowed. There is no
+page-derived action gate: a page link is a read, a public page is normal browsing, and a
+private host nobody has allowed is ONE question with named choices - this address, the
+whole local network, or no - asked in the page or chat and saved in web.admin_hosts. The
+model cannot answer that question for itself, and the refusal never prints a setting.
 
     python tests/test_web_boundary.py
 """
@@ -94,7 +96,9 @@ check("a public page read is free",
       fb._web_gate("fetch_url", {"url": "https://docs.example/page"}, ctx) is None)
 out = fb._web_gate("fetch_url", {"url": "http://127.0.0.1:8790/"}, ctx)
 check("a private page read is refused without an admin host",
-      out.startswith("DECLINED") and "web.admin_hosts" in out, out[:200])
+      out.startswith("DECLINED") and "the operator" in out, out[:200])
+check("the refusal names no setting to edit",
+      "web.admin_hosts" not in out, out[:200])
 check("a public shell command is free",
       fb._web_gate("shell", {"command": "curl https://docs.example/page"}, ctx) is None)
 out = fb._web_gate("shell", {"command": "curl http://127.0.0.1:8790/"}, ctx)
@@ -119,6 +123,121 @@ try:
           fb._web_gate("fetch_url", {"url": "http://127.0.0.2/"}, ctx) is None)
 finally:
     fb.CONFIG["web"]["admin_hosts"] = saved_admin
+
+# ------------------------------------------------------------------ the operator's answer
+# The only door to a private host used to be a config key nobody had been told about, and
+# the refusal printed its name. It is now one question, in the lane the operator is
+# already reading, with named choices; the answer is saved so it is asked once.
+import contextlib
+import copy
+import io
+import json
+import threading
+
+_saved_config = copy.deepcopy(fb.CONFIG)
+_saved_path = fb.CONFIG_PATH
+_grant_cfg = STAGE / "grant-config.json"
+_grant_cfg.write_text(json.dumps({"web": {"admin_hosts": []}}), encoding="utf-8")
+fb.CONFIG_PATH = _grant_cfg
+
+
+class _Door:
+    """A lane with a person behind it: answers at once and records what was asked."""
+
+    label = "the test page"
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.asked = []
+
+    def opener(self, question, options, wait, label=None):
+        self.asked.append({"q": question, "opts": list(options)})
+        row = {"ev": threading.Event(), "answer": self.answer,
+               "question": question, "options": list(options)}
+        row["ev"].set()
+        return row
+
+    def post(self, *a, **k):
+        return True
+
+    def post_done(self, *a, **k):
+        return None
+
+    def close_question(self, *a, **k):
+        return None
+
+
+def _grant_ctx(key, door):
+    return {"session_key": key, "ask_door": door, "user_text": "",
+            "report": {"say": lambda text: None}}
+
+
+try:
+    door = _Door("1")
+    check("an unlisted private host is asked about, not dead-ended",
+          fb._web_gate("fetch_url", {"url": "http://192.0.2.10/"},
+                       _grant_ctx("g1", door)) is None)
+    check("the question offers this host, its network, and no",
+          door.asked and door.asked[0]["opts"] == [
+              "Yes - just 192.0.2.10", "Yes - everything on 192.0.2.0/24", "No"],
+          door.asked[:1])
+    check("the operator's yes is saved in web.admin_hosts",
+          fb.CONFIG["web"]["admin_hosts"] == ["192.0.2.10"],
+          fb.CONFIG["web"]["admin_hosts"])
+    check("...and config.json on disk carries it",
+          json.loads(_grant_cfg.read_text())["web"]["admin_hosts"] == ["192.0.2.10"])
+    check("the allowed host is reachable from then on",
+          fb._web_gate("fetch_url", {"url": "http://192.0.2.10/y"},
+                       _grant_ctx("g1", door)) is None)
+
+    door2 = _Door("2")
+    fb._web_gate("shell", {"command": "curl http://198.51.100.7/"},
+                 _grant_ctx("g2", door2))
+    check("choosing the network saves its /24",
+          "198.51.100.0/24" in fb.CONFIG["web"]["admin_hosts"],
+          fb.CONFIG["web"]["admin_hosts"])
+
+    door4 = _Door("Yes - everything on 192.0.2.0/24")
+    fb._web_gate("fetch_url", {"url": "http://192.0.2.200/"},
+                 _grant_ctx("g5", door4))
+    check("the option's own words, pasted, pick that option",
+          "192.0.2.0/24" in fb.CONFIG["web"]["admin_hosts"],
+          fb.CONFIG["web"]["admin_hosts"])
+
+    door3 = _Door("3")
+    out = fb._web_gate("fetch_url", {"url": "http://203.0.113.9/"},
+                       _grant_ctx("g3", door3))
+    check("a no saves nothing and refuses",
+          out.startswith("DECLINED") and "203.0.113.9" not in fb.CONFIG["web"]["admin_hosts"],
+          out[:160])
+    fb._web_gate("fetch_url", {"url": "http://203.0.113.9/"}, _grant_ctx("g3", door3))
+    check("a refused host is not asked twice", len(door3.asked) == 1, len(door3.asked))
+
+    out = fb._web_gate("fetch_url", {"url": "http://203.0.113.8/"}, {"session_key": "g4"})
+    check("a lane with nobody behind it refuses without waiting",
+          out.startswith("DECLINED") and "no operator" in out, out[:160])
+
+    # The key is not a setting. A write is refused on every surface, so the harness's
+    # question is the only way in and the model cannot grant itself the LAN.
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(io.StringIO()):
+        rc = fb._verb_config(["set", "web.admin_hosts", '["203.0.113.9"]'])
+    check("config set refuses to add an admin host", rc == 2, rc)
+    check("...and says the harness asks instead", "asks you" in buf.getvalue(),
+          buf.getvalue()[:160])
+    check("...and writes nothing", "203.0.113.9" not in fb.CONFIG["web"]["admin_hosts"])
+
+    with contextlib.redirect_stderr(io.StringIO()), \
+            contextlib.redirect_stdout(io.StringIO()):
+        rc = fb._verb_config(["set", "web.admin_hosts", "[]"])
+    check("clearing every entry is still allowed", rc == 0, rc)
+    check("...and takes effect", fb.CONFIG["web"]["admin_hosts"] == [],
+          fb.CONFIG["web"]["admin_hosts"])
+finally:
+    fb.CONFIG_PATH = _saved_path
+    fb.CONFIG.clear()
+    fb.CONFIG.update(_saved_config)
+    _grant_cfg.unlink(missing_ok=True)
 
 # ------------------------------------------------------------------ tool fetch
 class _Resp:
@@ -160,7 +279,7 @@ try:
     fb.requests.get = _redir
     out, failed = fb._fetch_page_raw("https://decoy.example/redir", 4000)
     check("a redirect to a private host is blocked",
-          failed and "BLOCKED" in out and "web.admin_hosts" in out, out[:200])
+          failed and "BLOCKED" in out and "not allowed" in out, out[:200])
 finally:
     fb.requests.get = saved_get
 
