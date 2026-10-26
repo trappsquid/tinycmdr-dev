@@ -4231,10 +4231,10 @@
     {
       "id": "web-destination-capability",
       "title": "a page read is not an action; private destinations are configured",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "87e6575",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The 1.1.50 gate refused any write or command after a page read and blocked every page-derived private link, which broke normal shell and LAN work; a public page link is now read, a write or command is judged by its own guards, and a private or local host or CIDR is reachable only when web.admin_hosts names it, including at every redirect hop, with no approval prompt or keyword scope.",
       "gate": "tests/test_web_boundary.py grades public reads, private/admin/CIDR destinations, shell and redirect policy and a normal write after a read; tests/test_search_surface.py grades the redirect hops."
@@ -4242,10 +4242,10 @@
     {
       "id": "secret-read-guard",
       "title": "the model cannot read credential files or environment dumps",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "87e6575",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "read_file and search_files now refuse or skip .env, SSH, AWS, key and credential paths, while shell and execute_code refuse those reads and environment dumps, so a page cannot talk the model into printing the bot's tokens.",
       "gate": "tests/test_security_surface.py grades the secret path and command checks, a normal note still readable, and search_files skipping the secret file."
