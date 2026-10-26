@@ -197,6 +197,10 @@ check("a data-file upload is refused",
 check("a combined output flag is refused",
       fb._web_gate("shell", {"command": "curl -sSLo /tmp/x http://127.0.0.1:8877/"},
                    scoped).startswith("DECLINED"))
+again = _ctx("scoped-lan")
+check("the scope survives a later turn",
+      fb._web_gate("fetch_url", {"url": "http://127.0.0.1:8877/admin"},
+                   again) is None)
 fb._web_clear("scoped-lan")
 after = _ctx("scoped-lan")
 fb._web_ingest("a page with http://127.0.0.1:8877/admin",

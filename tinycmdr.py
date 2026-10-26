@@ -12935,6 +12935,8 @@ def _untrusted_state(ctx):
     for kind, value in _web_operator_urls(operator_text):
         _web_allow(state, value, kind)
     _web_scope_learn(state, operator_text)
+    if state.get("scoped"):
+        _web_save(state)
     ctx["web"] = state
     return state
 
