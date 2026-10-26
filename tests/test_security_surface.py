@@ -165,6 +165,43 @@ check("the shipped default is unsigned",
 check("children are read-only by default",
       fb.CONFIG["agent"].get("subagent_capabilities") == "read")
 
+# ---------------------------------------------------------------- MCP environment
+saved_env = dict(fb.os.environ)
+try:
+    fb.os.environ.clear()
+    fb.os.environ.update({
+        "PATH": "/usr/bin", "LANG": "C.UTF-8",
+        "TINYCMDR_WEB_TOKEN": "web-secret", "TINYCMDR_MM_TOKEN": "mm-secret",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret", "SUDO_PASSWORD": "sudo-secret",
+    })
+    mcp_env = fb._mcp_env({"env": {"MCP_SETTING": "yes"}})
+    check("an MCP child keeps PATH and LANG", mcp_env.get("PATH") == "/usr/bin"
+          and mcp_env.get("LANG") == "C.UTF-8")
+    check("an MCP child gets its explicit config env",
+          mcp_env.get("MCP_SETTING") == "yes")
+    check("an MCP child does not inherit harness tokens",
+          "TINYCMDR_WEB_TOKEN" not in mcp_env
+          and "TINYCMDR_MM_TOKEN" not in mcp_env, mcp_env)
+    check("an MCP child does not inherit other credentials",
+          "AWS_SECRET_ACCESS_KEY" not in mcp_env
+          and "SUDO_PASSWORD" not in mcp_env, mcp_env)
+finally:
+    fb.os.environ.clear()
+    fb.os.environ.update(saved_env)
+
+# ---------------------------------------------------------- approval trust roots
+check("a write to the web allowlist is refused",
+      fb._surface_write_gate(str(fb.WEB_ALLOW_FILE), "test", {})
+      .startswith("REFUSED"), "the gate must not let the model grant itself always")
+check("a shell redirect to the web allowlist is refused",
+      fb._approval_store_write("echo '{}' > web-allow.json") is not None)
+check("a python write to the web allowlist is refused",
+      fb._approval_store_write("open('web-allow.json', 'w').write('{}')") is not None)
+skills_calls = []
+fb._surface_write_gate(str(fb.BASE_DIR / "skills" / "new.md"), "test",
+                       {"confirm_cb": lambda q: (skills_calls.append(q), False)[1]})
+check("a skills write goes through the confirm door", bool(skills_calls))
+
 got = [fb._A2A_RUN_SLOTS.acquire(blocking=False)
        for _ in range(fb.A2A_MAX_CONCURRENT)]
 check("every run slot can be taken", all(got), got)

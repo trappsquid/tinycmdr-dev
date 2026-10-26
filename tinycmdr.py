@@ -10585,20 +10585,20 @@ _SURFACE_WRITE_RX = re.compile(
 # `tinycmdr approvals` (or by hand, as the root of their own box); nothing here may.
 _APPROVAL_STORE_NAME = "confirm-allow.json"
 _APPROVAL_WRITE_RX = re.compile(
-    r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?confirm-allow\.json"
+    r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?(?:confirm-allow|web-allow)\.json"
     r"|\b(?:set-content|out-file|add-content|sed\s+-i|tee|copy-item|move-item|cp|mv|truncate)\b"
-    r"[^|;\n]{0,140}?confirm-allow\.json"
+    r"[^|;\n]{0,140}?(?:confirm-allow|web-allow)\.json"
     # the code spellings, WRITE modes only: a python READ of the file is as harmless as
     # `cat`, and the arm must not refuse it (the mode string after the name decides)
-    r"|\bopen\s*\([^)\n]{0,140}?confirm-allow\.json[^)\n]{0,40}?[\"'][wax]\+?[\"']"
-    r"|confirm-allow\.json[^)\n]{0,60}?\)\s*\.\s*write_(?:text|bytes)\s*\(")
+    r"|\bopen\s*\([^)\n]{0,140}?(?:confirm-allow|web-allow)\.json[^)\n]{0,40}?[\"'][wax]\+?[\"']"
+    r"|(?:confirm-allow|web-allow)\.json[^)\n]{0,60}?\)\s*\.\s*write_(?:text|bytes)\s*\(")
 
 
 def _approval_store_write(text):
     """A shell- or code-shaped WRITE to the confirm gate's own file, as a reason, or None."""
     if _APPROVAL_WRITE_RX.search(str(text or "")):
-        return ("a write to %s (the confirm gate's own trust root - it cannot unlock "
-                "itself)" % _APPROVAL_STORE_NAME)
+        return ("a write to an approval trust root (%s - it cannot unlock itself)"
+                % _APPROVAL_STORE_NAME)
     return None
 
 
@@ -11907,13 +11907,15 @@ def _surface_write_gate(path, subject, ctx):
     except OSError:
         return None
     try:
-        if resolved == Path(CONFIRM_ALLOW_FILE).resolve():
-            # The trust root itself: refused on every door, never asked - the model must
-            # not be able to write the file that decides whether the model is asked
-            # (A-2026-10-08-94). The operator sets it with `tinycmdr approvals`.
-            return ("REFUSED: %s is the confirm gate's own trust root - a write to it "
-                    "cannot be approved in-band; the operator sets it with `tinycmdr "
-                    "approvals allow`." % _APPROVAL_STORE_NAME)
+        trust_root = resolved in (Path(CONFIRM_ALLOW_FILE).resolve(),
+                                  Path(WEB_ALLOW_FILE).resolve())
+        if trust_root:
+            # The trust roots themselves: refused on every door, never asked - the model
+            # must not be able to write the files that decide whether the model is asked
+            # (A-2026-10-08-94). The operator sets them with `tinycmdr approvals`.
+            return ("REFUSED: %s is an approval trust root - a write to it cannot be "
+                    "approved in-band; the operator sets it with `tinycmdr approvals`."
+                    % resolved.name)
     except OSError:
         pass
     try:
@@ -11922,11 +11924,12 @@ def _surface_write_gate(path, subject, ctx):
         return None                      # not this install's file
     folded = rel.casefold()
     if not (folded in _SURFACE_FLAT or folded == "memory"
-            or folded.startswith("memory/")):
+            or folded.startswith("memory/")
+            or folded == "skills" or folded.startswith("skills/")):
         return None
     return endpoint_gate("%s: %s" % (subject, rel),
-                         "a write to this bot's own %s (its memory, not a "
-                         "scratch file)" % rel,
+                         "a write to this bot's own %s (its memory or skills, not "
+                         "a scratch file)" % rel,
                          (ctx or {}).get("confirm_cb"))
 
 
@@ -12422,6 +12425,12 @@ _WEB_LEDGER_TTL = 24 * 3600
 _WEB_LEDGER_MAX = 200
 _WEB_ALLOWED_MAX = 100
 _WEB_NOTICE_MAX = 100
+# The operator's durable "always" answers for the web authority door. Exact actions only
+# (a key over the tool and its arguments), never the confirm gate's global allowlist: a
+# page supplies the text that caused the action, so a broad grant is the thing this
+# boundary exists to refuse. Host state, mode 600, cleared by `tinycmdr approvals web clear`.
+WEB_ALLOW_FILE = BASE_DIR / "web-allow.json"
+_WEB_APPROVAL_MAX = 200
 # A tool that is not one of these and carries a write/exec tier is a drop-in or a
 # custom tool: after untrusted content its capability is not guessed, it is asked about.
 # send_file is operator-bound (the attachment goes to the human, not to the page).
@@ -12500,7 +12509,7 @@ def _web_ledger_path(session_key):
 
 def _web_blank():
     return {"v": 1, "updated": 0.0, "items": [], "allowed": [], "notices": [],
-            "quarantined": False, "session_key": ""}
+            "approvals": [], "quarantined": False, "session_key": ""}
 
 
 def _web_load(session_key):
@@ -12514,7 +12523,7 @@ def _web_load(session_key):
         return st
     if not isinstance(data, dict):
         return st
-    for key in ("items", "allowed", "notices"):
+    for key in ("items", "allowed", "notices", "approvals"):
         rows = data.get(key)
         if isinstance(rows, list):
             st[key] = [x for x in rows if isinstance(x, dict)]
@@ -12526,7 +12535,7 @@ def _web_load(session_key):
 def _web_prune(st):
     now = time.time()
     caps = {"items": _WEB_LEDGER_MAX, "allowed": _WEB_ALLOWED_MAX,
-            "notices": _WEB_NOTICE_MAX}
+            "notices": _WEB_NOTICE_MAX, "approvals": _WEB_APPROVAL_MAX}
     for key, cap in caps.items():
         rows = [x for x in (st.get(key) or [])
                 if now - float(x.get("t") or 0) <= _WEB_LEDGER_TTL]
@@ -12549,7 +12558,8 @@ def _web_save(st):
             return
         atomic_write_text(path, json.dumps(
             {"v": 1, "updated": st["updated"], "items": st["items"],
-             "allowed": st["allowed"], "notices": st["notices"]},
+             "allowed": st["allowed"], "notices": st["notices"],
+             "approvals": st["approvals"]},
             ensure_ascii=False))
     except Exception:                                        # noqa: BLE001
         log.debug("web ledger save failed", exc_info=True)
@@ -12891,7 +12901,7 @@ def _web_protected_path(path):
     return (folded in _SURFACE_FLAT
             or folded.startswith(("memory/", "tools/", "skills/"))
             or folded in ("jobs.json", "config.json", ".env",
-                          "confirm-allow.json", "soul.md"))
+                          "confirm-allow.json", "web-allow.json", "soul.md"))
 
 
 def _web_credential_path(path):
@@ -12916,27 +12926,132 @@ def _web_args_urls(args):
             if str(value or "").strip().lower().startswith(("http://", "https://"))]
 
 
+def _web_always_load():
+    """The durable exact-action approvals, newest last; a damaged file means none."""
+    data = _load_json_state(WEB_ALLOW_FILE, "the web safety allowlist")
+    rows = data.get("items") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        return []
+    rows = [r for r in rows if isinstance(r, dict) and str(r.get("key") or "")]
+    rows.sort(key=lambda r: float(r.get("t") or 0))
+    return rows[-_WEB_APPROVAL_MAX:]
+
+
+def _web_always_has(action_key):
+    return any(str(r.get("key") or "") == str(action_key or "")
+               for r in _web_always_load())
+
+
+def _web_always_add(action_key, label, tool=""):
+    """Record one exact action as always allowed; never a host-wide or global grant."""
+    key = str(action_key or "")
+    if not key:
+        return
+    rows = _web_always_load()
+    if any(str(r.get("key") or "") == key for r in rows):
+        return
+    rows.append({"key": key, "label": _web_label(label), "tool": str(tool or ""),
+                 "t": time.time()})
+    try:
+        if not WEB_ALLOW_FILE.parent.exists():
+            return
+        atomic_write_text(WEB_ALLOW_FILE,
+                          json.dumps({"v": 1, "items": rows[-_WEB_APPROVAL_MAX:]},
+                                     indent=1))
+        try:
+            os.chmod(WEB_ALLOW_FILE, 0o600)
+        except OSError:
+            pass
+    except OSError as e:
+        log.warning("could not save the web safety allowlist: %s", e)
+
+
+def _web_always_clear():
+    try:
+        WEB_ALLOW_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        log.warning("could not clear the web safety allowlist: %s", e)
+
+
+def _web_action_key(name, args):
+    """A stable key over the tool and its exact arguments, for session/always answers."""
+    try:
+        blob = json.dumps({"tool": str(name or ""), "args": args or {}},
+                          sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:                                        # noqa: BLE001
+        blob = "%s:%r" % (name, args)
+    return hashlib.sha256(blob.encode("utf-8", "replace")).hexdigest()[:32]
+
+
+def _web_preapproved(action_key, state):
+    """True when this exact action was already allowed for the session or for ever."""
+    key = str(action_key or "")
+    if not key:
+        return False
+    now = time.time()
+    for row in (state or {}).get("approvals") or []:
+        if str(row.get("key") or "") == key \
+                and now - float(row.get("t") or 0) <= _WEB_LEDGER_TTL:
+            return True
+    return _web_always_has(key)
+
+
+def _web_record_approval(action_key, label, scope, ctx):
+    """Persist a session answer in the conversation ledger, or an always to its file."""
+    key = str(action_key or "")
+    if not key or scope not in ("session", "always"):
+        return
+    if scope == "always":
+        _web_always_add(key, label)
+        return
+    state = _untrusted_state(ctx)
+    rows = state.setdefault("approvals", [])
+    if not any(str(r.get("key") or "") == key for r in rows):
+        rows.append({"key": key, "label": _web_label(label), "t": time.time()})
+        if len(rows) > _WEB_APPROVAL_MAX:
+            del rows[:len(rows) - _WEB_APPROVAL_MAX]
+    _web_save(state)
+
+
 def _web_confirm(subject, ctx):
-    """A fresh yes/no from the operator. Never the confirm gate's permanent allowlist."""
+    """The operator's web answer: yes, no, session or always (never the global allowlist)."""
     door = (ctx or {}).get("web_confirm_cb") if isinstance(ctx, dict) else None
     if not callable(door):
-        return False
+        return ""
     try:
-        return bool(door(subject))
+        answer = door(subject)
     except Exception:                                        # noqa: BLE001
         log.warning("web confirmation door failed", exc_info=True)
-        return False
+        return ""
+    if isinstance(answer, bool):
+        return "yes" if answer else "no"
+    answer = str(answer or "").strip().lower()
+    if answer in ("yes", "no", "session", "always"):
+        return answer
+    if answer in ("all", "forever", "allow", "always allow", "yes always"):
+        return "always"
+    if answer in ("deny", "decline", "never", "yes no"):
+        return "no"
+    return ""
 
 
-def _web_authorize(subject, why, hits, ctx):
+def _web_authorize(subject, why, hits, ctx, action_key=""):
     source = _web_hit_source(hits)
     question = "%s - %s" % (subject, why)
     if source:
         question += "; source: %s" % _web_label(source)
-    if _web_confirm(question, ctx):
-        log.info("web gate approved: %s", _web_label(question))
+    if _web_preapproved(action_key, _untrusted_state(ctx)):
+        log.info("web gate pre-approved for this exact action: %s",
+                 _web_label(question))
         return None
-    log.info("web gate declined: %s", _web_label(question))
+    answer = _web_confirm(question, ctx)
+    if answer in ("yes", "session", "always"):
+        if answer in ("session", "always"):
+            _web_record_approval(action_key, question, answer, ctx)
+        log.info("web gate approved (%s): %s", answer, _web_label(question))
+        return None
+    log.info("web gate declined%s: %s",
+             " (%s)" % answer if answer else "", _web_label(question))
     return ("DECLINED: %s needs the operator's approval: %s. Nothing ran and nothing "
             "was fetched. Tell the operator what you wanted and why; do not try "
             "another route (a shell, a script, a tool, a rewrite) around this."
@@ -13048,7 +13163,7 @@ def _web_gate(name, args, ctx):
                "the run has read untrusted content and this tool can change the box")
     if not why:
         return None
-    return _web_authorize(subject, why, hits, ctx)
+    return _web_authorize(subject, why, hits, ctx, _web_action_key(name, args))
 
 
 def _web_post_tool(name, args, out, ctx):
@@ -15762,6 +15877,35 @@ def _mcp_risk_error(name, spec):
     return None
 
 
+# An MCP server is a third-party process, not the harness: it gets the environment it
+# needs to start (and whatever the operator names in its own config), never the harness's
+# whole environment. Before this, a server inherited every token the bot could see,
+# including TINYCMDR_WEB_TOKEN, so one npm package could read the page credential.
+_MCP_ENV_KEEP = frozenset((
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM",
+    "TMPDIR", "TMP", "TEMP",
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA",
+    "APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+    "NODE_PATH", "NPM_CONFIG_PREFIX", "NVM_DIR",
+))
+_MCP_ENV_KEEP_PREFIXES = ("LC_",)
+
+
+def _mcp_env(spec):
+    """The minimal environment for a stdio MCP child, plus its explicit config.env."""
+    env = {}
+    for key, value in os.environ.items():
+        upper = str(key).upper()
+        if upper in _MCP_ENV_KEEP or any(upper.startswith(p)
+                                         for p in _MCP_ENV_KEEP_PREFIXES):
+            env[key] = value
+    for key, value in ((spec or {}).get("env") or {}).items():
+        env[str(key)] = str(value)
+    return env
+
+
 def _mcp_open(name, ctx=None):
     """(entry, error): the live stdio server, started on first use."""
     servers = _mcp_servers()
@@ -15808,8 +15952,7 @@ def _mcp_open(name, ctx=None):
         refusal = shell_guard(" ".join(cmd), ctx, subject="mcp server %r: " % key)
         if refusal:
             return None, refusal
-        env = dict(os.environ)
-        env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
+        env = _mcp_env(spec)
         try:
             # encoding/errors and hidden_proc_kwargs, the same contract run_capture's
             # children get: text=True without an encoding decodes with the LOCALE codec
@@ -29062,29 +29205,37 @@ class RunReporter:
         return ok
 
     def confirm_web(self, subject, wait=300.0):
-        """A web-origin action needs a FRESH yes/no; no session/always grant.
+        """The operator's answer for one web-origin action: yes, session, always or no.
 
-        The ordinary confirm door remembers "session" and "always" in the box-wide
-        allowlist by design - that is what stops a long run being an interrogation.
-        A page's callback must not inherit such a grant: this approval is for one
-        action, it is never written to confirm-allow.json, and the only answers are
-        yes and no.
+        "session" remembers THIS exact action (tool and arguments) for this
+        conversation; "always" remembers it in web-allow.json for this host. Neither is
+        the confirm gate's global allowlist, and a different URL, command, path or task
+        asks again. The page or file that caused the action cannot authorize anything;
+        only the operator can.
         """
         if not self.dest.has_human:
-            return False
+            return ""
         answer = self.ask(
             "Web safety: this action follows untrusted content.\n"
             "```\n%s\n```\n"
-            "Allow it once? (`yes` / `no`) The page or file it came from cannot "
-            "authorize it; only you can. This answer is not remembered."
+            "`yes` once · `session` this exact action in this conversation · "
+            "`always` this exact action on this host · `no`.\n"
+            "A different URL, command or task asks again; only you can authorize it."
             % str(subject)[:800],
-            ["yes", "no"], wait, "this conversation", kind="confirm")
+            ["yes", "no", "session", "always"], wait, "this conversation",
+            kind="confirm")
         if answer is None:
-            return False
+            return ""
         words = re.findall(r"[a-z0-9]+", str(answer).strip().lower())
-        # A refusal anywhere wins; this question has no scope words to read.
-        return (any(word in _CONFIRM_YES for word in words)
-                and not any(word in _CONFIRM_NO for word in words))
+        # A refusal anywhere wins, as in every other confirm door.
+        if any(word in _CONFIRM_NO for word in words):
+            return "no"
+        scope = next((_CONFIRM_SCOPE[w] for w in words if w in _CONFIRM_SCOPE), None)
+        if scope:
+            return scope                      # "session" or "always" (all/always/forever)
+        if any(word in _CONFIRM_YES for word in words):
+            return "yes"
+        return ""
 
     def finish(self, ok=True):
         """The Done line, in place of the status line this run opened with."""
@@ -47672,7 +47823,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   health             one line + exit code: up, lane, model (no network, for scripts)
   failures           the known-failure library: which entries have EVER fired on this
                      box, and which failures keep arriving with no entry (-c, --json)
-  approvals [clear]  what the confirm gate has been told to stop asking about
+  approvals [web] [clear]  what the confirm gate and the web door have been told to skip
                      (the session and permanent answers); `clear` asks again
   version            the version alone
   web                open the page: checks it answers first, then prints the
@@ -49017,7 +49168,8 @@ _HOST_OWNED_EXACT = frozenset((
     "theme.toml",
     ".env", "config.json", "soul.md", "notes.md", "field-notes.md", "atlas.md",
     "experiments.jsonl", "web-sessions.json", "state.json", "jobs.json", "tasks.json",
-    "tasks.journal.jsonl", "tasks.md", "confirm-allow.json", "notes-authored.json",
+    "tasks.journal.jsonl", "tasks.md", "confirm-allow.json", "web-allow.json",
+    "notes-authored.json",
     "tools-provenance.json", "tinycmdr.log", "tinycmdr.lock",
 ))
 # SIX copies of ONE rule live in this tree: this set, the three installers'
@@ -51506,19 +51658,36 @@ def verb_from_chat(argv_line):
 
 
 def _verb_approvals(rest):
-    """`approvals [clear]`: what the confirm gate has been told to stop asking about.
+    """`approvals [web] [clear]`: what the two answer stores have been told to skip.
 
-    The operator's "session" and "always" answers live here, so the state they set is
-    visible and reversible without editing a file."""
+    The confirm gate keeps the broad "session"/"always" grant; the web door keeps exact
+    actions only, because the page that caused the action is untrusted."""
+    if rest and rest[0] == "web":
+        if len(rest) > 1 and rest[1] in ("clear", "reset", "off"):
+            _web_always_clear()
+            print("cleared: the web safety door asks again for every action.")
+            return 0
+        rows = _web_always_load()
+        print("web safety allowlist: %s" % WEB_ALLOW_FILE)
+        if not rows:
+            print("  no exact action has been approved for ever.")
+        for row in rows:
+            print("  %s  %s" % (str(row.get("t") or "")[:16],
+                                str(row.get("label") or "")[:120]))
+        print("  clear with: tinycmdr approvals web clear")
+        return 0
     if rest and rest[0] in ("clear", "reset", "off"):
         confirm_allow("clear")
-        print("cleared: the confirm gate asks again for every command.")
+        _web_always_clear()
+        print("cleared: the confirm gate and the web door ask again.")
         return 0
     st = confirm_allow_state()
     print("confirm gate allowlist: %s" % CONFIRM_ALLOW_FILE)
     print("  every command, for ever : %s" % ("yes" if st["all"] else "no"))
     print("  this session            : %s" % (", ".join(st["sessions"]) or "none"))
-    print("  clear with: tinycmdr approvals clear")
+    rows = _web_always_load()
+    print("web safety allowlist: %s (%d exact action(s))" % (WEB_ALLOW_FILE, len(rows)))
+    print("  clear with: tinycmdr approvals clear  ·  tinycmdr approvals web clear")
     return 0
 
 

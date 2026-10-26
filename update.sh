@@ -83,6 +83,51 @@ fi
                           echo "        Re-run; if it repeats, the transfer is being truncated (or" >&2
                           echo "        the release replaced)." >&2; exit 1; }
 
+# The digest proves the transfer, not who wrote the release. A host that pins
+# agent.release_pubkey gets the same signature check the in-app updater does, before
+# unpacking; an unpinned host keeps the digest-only path and says so. The key may be a
+# line or a file path in config.json. A pinned host with no sig, no ssh-keygen, a bad
+# signature or an unreadable config refuses - this is the repair door, not a bypass.
+PUB=""
+if [ -f "$DIR/config.json" ]; then
+    PUB="$("$PY" -c 'import json,sys
+try:
+    d=json.load(open(sys.argv[1], encoding="utf-8"))
+    print(str((d.get("agent") or {}).get("release_pubkey") or "").strip())
+except Exception:
+    sys.exit(2)' "$DIR/config.json" 2>/dev/null)" || {
+        echo "update: config.json could not be read, so agent.release_pubkey cannot be" >&2
+        echo "        checked - nothing was changed." >&2
+        exit 1; }
+fi
+if [ -n "$PUB" ]; then
+    if [ -f "$PUB" ]; then
+        PUB="$(cat "$PUB" 2>/dev/null || true)"
+    fi
+    case "$PUB" in
+        ssh-*|ecdsa-*|sk-*) ;;
+        *) echo "update: agent.release_pubkey does not look like an SSH public key;" >&2
+           echo "        nothing was changed." >&2; exit 1 ;;
+    esac
+    command -v ssh-keygen >/dev/null 2>&1 || {
+        echo "update: agent.release_pubkey is pinned, but ssh-keygen is not available -" >&2
+        echo "        the release signature cannot be checked. Nothing was changed." >&2
+        exit 1; }
+    fetch "$BASE/SHA256SUMS.sig" "$WORK/SHA256SUMS.sig" || {
+        echo "update: agent.release_pubkey is pinned, but $BASE/SHA256SUMS.sig could not" >&2
+        echo "        be fetched - nothing was changed." >&2; exit 1; }
+    printf 'tinycmdr-release %s\n' "$PUB" > "$WORK/allowed_signers"
+    if ! ssh-keygen -Y verify -f "$WORK/allowed_signers" -I tinycmdr-release \
+            -n tinycmdr-release -s "$WORK/SHA256SUMS.sig" < "$WORK/SHA256SUMS"; then
+        echo "update: the release signature did not verify against agent.release_pubkey -" >&2
+        echo "        nothing was changed." >&2
+        exit 1
+    fi
+    echo "update: release signature verified"
+else
+    echo "update: no agent.release_pubkey pinned - checking the digest only"
+fi
+
 case "$ASSET" in
     *.zip)   unzip -q "$WORK/$ASSET" -d "$WORK/pkg" ;;
     *.tar.gz) mkdir -p "$WORK/pkg" && tar -xzf "$WORK/$ASSET" -C "$WORK/pkg" ;;
@@ -125,7 +170,7 @@ if [ "$NEW" != "?" ] && _newer "$CMP" "$NEW"; then
 fi
 
 # Host-owned paths: never overwrite, and never delete anything not in the package.
-HOST_FILES="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
+HOST_FILES="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json web-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
 HOST_DIRS="tools skills sessions snapshots logs spill venv dist .git tmp"
 is_host() {
     for f in $HOST_FILES; do [ "$1" = "$f" ] && return 0; done

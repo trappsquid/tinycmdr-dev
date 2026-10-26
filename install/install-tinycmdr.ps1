@@ -1649,7 +1649,7 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $hostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.json",
                "field-notes.md", "atlas.md", "experiments.jsonl", "web-sessions.json",
                "state.json", "jobs.json", "tasks.json", "tasks.journal.jsonl", "tasks.md",
-               "confirm-allow.json", "tools-provenance.json", "theme.toml",
+               "confirm-allow.json", "web-allow.json", "tools-provenance.json", "theme.toml",
                "tinycmdr.log", "tinycmdr.lock")
 # The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
 # the other two installers - four copies, already drifted once (snapshots/, tmp/);

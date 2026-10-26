@@ -272,15 +272,59 @@ _saved_progress = fb.CONFIG["agent"].get("progress_updates")
 fb.CONFIG["agent"]["progress_updates"] = False
 try:
     check("a fresh yes approves once",
-          fb.RunReporter(_Dest("yes"), "webdoor").confirm_web("fetch https://x") is True)
-    for answer in ("no", "session", "always", None):
+          fb.RunReporter(_Dest("yes"), "webdoor").confirm_web("fetch https://x") == "yes")
+    check("session is a scope, not a refusal",
+          fb.RunReporter(_Dest("session"), "webdoor")
+          .confirm_web("fetch https://x") == "session")
+    check("always is a scope, not a refusal",
+          fb.RunReporter(_Dest("always"), "webdoor")
+          .confirm_web("fetch https://x") == "always")
+    check("yes always reads as always",
+          fb.RunReporter(_Dest("yes always"), "webdoor")
+          .confirm_web("fetch https://x") == "always")
+    for answer in ("no", "yes no", None):
         check("the web door refuses %r" % answer,
               fb.RunReporter(_Dest(answer), "webdoor")
-              .confirm_web("fetch https://x") is False)
+              .confirm_web("fetch https://x") in ("", "no"))
 finally:
     fb.CONFIG["agent"]["progress_updates"] = _saved_progress
 check("a web approval is not written to confirm-allow.json",
       not fb.CONFIRM_ALLOW_FILE.exists())
+
+# ------------------------------------------------ session and always are exact-action
+sess = _ctx("web-session-gate", confirm=lambda s: "session")
+st = fb._untrusted_state(sess)
+st["quarantined"] = True
+fb._web_save(st)
+key = fb._web_action_key("shell", {"command": "curl https://x.example/a"})
+check("the first exact action asks and a session answer approves it",
+      fb._web_gate("shell", {"command": "curl https://x.example/a"}, sess) is None)
+check("the session answer is in this conversation's ledger",
+      fb._web_preapproved(key, fb._untrusted_state(sess)))
+sess["web_confirm_cb"] = lambda s: (_ for _ in ()).throw(AssertionError("asked again"))
+check("the same exact action does not ask again this session",
+      fb._web_gate("shell", {"command": "curl https://x.example/a"}, sess) is None)
+check("a different action still asks",
+      fb._web_gate("shell", {"command": "curl https://x.example/b"}, sess) is not None)
+
+always = _ctx("web-always-gate", confirm=lambda s: "always")
+st = fb._untrusted_state(always)
+st["quarantined"] = True
+fb._web_save(st)
+try:
+    akey = fb._web_action_key("shell", {"command": "curl https://x.example/once"})
+    check("an always answer approves its exact action",
+          fb._web_gate("shell", {"command": "curl https://x.example/once"}, always) is None)
+    check("the always answer is in the web allowlist, not the confirm allowlist",
+          fb._web_always_has(akey) and not fb.CONFIRM_ALLOW_FILE.exists())
+    always["web_confirm_cb"] = lambda s: (_ for _ in ()).throw(AssertionError("asked again"))
+    check("the always action does not ask again after a reload",
+          fb._web_gate("shell", {"command": "curl https://x.example/once"}, always) is None)
+    check("a different action still asks after an always",
+          fb._web_gate("shell", {"command": "curl https://x.example/twice"}, always) is not None)
+finally:
+    fb._web_always_clear()
+check("clearing the web allowlist removes it", not fb.WEB_ALLOW_FILE.exists())
 
 # ------------------------------------------------------------------ dispatch wiring
 # The gate has to run BEFORE the handler, at the one dispatch point; a unit test of

@@ -108,6 +108,7 @@ def fake_release(rel, version):
                     t.add(f, arcname=f.relative_to(rel / "pkg").as_posix())
     digest = hashlib.sha256((rel / asset).read_bytes()).hexdigest()
     (rel / "SHA256SUMS").write_text("%s  %s\n" % (digest, asset), encoding="utf-8")
+    (rel / "SHA256SUMS.sig").write_text("not a real signature\n", encoding="utf-8")
     return asset
 
 
@@ -263,6 +264,25 @@ def main():
         check("pip install -r" in out and "requirements.txt" in out,
               "a release that moved requirements.txt says how to reconcile the venv",
               out[-300:])
+
+        # S-4: the standalone repair door must not be a signature bypass. A host that
+        # pins agent.release_pubkey and receives a bad signature is refused before
+        # unpacking; with no ssh-keygen it fails closed for the same reason.
+        inst3 = work / "install3"
+        inst3.mkdir()
+        (inst3 / "tinycmdr.py").write_text('VERSION = "1.0.0"\n', encoding="utf-8")
+        (inst3 / "config.json").write_text(json.dumps(
+            {"agent": {"release_pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITEST"}}),
+            encoding="utf-8")
+        proc_sig = run_update(inst3)
+        out_sig = proc_sig.stdout + proc_sig.stderr
+        check(proc_sig.returncode != 0,
+              "a pinned install refuses a bad release signature",
+              (proc_sig.returncode, out_sig[-300:]))
+        check('VERSION = "1.0.0"' in read(inst3 / "tinycmdr.py"),
+              "...and nothing was unpacked over it", read(inst3 / "tinycmdr.py")[:80])
+        check("signature" in out_sig.lower() or "ssh-keygen" in out_sig.lower(),
+              "...with a reason naming the signature check", out_sig[-300:])
 
         # A second run must not append another token: the guard the merge defeated.
         proc2 = run_update(inst)

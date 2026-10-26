@@ -73,6 +73,52 @@ try {
     if (-not $Want -or $Want.ToLower() -ne $Got) {
         Write-Error "update: checksum mismatch - nothing was changed"; exit 1
     }
+
+    # The digest proves the transfer, not who wrote the release. A host that pins
+    # agent.release_pubkey gets the same signature check the in-app updater does; an
+    # unpinned host keeps the digest-only path and says so. The key may be a line or a
+    # file path in config.json. A pinned host with no sig, no ssh-keygen, a bad signature
+    # or an unreadable config refuses - this is the repair door, not a bypass.
+    $Pub = ""
+    $CfgPath = Join-Path $Dir "config.json"
+    if (Test-Path $CfgPath) {
+        try {
+            $Cfg = Get-Content $CfgPath -Raw -ErrorAction Stop | ConvertFrom-Json
+            if ($Cfg.agent) { $Pub = [string]$Cfg.agent.release_pubkey }
+        } catch {
+            Write-Error "update: config.json could not be read, so agent.release_pubkey cannot be checked - nothing was changed"; exit 1
+        }
+    }
+    $Pub = $Pub.Trim()
+    if ($Pub) {
+        if ($Pub -notmatch '^(ssh-|ecdsa-|sk-)' -and (Test-Path -LiteralPath $Pub)) {
+            $Pub = (Get-Content -LiteralPath $Pub -Raw).Trim()
+        }
+        if ($Pub -notmatch '^(ssh-|ecdsa-|sk-)') {
+            Write-Error "update: agent.release_pubkey does not look like an SSH public key - nothing was changed"; exit 1
+        }
+        $Ssh = Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue
+        if (-not $Ssh) {
+            Write-Error "update: agent.release_pubkey is pinned, but ssh-keygen is not available - the release signature cannot be checked. Nothing was changed"; exit 1
+        }
+        try {
+            Invoke-WebRequest -UseBasicParsing "$Base/SHA256SUMS.sig" -OutFile (Join-Path $Work "SHA256SUMS.sig")
+        } catch {
+            Write-Error "update: agent.release_pubkey is pinned, but SHA256SUMS.sig could not be fetched - nothing was changed"; exit 1
+        }
+        $Allowed = Join-Path $Work "allowed_signers"
+        Set-Content -Path $Allowed -Value "tinycmdr-release $Pub" -Encoding ASCII
+        $Verify = Start-Process -FilePath $Ssh.Source -ArgumentList @(
+            "-Y", "verify", "-f", $Allowed, "-I", "tinycmdr-release",
+            "-n", "tinycmdr-release", "-s", (Join-Path $Work "SHA256SUMS.sig")
+        ) -RedirectStandardInput (Join-Path $Work "SHA256SUMS") -NoNewWindow -Wait -PassThru
+        if ($Verify.ExitCode -ne 0) {
+            Write-Error "update: the release signature did not verify against agent.release_pubkey - nothing was changed"; exit 1
+        }
+        Write-Host "update: release signature verified"
+    } else {
+        Write-Host "update: no agent.release_pubkey pinned - checking the digest only"
+    }
     Expand-Archive (Join-Path $Work $Asset) -DestinationPath (Join-Path $Work "pkg") -Force
     $Src = (Get-ChildItem (Join-Path $Work "pkg") -Recurse -Filter tinycmdr.py |
             Select-Object -First 1).DirectoryName
@@ -108,7 +154,7 @@ try {
     $HostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.json",
                    "field-notes.md", "atlas.md", "experiments.jsonl", "web-sessions.json",
                    "state.json", "jobs.json", "tasks.json", "tasks.journal.jsonl",
-                   "tasks.md", "confirm-allow.json", "tools-provenance.json", "theme.toml",
+                   "tasks.md", "confirm-allow.json", "web-allow.json", "tools-provenance.json", "theme.toml",
                    "tinycmdr.log", "tinycmdr.lock")
     $HostDirs = @("tools", "skills", "sessions", "snapshots", "logs", "spill", "venv",
                   "dist", ".git", "tmp")
