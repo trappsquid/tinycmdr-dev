@@ -4264,10 +4264,10 @@
     {
       "id": "inline-call-after-narration",
       "title": "a tool call written after a narration line is executed",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "891d660",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The inline recovery ran only when the reply was nothing but the call blocks, so a narration line followed by a complete block parsed to nothing and the run ended with no tool executed (measured 2026-10-27, after 5 and 58 calls); the blocks that end a reply are now taken with the narration kept, a fenced or followed-by-words block is still answered as written, and the streamed line is redrawn with the narration.",
       "gate": "tests/test_stall.py grades the trailing block, the kept narration, the two-block turn and the quoted/fenced cases end to end; tests/test_checkin.py grades the streamed line redrawn without markup, as the same post."
