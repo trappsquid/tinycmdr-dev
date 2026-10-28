@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.53] - 2026-10-27
+
+### Fixed
+- **A tool call written after a narration line is executed:** the harness takes the inline call blocks that end a reply even when a sentence comes first, so the run continues with that call instead of posting the markup as the answer, while a block inside a fence or followed by text is still answered as written and the streamed line is redrawn with the words only (tests/test_stall.py, tests/test_checkin.py).
+
 ## [1.1.52] - 2026-10-26
 
 ### Changed
