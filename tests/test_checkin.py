@@ -777,6 +777,70 @@ def test_run_does_not_double_post_a_streamed_line():
 
 
 
+def test_a_streamed_narration_never_shows_the_call_markup():
+    """Measured 2026-10-27: the live line streamed the model's narration, and the
+    narration grew a raw <tool_call> block after it. The harness recovered no call
+    there (the gate wanted the markup alone), delivered the text as the answer and
+    the operator read `<tool_cal...` in chat. When a trailing call IS recovered, the
+    draft carrying the markup must go and the words must be posted clean."""
+    d = FakeDispatcher()
+    rep = fb.ProgressReporter(d, "chan", "root", "sess")
+    saved_chat = fb.AGENT._chat
+    saved_cfg = copy.deepcopy(fb.CONFIG["agent"])
+    fb.CONFIG["agent"].update(progress_updates=True, checkin_notes=True,
+                              checkin_stream_notes=True, checkin_stream_seconds=0.0,
+                              max_steps=10, max_minutes=5)
+    narration = "Mapping the generator's sections before rewriting it:"
+    content = (narration + "\n<tool_call>\n<function=list_tools>\n</function>\n"
+               "</tool_call>")
+    calls = {"n": 0}
+    notes = []
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None,
+                  max_tokens=None, cancel_event=None, on_delta=None,
+                  session_key=None, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            if on_delta:
+                on_delta({"deltas": 1, "chars": len(content), "content": content,
+                          "ttft": 0.1, "tps": 10.0})
+            return {"role": "assistant", "content": content}
+        return {"role": "assistant", "content": "Done - the listed tools are above."}
+
+    try:
+        fb.AGENT._chat = fake_chat
+        out = fb.AGENT.run("inline-narration", "list the tools",
+                           interim_cb=lambda t: notes.append(t),
+                           narration_cb=rep.narration,
+                           narration_drop_cb=rep.narration_drop,
+                           progress_cb=None)
+    finally:
+        fb.AGENT._chat = saved_chat
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(saved_cfg)
+    check("inline narration: the run continued to its answer",
+          "Done - the listed tools are above." in out, out[:200])
+    # What each post reads as after the run: a later edit replaces the text in
+    # place on this lane, so the ORIGINAL text a draft opened with is not what
+    # the operator keeps.
+    final = {}
+    for pid, p in zip(d.ids, d.posts):
+        final[pid] = p[2]
+    for pid, _chan, text in d.edits:
+        final[pid] = text
+    check("inline narration: no line reads with the call markup afterwards",
+          not any("<tool_call>" in t or "<function=" in t for t in final.values()),
+          final)
+    check("inline narration: the line was redrawn with the words, not deleted",
+          any(e[2].startswith("💬 Mapping the generator's sections")
+              and "<tool_call>" not in e[2] for e in d.edits), d.edits)
+    check("inline narration: the draft stayed a draft, so no duplicate post",
+          not d.deletes and len([p for p in d.posts
+                                 if p[2].startswith("💬 ")]) == 1, d.posts)
+    check("inline narration: the tool step did not post the words again",
+          not notes, notes)
+
+
 def test_each_turn_opens_its_own_narration_post():
     """A multi-step run must read as a SEQUENCE. The first live test reused one post, so
     every step replaced the previous step's text - visible in the chat as one line whose

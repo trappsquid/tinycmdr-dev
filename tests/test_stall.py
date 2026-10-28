@@ -2630,13 +2630,13 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
               '</tool_call>'))
     check("inline: plain prose is left alone",
           fb.parse_inline_tool_calls("just an answer") == []
-          and fb.strip_inline_tool_calls("just an answer") == "just an answer",
+          and fb.trailing_inline_tool_calls("just an answer")
+          == ([], "just an answer"),
           "prose")
 
     # ...and a reply that merely QUOTES the markup is answered as written. The
     # unanchored findall used to execute a fenced example and strip it from the
-    # shown answer; only a reply that IS the call blocks (optionally behind one
-    # think fence) may run.
+    # shown answer; a block inside a fence, or one followed by words, may not run.
     quoted = ("This is the format the template failed to convert:\n"
               "```\n"
               "<tool_call>\n<function=shell>\n<parameter=command>\n"
@@ -2653,10 +2653,10 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
     check("inline: ...the model is nudged to use the interface instead",
           any("did NOT run" in str(m.get("content") or "") for m in _second),
           [str(m.get("content"))[:60] for m in _second])
-    _whole = getattr(fb, "inline_calls_are_the_whole_reply", None)
-    check("inline: the whole-reply predicate accepts the bare form",
-          callable(_whole) and _whole(leaked)
-          and not _whole(quoted) and not _whole("just an answer"), "predicate")
+    _tail = getattr(fb, "trailing_inline_tool_calls", None)
+    check("inline: the trailing predicate accepts the bare form",
+          callable(_tail) and bool(_tail(leaked)[0]) and _tail(leaked)[1] == ""
+          and not _tail(quoted)[0] and not _tail("just an answer")[0], "predicate")
 
     # The JSON body every non-coder template emits inside <tool_call>. The XML regex
     # alone read it as prose: the raw call was posted and a turn was spent scolding
@@ -2669,10 +2669,9 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
           and parsed_json[0]["arguments"] == {"command": "Write-Output json-inline-ok"},
           parsed_json)
     check("inline: ...is stripped from the shown answer",
-          fb.strip_inline_tool_calls(json_leak) == "",
-          fb.strip_inline_tool_calls(json_leak))
-    check("inline: ...and counts as the whole reply",
-          _whole(json_leak) and not _whole("see " + json_leak), json_leak)
+          _tail(json_leak)[1] == "", _tail(json_leak)[1])
+    check("inline: ...and counts as the trailing call",
+          bool(_tail(json_leak)[0]), json_leak)
     nested = ('<tool_call>{"name": "task", "arguments": '
               '{"steps": [{"a": 1}], "n": 2}}</tool_call>')
     nested_parsed = fb.parse_inline_tool_calls(nested)
@@ -2694,6 +2693,68 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
     check("inline: the minted tool-call id is 9 alphanumerics",
           bool(_ids3) and all(len(i) == 9 and i.isascii() and i.isalnum()
                               for i in _ids3), _ids3)
+
+
+def test_narration_before_a_trailing_tool_call_is_executed():
+    """Measured 2026-10-27: a reply wrote a narration sentence, then its tool call as
+    text, and the run ended there with zero tool calls - twice in one session.
+
+    The inline recovery only ran when the blocks were the WHOLE reply
+    (A-2026-10-08-128), so narration + a complete block parsed to nothing: the turn
+    was classified `answer`, the markup was posted to the operator and the run
+    closed as finished. The blocks that END a reply are the call; words AFTER the
+    last block, or a block inside a fence, are a quotation and are still answered as
+    written - that is the A-128 class, and it must stay out.
+    """
+    narration = "Mapping the generator's sections before rewriting the look:"
+    trailing = ("\n<tool_call>\n<function=shell>\n<parameter=command>\n"
+                "echo trailing-inline-ok\n</parameter>\n</function>\n"
+                "</tool_call>")
+    # Real work first: both live stalls delivered this shape after 5 and 58 calls.
+    # At 0 calls the use-the-interface ask happens to cover it; the guard above
+    # that ask is fenced on calls == 0, which is why the live runs ended instead.
+    probe = TMP / "trailing_probe.txt"
+    probe.write_text("ok\n", encoding="utf-8")
+    fb.CONFIG["agent"]["max_steps"] = 10
+    fb.CONFIG["agent"]["max_minutes"] = 5
+    out, calls, payloads = _scripted_run([
+        _call_reply("1", args={"path": str(probe)}),
+        {"role": "assistant", "content": narration + trailing},
+        {"role": "assistant", "content": "Done - the trailing call ran."},
+    ])
+    check("trailing: the run continued instead of delivering the markup",
+          "Done - the trailing call ran." in out, out[:200])
+    check("trailing: the call ran", calls >= 2, f"{calls} tool call(s)")
+    last = json.dumps(payloads[-1])
+    check("trailing: the stored turn carries a real tool call",
+          '"tool_calls"' in last and '"name": "shell"' in last.replace('\\"', '"'),
+          last[:300])
+    check("trailing: the narration before it is kept",
+          narration in last, last[:300])
+    check("trailing: the markup is not kept in the turn",
+          "<function=shell>" not in last, last[:300])
+
+    # the helper itself: only blocks that END the reply, and only outside a fence
+    found, shown = fb.trailing_inline_tool_calls(narration + trailing)
+    check("trailing: the helper returns the call and the narration",
+          len(found) == 1 and found[0]["name"] == "shell" and shown == narration,
+          (found, shown))
+    check("trailing: a block followed by words is a quotation",
+          fb.trailing_inline_tool_calls(
+              narration + trailing + "\nThat is the shape it should have used.")[0] == [],
+          "quoted")
+    fenced = "The template emitted this:\n```\n" + trailing.strip() + "\n```"
+    check("trailing: a fenced block at the very end never runs",
+          fb.trailing_inline_tool_calls(fenced)[0] == [], fenced[-90:])
+    check("trailing: the A-128 quoted example is unchanged",
+          fb.trailing_inline_tool_calls(
+              "This is the format the template failed to convert:\n```\n"
+              + trailing.strip() + "\n```\nI have not run anything.")[0] == [],
+          "A-128")
+    two = narration + trailing + "\n" + trailing.replace(
+        "echo trailing-inline-ok", "echo second-inline-ok")
+    check("trailing: two adjacent blocks are both taken",
+          len(fb.trailing_inline_tool_calls(two)[0]) == 2, two[-220:])
 
 
 def test_startup_validation_catches_an_unconfigured_host():

@@ -23193,24 +23193,66 @@ def parse_inline_tool_calls(text):
     return calls
 
 
-def strip_inline_tool_calls(text):
-    """The same text minus any inline tool-call XML or JSON block, so a leaked
-    call never reaches the chat and never lands in history as an answer."""
-    return _INLINE_JSON_CALL_RE.sub("", _INLINE_CALL_RE.sub("", text or "")).strip()
+_FENCE_RX = re.compile(r"^\s{0,3}(`{3,}|~{3,})", re.M)
 
 
-def inline_calls_are_the_whole_reply(text):
-    """True when `text` is inline tool-call blocks and NOTHING else.
+def _inside_open_fence(text, pos):
+    """True when `pos` falls inside a fenced block that never closed."""
+    fence = ""
+    for m in _FENCE_RX.finditer(text):
+        if m.start() >= pos:
+            break
+        mark = m.group(1)
+        if not fence:
+            fence = mark
+        elif mark[0] == fence[0] and len(mark) >= len(fence):
+            fence = ""
+    return bool(fence)
 
-    The unanchored findall used to execute any reply that merely MENTIONED the
-    markup - a fenced example, an explanation of the format, a quoted file - and
-    stripped it from the shown answer (A-2026-10-08-128). Whitespace around the
-    blocks is fine, and one leading think fence is skipped (a server with no
-    reasoning parser leaks its whole think block into content); a reply that is
-    only a think fence parses to no calls anyway."""
-    rest = _INLINE_JSON_CALL_RE.sub("", _INLINE_CALL_RE.sub("", text or ""))
-    rest = re.sub(r"(?s)^\s*<think>.*?</think>", "", rest)
-    return bool((text or "").strip()) and not rest.strip()
+
+def _inline_call_spans(text, start=0):
+    """Every complete inline call block in `text`, in order, as (start, end)."""
+    spans = []
+    for rx in (_INLINE_CALL_RE, _INLINE_JSON_CALL_RE):
+        spans.extend(m.span() for m in rx.finditer(text, start))
+    spans.sort()
+    out = []
+    for s, e in spans:
+        if not out or s >= out[-1][1]:
+            out.append((s, e))
+    return out
+
+
+def trailing_inline_tool_calls(text):
+    """(calls, shown) for a reply whose COMPLETE inline call blocks END it.
+
+    A template that fails to convert its own tool calls returns them as text, and
+    measured 2026-10-27 it writes a narration line first ("Mapping ...: <tool_call>").
+    Requiring the whole reply to BE the blocks (A-2026-10-08-128) parsed that shape
+    to nothing, so the markup was posted as the answer and the run ended with no
+    tool executed - twice in one session, after 5 and 58 calls.
+
+    The blocks that END a reply are therefore taken, and only a contiguous run of
+    them: words after the last block mean the markup is a quotation, and a block
+    inside a fence is the quoted example A-128 was written for. Both are answered
+    as written. `shown` is the reply without the taken blocks, so the narration
+    stays and the markup never reaches chat.
+    """
+    body = text or ""
+    think = re.match(r"(?s)\s*<think>.*?</think>", body)
+    spans = _inline_call_spans(body, think.end() if think else 0)
+    if not spans:
+        return [], body
+    start, end = spans[-1]
+    if body[end:].strip():
+        return [], body
+    for s, e in reversed(spans[:-1]):
+        if body[e:start].strip():
+            break
+        start = s
+    if _inside_open_fence(body, start):
+        return [], body
+    return parse_inline_tool_calls(body[start:end]), body[:start].rstrip()
 
 
 def _num(v):
@@ -26675,15 +26717,15 @@ class Agent:
                         reply.pop("reasoning_content", None)
                     messages.append(reply)
                     tool_calls = reply.get("tool_calls") or []
-                    if not tool_calls and inline_calls_are_the_whole_reply(
-                            reply.get("content")):
+                    if not tool_calls:
                         # A template that fails to convert its own textual tool
-                        # calls leaves the XML in content - and then the reply is
-                        # NOTHING but the call blocks. A reply that merely quotes
-                        # the markup (a fence, prose, a file it read) is answered
-                        # as written: parsing it would execute a quotation
-                        # (A-2026-10-08-128).
-                        inline = parse_inline_tool_calls(reply.get("content"))
+                        # calls leaves the XML in content. The blocks that END the
+                        # reply are the call even when a narration line comes first
+                        # (see trailing_inline_tool_calls); a block followed by
+                        # words, or one inside a fence, is a quotation and is
+                        # answered as written (A-2026-10-08-128).
+                        inline, _shown = trailing_inline_tool_calls(
+                            reply.get("content"))
                         if inline:
                             log.warning("[%s] %d tool call(s) arrived as inline "
                                         "text rather than structured "
@@ -26695,11 +26737,23 @@ class Agent:
                                  "function": {"name": c["name"],
                                               "arguments": json.dumps(
                                                   c["arguments"])}}
-                                for i, c in enumerate(inline)]
+                                for c in inline]
                             reply = {**reply, "tool_calls": tool_calls,
-                                     "content": strip_inline_tool_calls(
-                                         reply.get("content"))}
+                                     "content": _shown}
                             messages[-1] = reply
+                            if _delta_gate["streamed"] and narration_cb and _shown:
+                                # The live line already carried this text WITH the
+                                # call markup in it. Redraw that same line with the
+                                # narration only: raw markup must never be what the
+                                # operator reads, and a chat lane parks a dropped
+                                # draft rather than deleting it (no tombstone).
+                                # The tool step's note is skipped because streamed
+                                # stays set, so the words are shown once.
+                                try:
+                                    narration_cb(_shown, True, False)
+                                except Exception:
+                                    log.debug("narration redraw failed",
+                                              exc_info=True)
                     # WHAT THIS TURN LOOKED LIKE, logged for EVERY turn - the one that
                     # called a tool, the one that answered, and the one that promised and
                     # stopped - before anything acts on it (see _log_turn_facts). It sits
