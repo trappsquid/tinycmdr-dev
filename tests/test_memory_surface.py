@@ -309,13 +309,41 @@ and the index and log a consumer browses.
         fb.memory_index_update()
         saved = fb.CONFIG["agent"].get("memory_index_max_chars")
         fb.CONFIG["agent"]["memory_index_max_chars"] = 400
+        import logging
+
+        rec = []
+
+        class _H(logging.Handler):
+            def emit(self, record):
+                rec.append(record.getMessage())
+
+        h = _H()
+        fb.log.addHandler(h)
         try:
+            # Guard the new name: on the pre-fix build it does not exist, and the check
+            # below must FAIL there (two warnings), not die on an AttributeError.
+            _warned = getattr(fb, "_mem_index_warned", None)
+            if _warned is not None:
+                _warned.clear()
             block = fb.volatile_context()
+            fb.volatile_context()          # a second prompt build must not repeat it
         finally:
+            fb.log.removeHandler(h)
             fb.CONFIG["agent"]["memory_index_max_chars"] = saved
         check("an over-budget index says it was cut", "index cut at" in block, block[-400:])
         check("...and names the dropped section", "dropped: Runbook" in block,
               block[-400:])
+        # The section list is EMPTY when the cut lands inside a type - the ordinary
+        # case, and the one that hid most of a measured bundle behind "sections
+        # dropped: none". The concept count is the number that tells the truth.
+        m = re.search(r"index cut at 400 chars: (\d+) of 4 concepts", block)
+        check("the cut says how many of the 4 concepts survived",
+              m is not None and 0 < int(m.group(1)) < 4, block[-160:])
+        said = [x for x in rec if "over its 400-char budget" in x]
+        check("the over-budget warning is said ONCE per process, not per prompt build",
+              len(said) == 1, f"{len(said)} line(s)")
+        check("...and it counts concepts, not only sections",
+              bool(said) and "concepts" in said[0], said[:1])
 
 
     def test_the_prompt_index_renders_at_read_time_so_staleness_is_never_frozen():

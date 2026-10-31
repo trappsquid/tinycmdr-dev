@@ -21720,6 +21720,11 @@ def _match_tools(query, limit, session_key=None):
 
 # System prompt
 _notes_warned = False
+# The over-budget index warnings already said, as (chars, cap, kept, total) tuples. The
+# index rides EVERY prompt: one session logged the same sentence 678 times, which buried
+# the rest of the log. A size that changed is news and says itself once; an unchanged one
+# has nothing left to teach.
+_mem_index_warned = set()
 
 
 _STATE_PREFIX = "[context only — live machine state"
@@ -21956,10 +21961,10 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
         if len(index) > cap:
             # A read path never rewrites the bundle (the notes.md lesson): bound what
             # the prompt sees - but on a LINE boundary and NAMING what the tail loses.
-            # The index is grouped by type in a fixed order, so a blind head-cut
-            # silently dropped whole sections (Runbook, Decision, ...) from every
-            # Prompt; notes.md over budget warns in the log, and so
-            # does this.
+            # The section test catches a whole type falling off the end; the CONCEPT
+            # count catches the ordinary case, where the cut lands inside one type and
+            # "sections dropped: none" is said while most of the index is gone (one
+            # measured bundle kept 9 of its 47 concepts and reported no section dropped).
             head = index[:cap]
             _nl = head.rfind("\n")
             if _nl > 0:
@@ -21967,13 +21972,25 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
             _kept = set(re.findall(r"(?m)^# (\S+)", head))
             _dropped = [t for t in re.findall(r"(?m)^# (\S+)", index)
                         if t not in _kept]
-            log.warning("memory/index.md is %d chars, over its %d-char budget - the "
-                        "prompt sees the first %d chars; sections dropped: %s",
-                        len(index), cap, len(head), ", ".join(_dropped) or "none")
-            index = (head + "\n<!-- index cut at %d chars%s; memory "
+            _total_n = len(re.findall(r"(?m)^\* \[", index))
+            _kept_n = len(re.findall(r"(?m)^\* \[", head))
+            _key = (len(index), cap, _kept_n, _total_n)
+            # Once per distinct overage, not once per prompt build: a prompt-cache miss
+            # is not a reason to repeat a fact the log already carries.
+            if _key not in _mem_index_warned:
+                _mem_index_warned.add(_key)
+                log.warning("memory/index.md is %d chars, over its %d-char budget - the "
+                            "prompt sees the first %d chars and %d of %d concepts; "
+                            "sections dropped: %s",
+                            len(index), cap, len(head), _kept_n, _total_n,
+                            ", ".join(_dropped) or "none")
+            index = (head + "\n<!-- index cut at %d chars: %d of %d concepts%s; memory "
                      "{\"action\": \"list\"} shows all of it -->\n"
-                     % (cap, ("; dropped: " + ", ".join(_dropped))
+                     % (cap, _kept_n, _total_n,
+                        ("; sections dropped: " + ", ".join(_dropped))
                         if _dropped else ""))
+        else:
+            _mem_index_warned.clear()
         if index.strip():
             parts.append("Memory: durable knowledge about this machine, one OKF "
                          "concept per file under memory/ (markdown + YAML "
