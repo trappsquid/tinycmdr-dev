@@ -6730,7 +6730,22 @@ def _parse_field_notes(text):
         if cur is None:
             continue
         if line.startswith("match:"):
-            cur["match"] += [p.strip() for p in line[6:].split(",") if p.strip()]
+            for _p in (p.strip() for p in line[6:].split(",")):
+                if not _p:
+                    continue
+                if not re.search(r"[A-Za-z]", _p):
+                    # A signature with no letter is a NUMBER, and a number on its own
+                    # matches too much: a bare "404" fired the model-not-found note on
+                    # an HTTP 404 from a documentation page (measured 2026-10-30). The
+                    # library's own rule says an ambiguous signature must not be in
+                    # here; the harness enforces the worst class for every hand-edited
+                    # file instead of trusting each one. The note's other signatures
+                    # still fire, so the entry keeps working for the failure it names.
+                    log.warning("field note %r: ignoring the numeric signature %r - a "
+                                "number alone matches unrelated output; use the words "
+                                "around it", cur["title"], _p)
+                    continue
+                cur["match"].append(_p)
         elif line.startswith("scope:"):
             cur["scope"] = line[6:].strip().lower() or "any"
         elif line.startswith("note:"):

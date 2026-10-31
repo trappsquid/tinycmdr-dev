@@ -611,6 +611,29 @@ in behaviour is a change in the regexes, not in the mood of a model.
                   == "exit_code=0\nall good",
                   "annotate_failure is a no-op on a successful result")
 
+            # A NUMBER is not a signature. Measured 2026-10-30: an entry reading
+            # "model not found, no such model, 404" fired on an HTTP 404 from a
+            # documentation page, so the model was told to look for a model swap that
+            # had not happened. The words stay; a signature with no letter is ignored at
+            # parse time, and the entry still fires on the real endpoint body.
+            (workdir / "field-notes.md").write_text(
+                "## model swap\n"
+                "match: model not found, no such model, 404\n"
+                "scope: any\n"
+                "note: Re-point the consumer.\n", encoding="utf-8")
+            fb._FIELD_NOTES_CACHE["mtime"] = None
+            page404 = ("exit_code=1\n<!DOCTYPE html><title>404 | Project X</title>\n"
+                       "Not Found")
+            check(fb.match_field_notes(page404) == [],
+                  "a bare 404 in a page never fires the model-not-found note")
+            hits = fb.match_field_notes("exit_code=1\nmodel not found")
+            check([e["title"] for e in hits] == ["model swap"],
+                  f"...while the words still fire it ({[e['title'] for e in hits]})")
+            # restore the fixture the counter checks below read
+            (workdir / "field-notes.md").write_text(lib.read_text(encoding="utf-8"),
+                                                    encoding="utf-8")
+            fb._FIELD_NOTES_CACHE["mtime"] = None
+
             # ---- the counters: what fired, and what fired nothing ---------------------
             # The library's rule is "if an entry fires and does not help, delete it", which needs
             # a count - and there was none: nothing counted or logged a match on a REAL run
