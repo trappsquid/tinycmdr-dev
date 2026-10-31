@@ -41,6 +41,16 @@ jobs:
             python: "3.12"
             jobs: 4
             gate: ""
+          # The declared band's lower half, kept in step with the dev gate (measured
+          # 2026-10-31: 67/67 on 3.10.20 and 3.11.15, no tree writes).
+          - os: ubuntu-latest
+            python: "3.10"
+            jobs: 4
+            gate: ""
+          - os: ubuntu-latest
+            python: "3.11"
+            jobs: 4
+            gate: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

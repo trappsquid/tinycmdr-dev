@@ -44,6 +44,15 @@ jobs:
         # image is also what GitHub recommends; revisit when latest's pool recovers.
         os: [macos-14, ubuntu-latest]
         python: ["3.12"]
+        # The README promises 3.10-3.12 and only 3.12 ever ran, so the floor was a claim
+        # with no runner behind it. Both lower versions pass the whole sweep (measured
+        # 2026-10-31 on this Mac: 67/67 on 3.10.20 and 3.11.15, no tree writes). One
+        # ubuntu runner each; macOS keeps 3.12.
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+          - os: ubuntu-latest
+            python: "3.11"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -172,7 +181,7 @@ jobs:
   # maintenance/leak-gate.py refuses. A LAN endpoint is only reachable from a runner on that
   # network; on GitHub-hosted runners leave the secret unset and the stub runs.
   install:
-    name: install from the built package / ${{ matrix.os }}
+    name: install from the built package / ${{ matrix.os }} / python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -180,7 +189,16 @@ jobs:
         # macos-14, not -latest: measured 2026-10-13, the macos-latest pool assigned this
         # account no runner for an hour - the jobs queued, then were cancelled. A pinned
         # image is also what GitHub recommends; revisit when latest's pool recovers.
-        os: [macos-14, ubuntu-latest]
+        include:
+          - os: macos-14
+            python: "3.12"
+          - os: ubuntu-latest
+            python: "3.12"
+          # The floor end to end: the installer builds its venv from 3.10 and the smoke
+          # drives doctor, health and a turn (measured 2026-10-31 on this Mac: the 3.10.20
+          # package installs and runs).
+          - os: ubuntu-latest
+            python: "3.10"
     env:
       TINYCMDR_SMOKE_BASE_URL: ${{ secrets.TINYCMDR_SMOKE_BASE_URL }}
       TINYCMDR_SMOKE_MODEL: ${{ vars.TINYCMDR_SMOKE_MODEL }}
@@ -189,7 +207,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       # build-package.py's payload-floor probe imports the app, which needs requests;
       # without it the build still succeeds but prints "PROBE FAILED" instead of the
       # floor it is there to measure.
