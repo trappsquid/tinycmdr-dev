@@ -5,6 +5,15 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.54] - 2026-10-30
+
+### Fixed
+- **An over-budget memory index is reported once per overage:** the warning no longer repeats on every prompt build and now names how many of the bundle's concepts survive the cut, not only whole sections (tests/test_memory_surface.py).
+- **An assumed window no longer resizes the every-turn caps:** a window built from 8,000 + static + reply because nothing was detected is a guess, so the memory index, the exchange count and the digest cap keep their configured values instead of moving with each probe (tests/test_envelope.py).
+- **A detected context window names the endpoint that reported it:** a local primary and a routed fallback with different windows no longer read as one box flapping between two numbers (tests/test_envelope.py).
+- **A field note ignores a numeric-only signature:** a bare HTTP status no longer fires the model-not-found note on an unrelated 404 page, while the note's words still fire it on the real endpoint body (tests/test_instrument_surface.py).
+- **A carry run number never goes backwards:** a second process holding an older copy of the session's counter can no longer rewind it, so "run 2" cannot read as a fresh start after "run 8" (tests/test_tool_args_surface.py).
+
 ## [1.1.53] - 2026-10-27
 
 ### Fixed
