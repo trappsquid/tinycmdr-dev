@@ -463,6 +463,27 @@ none of this changes what a tool returns or refuses anything.
             # ---- a fresh session carries nothing ----------------------------------
             check(fb.tool_carry_begin(key) == "", "the first run of a session carries nothing")
 
+            # ---- the run number never goes backwards ------------------------------
+            # The counter is per session on disk, but the whole dict is written per
+            # process and two can share a session (a live run and a steering one, or a
+            # restart while the old one is still up). Measured 8 -> 2 in one session,
+            # where "run 2" read as a fresh start to a model that had already run 8.
+            st = fb._carry_load(key)
+            st["run"] = 8
+            fb._carry_save(key)
+            st["run"] = 1                     # a long-lived second process's stale copy
+            fb.tool_carry_begin(key)
+            check(fb._carry_load(key)["run"] == 9,
+                  f"a stale in-memory counter cannot rewind the run number "
+                  f"({fb._carry_load(key)['run']})")
+            st["run"] = 20
+            disk = fb.json.loads(fb._carry_path(key).read_text(encoding="utf-8"))
+            disk["run"] = 3
+            fb._carry_path(key).write_text(fb.json.dumps(disk), encoding="utf-8")
+            fb.tool_carry_begin(key)
+            check(fb._carry_load(key)["run"] == 21,
+                  "...and an older file cannot either")
+
             # ---- what this run gathers is NOT shown back to it --------------------
             out = fb.tool_read_file({"path": str(src), "offset": 100, "limit": 40},
                                     {"session_key": key})

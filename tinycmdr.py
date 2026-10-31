@@ -21025,12 +21025,24 @@ def tool_carry_block(key):
 
 
 def tool_carry_begin(key):
-    """A run is starting: count it, then render what the EARLIER runs left behind."""
+    """A run is starting: count it, then render what the EARLIER runs left behind.
+
+    The counter is monotonic across processes. It lives in the session's carry file,
+    but the whole dict is written per process, and two can share a session (a live run
+    and a steering one, or a restart while the old one is still up). A process whose
+    copy is older must not REWIND it: measured 8 -> 2 in one session, where "run 2"
+    read as a fresh start to a model that had already run 8.
+    """
     if not key or not CONFIG["agent"].get("tool_carry", True):
         return ""
     with _CARRY_LOCK:
         st = _carry_load(key)
-        st["run"] = int(st.get("run") or 0) + 1
+        try:
+            _disk = json.loads(_read_text_any(_carry_path(key)) or "{}")
+            _disk_run = int((_disk or {}).get("run") or 0)
+        except Exception:
+            _disk_run = 0
+        st["run"] = max(int(st.get("run") or 0), _disk_run) + 1
         _carry_save(key)
         block = tool_carry_block(key)
         # Logged so the fleet's own logs are the next measurement of this: the size of the
