@@ -39,10 +39,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14, not -latest: measured 2026-10-13, the macos-latest pool assigned this
-        # account no runner for an hour - the jobs queued, then were cancelled. A pinned
-        # image is also what GitHub recommends; revisit when latest's pool recovers.
-        os: [macos-14, ubuntu-latest]
+        # macos-15, not -latest: the 14 image is in its retirement brownout (retires
+        # 2026-11-02, actions/runner-images#13518 - both macOS jobs failed in 1s on
+        # 2026-10-31), and -latest's pool assigned this account no runner on 2026-10-13.
+        os: [macos-15, ubuntu-latest]
         python: ["3.12"]
         # The README promises 3.10-3.12 and only 3.12 ever ran, so the floor was a claim
         # with no runner behind it. Both lower versions pass the whole sweep (measured
@@ -186,11 +186,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14, not -latest: measured 2026-10-13, the macos-latest pool assigned this
-        # account no runner for an hour - the jobs queued, then were cancelled. A pinned
-        # image is also what GitHub recommends; revisit when latest's pool recovers.
+        # macos-15, not -latest: the 14 image is in its retirement brownout (retires
+        # 2026-11-02, actions/runner-images#13518 - both macOS jobs failed in 1s on
+        # 2026-10-31), and -latest's pool assigned this account no runner on 2026-10-13.
         include:
-          - os: macos-14
+          - os: macos-15
             python: "3.12"
           - os: ubuntu-latest
             python: "3.12"
