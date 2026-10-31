@@ -879,6 +879,50 @@ window, which is exactly what the detection probe returns on a real box.
                   and fb.mem_limit_exchanges("history_exchanges", 20) == 20,
                   "w=131072: a big window keeps the configured caps")
 
+            # ...and a window the harness only ASSUMED is not a window. It is
+            # 8,000 + static + reply, built because nothing was detected, and it MOVES
+            # with the static prompt: one measured session cut the memory index at
+            # 2,054, then 2,105, then 3,000 chars inside minutes because a metadata
+            # probe timed out, not because the endpoint changed. The configured cap
+            # stands on a guess; a real number still scales it.
+            env131 = at_window(fb, 131072)
+            saved_env = fb.AGENT._envelope_cache
+            try:
+                fb.AGENT._envelope_cache = dict(env131, window=16841, source="assumed")
+                check(fb.mem_limit_chars("notes_max_chars", 8000) == 8000,
+                      "an assumed 16,841-token window leaves the every-turn cap alone")
+                check(fb.mem_limit_exchanges("history_exchanges", 20) == 20
+                      and fb.mem_limit_num("digest_lines", 40, 800, 8) == 40,
+                      "  ...for history_exchanges and the digest line count too")
+                fb.AGENT._envelope_cache = dict(env131, window=16841, source="server")
+                check(fb.mem_limit_chars("notes_max_chars", 8000) == 16841 // 8
+                      and fb.mem_limit_num("digest_lines", 40, 800, 8) == 16841 // 800,
+                      "  ...while a DETECTED 16,841 still scales them")
+            finally:
+                fb.AGENT._envelope_cache = saved_env
+
+            # The detected-window line must name WHICH endpoint reported it. Two
+            # endpoints with different windows in one turn (a local 262,144 primary and
+            # a documented-128,000 fallback) read as one box flapping 262,144 <-> 128,000
+            # exactly because the line said only "the server".
+            import logging as _logging
+            _srv = []
+
+            class _Srv(_logging.Handler):
+                def emit(self, record):
+                    _srv.append(record.getMessage())
+
+            _h = _Srv()
+            fb.log.addHandler(_h)
+            try:
+                at_window(fb, 262144)
+            finally:
+                fb.log.removeHandler(_h)
+            said = [m for m in _srv if "reports 262144 per request" in m]
+            check(bool(said) and "the server at " in said[0],
+                  f"a detected window names its endpoint, not just 'the server' "
+                  f"({said[:1]})")
+
             # ... while a ONE-SHOT tool result may follow the window UP to its ceiling. Measured
             # 2026-09-29 on this 131k box: three reads of ~10.6k chars against the 10,000 default
             # were spilled inside six minutes and cost four further calls to read back, when the

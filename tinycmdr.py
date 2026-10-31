@@ -2644,6 +2644,20 @@ def envelope_line(env, raw=False, session_key=None, atlas=False, shell=False,
 TOOL_RESULT_CAP_CEILING = 40000
 
 
+def _assumed_window():
+    """True when the cached envelope's window is a GUESS, not an endpoint's number.
+
+    `source: assumed` means nothing could be detected and no preset applies, so the
+    window is 8,000 + static + reply - a synthetic budget that MOVES with the static
+    prompt. Scaling an every-turn block from it made one session cut the memory index at
+    2,054, then 2,105, then 3,000 chars inside minutes, because a probe timed out, not
+    because the endpoint changed. A guess leaves the configured cap alone; a window the
+    server, the config or a documented preset supplied still scales.
+    """
+    env = getattr(AGENT, "_envelope_cache", None) or {}
+    return env.get("source") == "assumed"
+
+
 def mem_limit_chars(key, default, ceiling=None):
     """A character cap that scales with the WINDOW, not with the model NAME.
 
@@ -2664,7 +2678,8 @@ def mem_limit_chars(key, default, ceiling=None):
     A value the operator actually chose is never exceeded, and the every-turn blocks (the
     notes block, history_exchanges) deliberately do NOT pass a ceiling: those ride EVERY
     request, so a bigger window must not inflate them. Both halves are pinned in
-    tests/test_envelope.py.
+    tests/test_envelope.py. An ASSUMED window does not scale the every-turn cap at all
+    (see _assumed_window); the one-shot ceiling path is unchanged.
     """
     try:
         configured = int(CONFIG["agent"].get(key) or default)
@@ -2678,6 +2693,8 @@ def mem_limit_chars(key, default, ceiling=None):
         # Nobody chose this number, and the result rides exactly one request: follow the
         # window, up to the ceiling. Below the ceiling this is the old rule unchanged.
         return max(512, min(int(ceiling), scaled))
+    if _assumed_window():
+        return configured
     return max(512, min(configured, scaled))
 
 
@@ -2688,7 +2705,7 @@ def mem_limit_exchanges(key, default):
     except (TypeError, ValueError):
         configured = int(default)
     window = int((getattr(AGENT, "_envelope_cache", None) or {}).get("window") or 0)
-    if window <= 0:
+    if window <= 0 or _assumed_window():
         return configured
     return max(2, min(configured, window // 2000))
 
@@ -2707,7 +2724,7 @@ def mem_limit_num(key, default, per_window, floor):
     except (TypeError, ValueError):
         configured = int(default)
     window = int((getattr(AGENT, "_envelope_cache", None) or {}).get("window") or 0)
-    if window <= 0:
+    if window <= 0 or _assumed_window():
         return configured
     return max(int(floor), min(configured, window // int(per_window)))
 
@@ -24783,7 +24800,7 @@ class Agent:
                 log.info("context: %s reports %s per request, static %s + reply "
                          "%s, using messages budget %s (window=%s static=%s "
                          "reply=%s budget=%s)",
-                         ("the server" if source == "server" else
+                         (("the server at %s" % ep_root) if source == "server" else
                           "the documented window for %s" % source.split(":", 1)[-1]),
                          window, static, reply, budget,
                          window, static, reply, budget)
