@@ -24,7 +24,7 @@ Runs **on the machine it manages**: you send a task, it uses real tools (`shell`
 
 | With a self-hosted model, the cost is | tinycmdr |
 | :--- | :--- |
-| 15–30K tokens of harness boilerplate re-prefilled every uncached turn | **~4.1K-token fixed prompt** on a clean unpack (est_tokens; the endpoint read ~3.5K in September) — `tinycmdr status` prints this install's |
+| 15–30K tokens of harness boilerplate re-prefilled every uncached turn | **~4.6K-token fixed prompt** on a clean unpack (est_tokens; the endpoint read ~3.5K in September) — `tinycmdr status` prints this install's |
 | a volatile prefix that invalidates the KV cache every request | static prefix, volatile context **tail-anchored** |
 | a looping or stuck model wedging your inference slot | loop guard, per-run scan budget, stall watchdog, supervised restart |
 | "the UI" requiring a hosted service or an open LAN port | built-in **browser page**, token-gated, loopback by default — or CLI, `--once`, Mattermost/Telegram |
@@ -104,8 +104,9 @@ macOS install with `sudo` ask for root.
 | Linux | [`tinycmdr-linux.tar.gz`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-linux.tar.gz) | `sudo bash install/install-tinycmdr.sh` |
 | macOS | [`tinycmdr-macos.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-macos.zip) | `bash install/install-tinycmdr-macos.sh` |
 
-Stable names always point at the newest build. `SHA256SUMS` covers all eight published files
-(checksummed, not signed — it catches corruption, not a replaced release):
+Stable names always point at the newest build. `SHA256SUMS` covers the six archives and the four
+scripts, and `SHA256SUMS.sig` signs it: the updater verifies that signature against a pinned
+`agent.release_pubkey`, so a replaced release is refused, not just a corrupted one:
 
 ```bash
 base=https://github.com/trappsquid/tinycmdr/releases/latest/download
