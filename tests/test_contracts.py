@@ -18,6 +18,7 @@ maintenance/check-package-assets.py for archives) it lives there and is not repe
 import ast
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -185,6 +186,27 @@ def main():
         _bad_links.append(_target)
     check("every relative link in README.md points at something the package ships",
           not _bad_links, _bad_links)
+
+    # The README's headline token figure was hand-written and had drifted: it said
+    # ~4.1K while the clean build measured 4,624 est (2026-10-31). The pitch doc's
+    # numbers are rendered and graded; this one is graded against the same clean
+    # measurement now, so the next drift fails here instead of in a reader's inbox.
+    _mp = subprocess.run(
+        [sys.executable, str(BASE / "maintenance" / "measure-prompt.py"),
+         "--tokenize", "", "--clean-only"],
+        cwd=str(BASE), capture_output=True, text=True)
+    _mm = re.search(r"^clean\s+v\S+\s+prompt.*=\s+([\d,]+)\s+est", _mp.stdout, re.M)
+    _rm = re.search(r"~([\d.]+)K-token fixed prompt", _readme)
+    if not _mm or not _rm:
+        check("the README's fixed-prompt figure matches the clean measurement", False,
+              "could not read both sides (rc=%s, out=%s)"
+              % (_mp.returncode, (_mp.stdout or "")[-200:]))
+    else:
+        _est = int(_mm.group(1).replace(",", "")) / 1000.0
+        _claim = float(_rm.group(1))
+        check("the README's fixed-prompt figure matches the clean measurement",
+              abs(_claim - _est) <= 0.4,
+              f"README says ~{_claim}K, the clean build measures {_est:.2f}K est")
 
     # ---- 5. no route prefix shadows a later route (both routers) ---------------------
     # '/api/log' matched '/api/login' in the page harness because it was tested first -

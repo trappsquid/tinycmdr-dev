@@ -112,6 +112,9 @@ def main():
     ap.add_argument("--tokenize", default="-", metavar="URL",
                     help="endpoint root to ask (default: this tree's own config); "
                          "pass an empty string for none")
+    ap.add_argument("--clean-only", action="store_true",
+                    help="skip the live leg; the clean leg writes only in a temp dir "
+                         "(the README contract reads this figure)")
     args = ap.parse_args()
     if args.tokenize == "-":
         # The live tree's own endpoint, read from config.json directly: both legs must
@@ -126,7 +129,8 @@ def main():
     elif args.tokenize:
         args.tokenize = args.tokenize.rstrip("/")
     print("endpoint: %s" % (args.tokenize or "none (est_tokens only)"))
-    measure("live", BASE, args.tokenize)
+    if not args.clean_only:
+        measure("live", BASE, args.tokenize)
     work = Path(tempfile.mkdtemp(prefix="tc-measure-"))
     try:
         shutil.copy2(BASE / "tinycmdr.py", work / "tinycmdr.py")
