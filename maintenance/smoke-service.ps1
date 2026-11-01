@@ -72,13 +72,21 @@ try {
     $installer = Join-Path $pkg.FullName "install\install-tinycmdr.ps1"
     # -NoStart: the installer's own verification drives a MODEL turn, and a runner has
     # no endpoint; the files and the task are what this smoke is about. It starts the
-    # task below.
-    $r = Invoke-Native $installer @("-NonInteractive", "-AsService", "-NoStart",
-        "-NoPath", "-NoPause", "-InstallDir", $Inst, "-Python", $Python) $Root
-    if ($r.Code -ne 0) { Write-Host $r.Out; Fail "the installer exited $($r.Code)" }
+    # task below. Switches are passed BY NAME: an array splat binds positionally and put
+    # -NoPath into MattermostPort (measured 2026-11-01).
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $installOut = (& $installer -NonInteractive -AsService -NoStart -NoPath -NoPause `
+            -InstallDir $Inst -Python $Python 2>&1 | Out-String)
+        $installRc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($installRc -ne 0) { Write-Host $installOut; Fail "the installer exited $installRc" }
 
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if (-not $task) { Write-Host $r.Out; Fail "the install registered no task '$TaskName'" }
+    if (-not $task) { Write-Host $installOut; Fail "the install registered no task '$TaskName'" }
     Say "start the task"
     Start-ScheduledTask -TaskName $TaskName
 
