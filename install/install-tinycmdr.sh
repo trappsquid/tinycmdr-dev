@@ -1497,13 +1497,13 @@ TINYCMDR_CLOUD_FALLBACK="$CLOUD_FALLBACK" "$PY" - "$INSTALL_DIR" "$SRC/config.ex
         "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" "$TG_IDS_CLEAN" \
         "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$MODEL_KEY" \
         "$FALLBACK_SPECS" "$FB_ENV_LINES" "$SEARCH_SPECS" \
-        "$WEB_ON" "$WEB_HOST" "$WEB_PORT" "$WEB_HOST_GIVEN" <<'PY'
+        "$WEB_ON" "$WEB_HOST" "$WEB_PORT" "$WEB_HOST_GIVEN" "$WEB_PORT_GIVEN" <<'PY'
 import json, os, sys
 (inst, example, bot, base, model,
  force, mm_host, mm_port, allowed, tg_ids,
  base_given, model_given, model_key,
  fallback_specs, fb_env, search_specs,
- web_on, web_host, web_port, web_host_given) = sys.argv[1:22]
+ web_on, web_host, web_port, web_host_given, web_port_given) = sys.argv[1:23]
 cfg_path = os.path.join(inst, "config.json")
 # The HOST's own config is the base whenever there is one, --force included: an
 # update carries the host's settings forward and changes only what this run was
@@ -1553,10 +1553,13 @@ cfg.setdefault("agent", {})["bot_name"] = bot
 # and wondering why it stopped answering.
 web = cfg.setdefault("web", {})
 web["enabled"] = bool(int(web_on or 1))
-try:
-    web.setdefault("port", int(web_port or 8790))
-except (TypeError, ValueError):
-    pass
+# A given port must LAND: setdefault left the example's 8790 in place while the
+# installer reported the flag's port (the macOS smoke measured the same on 2026-10-31).
+if fresh or int(web_port_given or 0):
+    try:
+        web["port"] = int(web_port or 8790)
+    except (TypeError, ValueError):
+        pass
 if web_host and (int(web_host_given or 0) or fresh):
     web["host"] = web_host
 elif fresh:

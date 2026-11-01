@@ -1116,7 +1116,12 @@ def case_linux_without_systemd(sb, pkg, bindir, user, py):
 def case_web_port_validation(sb, pkg, bindir, user, py):
     """--web-port with a typo used to be swallowed (the config writer's int() failed
     into a try/except) and the page came up on the default port (measured 2026-10-10:
-    --web-port 88O0 installed "fine")."""
+    --web-port 88O0 installed "fine").
+
+    A VALID port must LAND in config.json: setdefault kept the example's 8790 while the
+    installer's summary printed the flag (measured 2026-10-31 by the launchd smoke - the
+    bot bound 8790, the live bot's port, and exited saying the page was already served).
+    """
     log = sb / "logs" / "webport.log"
     env = sandbox_home_env(sb, bindir, log, user)
     for label, script in (("Linux", "install/install-tinycmdr.sh"),
@@ -1130,6 +1135,26 @@ def case_web_port_validation(sb, pkg, bindir, user, py):
         check("%s: an out-of-range --web-port is refused" % label,
               got2.returncode == 1 and "1-65535" in got2.stdout + got2.stderr,
               f"rc={got2.returncode}; out={got2.stdout[-200:]}{got2.stderr[-200:]}")
+
+        inst = sb / ("webport-" + label.lower())
+        if label == "Linux":
+            args = ["bash", pkg / script, "-y", "--mode", "user", "--no-deps",
+                    "--no-sudoers", "--no-service", "--web-port", "18790",
+                    "--install-dir", str(inst)]
+        else:
+            args = ["bash", pkg / script, "-y", "--no-launchd", "--no-path",
+                    "--python", py, "--label", "com.tinycmdr.webport",
+                    "--web-port", "18790", "--install-dir", str(inst)]
+        got3 = run(args, env, pkg)
+        cfg = {}
+        try:
+            cfg = json.loads((inst / "config.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        check("%s: a valid --web-port lands in config.json" % label,
+              got3.returncode == 0 and ((cfg.get("web") or {}).get("port") == 18790),
+              f"rc={got3.returncode}; port={(cfg.get('web') or {}).get('port')}; "
+              f"out={got3.stdout[-300:]}{got3.stderr[-200:]}")
 
 
 def case_installer_probes_endpoint(sb, pkg, bindir, user, py):

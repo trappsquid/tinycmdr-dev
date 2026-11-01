@@ -1384,6 +1384,7 @@ FALLBACK_SPECS="$FALLBACK_SPECS" FB_ENV_LINES="$FB_ENV_LINES" \
 SEARCH_SPECS="$SEARCH_SPECS" \
 MM_PORT_ARG="$MM_PORT_ARG" \
 WEB_ON="$WEB_ON" WEB_HOST="$WEB_HOST" WEB_HOST_GIVEN="$WEB_HOST_GIVEN" WEB_PORT="$WEB_PORT" \
+WEB_PORT_GIVEN="$WEB_PORT_GIVEN" \
 "$VPY" - "$SRC/config.example.json" "$INSTALL_DIR/config.json" <<'PY'
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -1422,10 +1423,14 @@ cfg.setdefault("agent", {})["bot_name"] = os.environ["BOT_NAME"]
 # and wondering why it stopped answering.
 web = cfg.setdefault("web", {})
 web["enabled"] = bool(int(os.environ.get("WEB_ON") or 1))
-try:
-    web.setdefault("port", int(os.environ.get("WEB_PORT") or 8790))
-except (TypeError, ValueError):
-    pass
+# A given port must LAND: setdefault left the example's 8790 in place while the
+# installer reported the flag's port (measured 2026-10-31 running the launchd smoke
+# with --web-port 18790: the summary said 18790, the bot bound 8790).
+if fresh or os.environ.get("WEB_PORT_GIVEN") == "1":
+    try:
+        web["port"] = int(os.environ.get("WEB_PORT") or 8790)
+    except (TypeError, ValueError):
+        pass
 _wh = os.environ.get("WEB_HOST", "").strip()
 if _wh and (os.environ.get("WEB_HOST_GIVEN") == "1" or fresh):
     web["host"] = _wh
