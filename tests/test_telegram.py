@@ -1832,7 +1832,10 @@ try:
     except SystemExit:
         pass
     _cl_cmd = _holder_cmd.get("client")
-    _dl = time.time() + 10
+    # 30s, not 10: measured 2026-11-01 on windows-latest, the answer missed a 10s window
+    # while workers from the preceding checks were still live. The assertion is that the
+    # chat door answers, not that it answers within 10s; the bound only stops a hang.
+    _dl = time.time() + 30
     while time.time() < _dl and not any("tinycmdr v" in m["text"] for m in _cl_cmd.messages):
         time.sleep(0.02)
     # A worker left over from an earlier check can still call this module-global stub with
@@ -1840,7 +1843,8 @@ try:
     check("run_telegram answers /status in the chat, never in a run",
           any("tinycmdr v" in m["text"] for m in _cl_cmd.messages)
           and not [c for c in _never_called if "/status" in str(c[1])],
-          ([m["text"][:30] for m in _cl_cmd.messages], _never_called))
+          ([m["text"][:30] for m in _cl_cmd.messages],
+           [c for c in _never_called if "/status" in str(c[1])]))
 finally:
     _restore_cmd()
 
