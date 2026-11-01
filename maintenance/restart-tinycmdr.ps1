@@ -71,9 +71,36 @@ if ($Stop) {
     exit $exitCode
 }
 
-# start through the service vbs = exactly what the Tinycmdr logon/startup task does
-& wscript.exe //B //Nologo (Join-Path $install 'tinycmdr-service.vbs')
-Log "launched tinycmdr-service.vbs"
+# Start the OWNED scheduled task when there is one. Relaunching the vbs from this
+# elevated shell runs it in THIS session, not the task's S4U principal - the shape that
+# left a box deaf after `tinycmdr restart` (open defect): the task instance was killed
+# and nothing started it again. The task lookup matches THIS install's vbs at a path
+# boundary, so a sibling install is never touched. A startup-shortcut install has no
+# task, and the vbs is the right door there.
+$ownedTask = $null
+foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+    foreach ($a in @($t.Actions)) {
+        if ($a.Execute -and $a.Execute -match 'wscript' -and $a.Arguments -and
+            $a.Arguments.IndexOf(($install.TrimEnd('\') + '\tinycmdr-service.vbs'),
+                [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            $ownedTask = $t
+            break
+        }
+    }
+    if ($ownedTask) { break }
+}
+if ($ownedTask) {
+    Log "starting owned task: $($ownedTask.TaskName)"
+    try {
+        Start-ScheduledTask -TaskName $ownedTask.TaskName -ErrorAction Stop
+    } catch {
+        Log "FAILED to start task $($ownedTask.TaskName): $($_.Exception.Message)"
+        $exitCode = 1
+    }
+} else {
+    & wscript.exe //B //Nologo (Join-Path $install 'tinycmdr-service.vbs')
+    Log "no owned task: launched tinycmdr-service.vbs"
+}
 # Wait for it to appear rather than sampling once at 15s: the supervisor starts the bot,
 # and on a cold box that has taken longer. A bare 0 here used to exit 0 anyway; the
 # helper now returns the verdict (the macOS and POSIX twins always did).

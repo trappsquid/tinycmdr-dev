@@ -255,3 +255,9 @@ jobs:
         run: |
           python maintenance\smoke-install.py --install-dir "$env:RUNNER_TEMP\inst" `
               --python "$env:RUNNER_TEMP\inst\venv\Scripts\python.exe"
+      # The smoke above passes -SkipTask; this is the one place the task is registered,
+      # started, restarted through the shipped verb, and removed.
+      - name: install with the task, restart it, clean up
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File maintenance\smoke-service.ps1

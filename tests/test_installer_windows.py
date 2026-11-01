@@ -810,6 +810,10 @@ def main():
           "TrimEnd('\\') + '\\'" in restart_ps1
           and re.search(r"IndexOf\(\$install,\s*\n", restart_ps1) is None,
           "a raw substring also matches a sibling folder that starts with the same text")
+    check("the restart helper starts the OWNED task, not a session-local vbs",
+          '$ownedTask = $null' in restart_ps1 and "Start-ScheduledTask" in restart_ps1
+          and "no owned task: launched tinycmdr-service.vbs" in restart_ps1,
+          "relaunching the vbs runs it in the caller's session, not the task's S4U principal")
     check("a failed icacls is reported, not printed as locked",
           "$LASTEXITCODE -ne 0" in install and "was NOT tightened" in install
           and install.find("was NOT tightened") < install.find("locked to $env:USERNAME"))
@@ -824,7 +828,7 @@ def main():
         skip("every shipped .ps1 parses", "no PowerShell on PATH here (the Windows job)")
     else:
         for rel in ("update.ps1", "install.ps1", "install/install-tinycmdr.ps1",
-                    "maintenance/restart-tinycmdr.ps1"):
+                    "maintenance/restart-tinycmdr.ps1", "maintenance/smoke-service.ps1"):
             probe = ("$e=$null;[System.Management.Automation.Language.Parser]::"
                      "ParseFile('%s',[ref]$null,[ref]$e)|Out-Null;"
                      "if($e.Count){$e|ForEach-Object{$_.Message};exit 1}" % rel)
