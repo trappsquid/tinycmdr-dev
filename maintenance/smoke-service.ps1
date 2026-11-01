@@ -25,13 +25,30 @@ $oldPyPath = $env:PYTHONPATH
 function Say($m) { Write-Host "`n=== $m" }
 function Fail($m) { Write-Host "*** $m" -ForegroundColor Red; throw $m }
 
+function Invoke-Native([string] $exe, [string[]] $argv, [string] $cwd) {
+    # Native stderr is a LOG here (the app logs its INFO lines there), and under
+    # $ErrorActionPreference = "Stop" PowerShell 5.1 turns a redirected native stderr
+    # line into a terminating NativeCommandError - the first health call died on its own
+    # "theme.toml was missing" line (measured 2026-11-01 on windows-latest). Continue
+    # for the call, capture both streams, then restore the caller's preference.
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    Push-Location $cwd
+    try {
+        $out = (& $exe @argv 2>&1 | Out-String)
+        $code = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        $ErrorActionPreference = $saved
+    }
+    return [pscustomobject]@{ Out = $out; Code = $code }
+}
+
 function Wait-Up([int] $seconds) {
     $deadline = (Get-Date).AddSeconds($seconds)
-    $out = ""
     while ((Get-Date) -lt $deadline) {
-        Push-Location $Inst
-        try { $out = (& $Vpy $App health 2>&1 | Out-String) } finally { Pop-Location }
-        if ($LASTEXITCODE -eq 0 -and $out -match " up " -and $out -notmatch " is DOWN") { return $out }
+        $r = Invoke-Native $Vpy @($App, "health") $Inst
+        if ($r.Code -eq 0 -and $r.Out -match " up " -and $r.Out -notmatch " is DOWN") { return $r.Out }
         Start-Sleep -Seconds 2
     }
     return $null
@@ -42,41 +59,45 @@ try {
     Say "build the public package"
     Copy-Item (Join-Path $Root "maintenance\private_rules.example.py") (Join-Path $Rules "private_rules.py")
     $env:PYTHONPATH = if ($oldPyPath) { "$Rules;$oldPyPath" } else { $Rules }
-    & $Python (Join-Path $Root "maintenance\build-package.py") --public
-    if ($LASTEXITCODE -ne 0) { Fail "build-package.py failed" }
+    $r = Invoke-Native $Python @((Join-Path $Root "maintenance\build-package.py"), "--public") $Root
+    if ($r.Code -ne 0) { Write-Host $r.Out; Fail "build-package.py exited $($r.Code)" }
     $zip = Get-ChildItem (Join-Path $Root "dist\tinycmdr-*-win.zip") |
         Sort-Object LastWriteTime | Select-Object -Last 1
     if (-not $zip) { Fail "the build produced no win zip" }
 
-    Say "unpack and install with -AsService"
+    Say "unpack and install with -AsService -NoStart"
     $pkgRoot = Join-Path $Work "pkg"
     Expand-Archive -Path $zip.FullName -DestinationPath $pkgRoot -Force
     $pkg = Get-ChildItem $pkgRoot -Directory | Select-Object -First 1
-    # -NoStart: the installer's own verification drives a MODEL turn, and a runner has no
-    # endpoint; the files and the task are what this smoke is about. It starts the task below.
-    & (Join-Path $pkg.FullName "install\install-tinycmdr.ps1") -NonInteractive -AsService `
-        -NoStart -NoPath -NoPause -InstallDir $Inst -Python $Python
-    if ($LASTEXITCODE -ne 0) { Fail "the installer exited $LASTEXITCODE" }
+    $installer = Join-Path $pkg.FullName "install\install-tinycmdr.ps1"
+    # -NoStart: the installer's own verification drives a MODEL turn, and a runner has
+    # no endpoint; the files and the task are what this smoke is about. It starts the
+    # task below.
+    $r = Invoke-Native $installer @("-NonInteractive", "-AsService", "-NoStart",
+        "-NoPath", "-NoPause", "-InstallDir", $Inst, "-Python", $Python) $Root
+    if ($r.Code -ne 0) { Write-Host $r.Out; Fail "the installer exited $($r.Code)" }
 
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if (-not $task) { Fail "the install registered no task '$TaskName'" }
+    if (-not $task) { Write-Host $r.Out; Fail "the install registered no task '$TaskName'" }
     Say "start the task"
     Start-ScheduledTask -TaskName $TaskName
 
     Say "health after install"
     $out = Wait-Up 90
-    if (-not $out) { Fail "health did not report up after install" }
+    if (-not $out) {
+        $r = Invoke-Native $Vpy @($App, "health") $Inst
+        Write-Host $r.Out
+        Fail "health did not report up after install"
+    }
     Write-Host $out.Trim()
 
     Say "restart through the shipped verb"
-    Push-Location $Inst
-    try { $rout = (& $Vpy $App restart 2>&1 | Out-String) } finally { Pop-Location }
-    $rrc = $LASTEXITCODE
-    Write-Host $rout.Trim()
-    if ($rrc -ne 0) {
+    $r = Invoke-Native $Vpy @($App, "restart") $Inst
+    Write-Host $r.Out.Trim()
+    if ($r.Code -ne 0) {
         $rlog = Join-Path $Inst "maintenance\restart-tinycmdr.log"
         if (Test-Path $rlog) { Get-Content $rlog -Tail 30 | Write-Host }
-        Fail "tinycmdr restart exited $rrc"
+        Fail "tinycmdr restart exited $($r.Code)"
     }
 
     Say "health after restart"
