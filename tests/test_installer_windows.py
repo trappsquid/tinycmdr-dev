@@ -814,6 +814,9 @@ def main():
           '$ownedTask = $null' in restart_ps1 and "Start-ScheduledTask" in restart_ps1
           and "no owned task: launched tinycmdr-service.vbs" in restart_ps1,
           "relaunching the vbs runs it in the caller's session, not the task's S4U principal")
+    check("...and never kills its own caller's chain",
+          '$KeepPids' in restart_ps1 and "ParentProcessId" in restart_ps1,
+          "the restart verb is a python process under the install; killing it ended the wait")
     check("a failed icacls is reported, not printed as locked",
           "$LASTEXITCODE -ne 0" in install and "was NOT tightened" in install
           and install.find("was NOT tightened") < install.find("locked to $env:USERNAME"))

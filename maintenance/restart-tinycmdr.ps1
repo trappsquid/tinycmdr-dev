@@ -13,6 +13,22 @@ $install = Split-Path -Parent $here
 $log = Join-Path $here 'restart-tinycmdr.log'
 function Log([string]$m) { "$((Get-Date).ToString('s')) $m" | Add-Content -Path $log }
 
+# The caller chain must survive. `tinycmdr restart` launches this helper from a python
+# process whose command line carries this install dir, so the install-scoped filter below
+# killed its own caller: the smoke measured 7 processes killed, the verb then exited -1,
+# and its lock wait never ran (2026-11-01) - the deaf-box shape. Keep this helper's PID
+# and its whole ancestry (the verb, the shell, the runner) out of the kill list.
+$KeepPids = @($PID)
+try {
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue
+    while ($p -and $p.ParentProcessId) {
+        $pp = [int]$p.ParentProcessId
+        if ($KeepPids -contains $pp) { break }
+        $KeepPids += $pp
+        $p = Get-CimInstance Win32_Process -Filter "ProcessId=$pp" -ErrorAction SilentlyContinue
+    }
+} catch { }
+
 # The bot, its SUPERVISOR and the wscript launcher, scoped to this install - the
 # same clauses install-tinycmdr.ps1's Stop-TinycmdrProcesses uses (keep the
 # two in step). The old filter was Name='pythonw.exe' + '*tinycmdr.py*': it never
@@ -32,6 +48,7 @@ function Get-TinycmdrProcesses {
     @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
       Where-Object {
           if (-not $_.CommandLine) { return $false }
+          if ($KeepPids -contains $_.ProcessId) { return $false }
           if ($_.Name -like 'python*' -or $_.Name -eq 'wscript.exe') {
               # IndexOf with OrdinalIgnoreCase, never -like: -like reads [ ] * ? in the
               # PATH as WILDCARDS, so a bracketed install dir matched nothing and the old
