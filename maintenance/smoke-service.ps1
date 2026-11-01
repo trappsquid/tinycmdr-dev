@@ -52,12 +52,16 @@ try {
     $pkgRoot = Join-Path $Work "pkg"
     Expand-Archive -Path $zip.FullName -DestinationPath $pkgRoot -Force
     $pkg = Get-ChildItem $pkgRoot -Directory | Select-Object -First 1
+    # -NoStart: the installer's own verification drives a MODEL turn, and a runner has no
+    # endpoint; the files and the task are what this smoke is about. It starts the task below.
     & (Join-Path $pkg.FullName "install\install-tinycmdr.ps1") -NonInteractive -AsService `
-        -NoPath -NoPause -InstallDir $Inst -Python $Python
+        -NoStart -NoPath -NoPause -InstallDir $Inst -Python $Python
     if ($LASTEXITCODE -ne 0) { Fail "the installer exited $LASTEXITCODE" }
 
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if (-not $task) { Fail "the install registered no task '$TaskName'" }
+    Say "start the task"
+    Start-ScheduledTask -TaskName $TaskName
 
     Say "health after install"
     $out = Wait-Up 90
