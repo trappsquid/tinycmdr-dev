@@ -49365,8 +49365,9 @@ def _verify_asset(asset_path, sums_path, asset_name):
     """(ok, why): the ONE file this run fetched, against its own SHA256SUMS line.
 
     The same contract install.sh uses. A mismatch means a corrupted or truncated transfer
-    and nothing is unpacked. Releases are unsigned, so this checks the bytes arrived whole -
-    it does not prove who made them.
+    and nothing is unpacked. The digest checks the bytes arrived whole; the release
+    signature, verified separately with the key in release-pubkey.pub, proves who wrote
+    them.
     """
     try:
         lines = Path(sums_path).read_text(encoding="utf-8", errors="replace").splitlines()
@@ -49389,9 +49390,22 @@ def _verify_asset(asset_path, sums_path, asset_name):
 
 
 def _release_pubkey():
-    """The host's pinned release key: an SSH public key line or a file holding one."""
+    """The release key: the host's pin, or the key shipped with this install.
+
+    `agent.release_pubkey` (a line or a file) overrides. An empty config uses
+    BASE_DIR/release-pubkey.pub, which every package carries: the key is public, and the
+    shipped copy is what makes a signed release verifiable without a config edit. No key
+    at all means the signature cannot be checked, and the update says exactly that.
+    """
     raw = str(((CONFIG.get("agent") or {}).get("release_pubkey")
                or os.environ.get("TINYCMDR_RELEASE_PUBKEY") or "")).strip()
+    if not raw:
+        shipped = Path(BASE_DIR) / "release-pubkey.pub"
+        try:
+            if shipped.is_file():
+                raw = shipped.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            raw = ""
     if not raw:
         return ""
     try:
@@ -49641,7 +49655,8 @@ def _verb_update(rest, ask=False):
             if not ok_sum:
                 if os.environ.get("TINYCMDR_NO_SUMS") == "1":
                     if _release_pubkey():
-                        print("this host pins agent.release_pubkey, so TINYCMDR_NO_SUMS=1 "
+                        print("a release key is configured (agent.release_pubkey or the "
+                              "key shipped with this install), so TINYCMDR_NO_SUMS=1 "
                               "cannot skip the digest or the signature - refusing.",
                               file=sys.stderr)
                         return 1
@@ -49660,25 +49675,28 @@ def _verb_update(rest, ask=False):
                 pubkey = _release_pubkey()
                 if pubkey and os.environ.get("TINYCMDR_NO_SIGNATURE") == "1":
                     print("*** TINYCMDR_NO_SIGNATURE=1: the release signature is NOT "
-                          "checked, although agent.release_pubkey is set.", file=sys.stderr)
+                          "checked, although a release key is available.",
+                          file=sys.stderr)
                     pubkey = ""
                 if pubkey:
                     sig = work / "SHA256SUMS.sig"
                     ok_sig, why_sig = _download(base + "/SHA256SUMS.sig", sig)
                     if not ok_sig:
-                        print("this host pins agent.release_pubkey, but the release "
-                              "signature could not be fetched (%s) - refusing."
-                              % why_sig, file=sys.stderr)
+                        print("a release key is configured, but the release signature "
+                              "could not be fetched (%s) - refusing." % why_sig,
+                              file=sys.stderr)
                         return 1
                     ok, why = _verify_release_signature(sums, sig, pubkey)
                     if not ok:
                         print(why, file=sys.stderr)
                         return 1
-                    print("    the download matches SHA256SUMS and its signature.")
+                    print("    the download matches SHA256SUMS and its signature "
+                          "(release-pubkey.pub).")
                 else:
-                    print("    the download matches SHA256SUMS. Releases are unsigned, so "
-                          "this catches a corrupted or truncated transfer, not a replaced "
-                          "release; set agent.release_pubkey to check the signature.")
+                    print("    the download matches SHA256SUMS. No release key is "
+                          "available here, so the signature was not checked; this "
+                          "catches a corrupted or truncated transfer, not a replaced "
+                          "release.")
             root = _extract_release(archive, work / "pkg")
             if root is None:
                 print("the archive did not contain a tinycmdr-* folder", file=sys.stderr)

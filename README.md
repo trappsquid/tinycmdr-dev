@@ -105,8 +105,9 @@ macOS install with `sudo` ask for root.
 | macOS | [`tinycmdr-macos.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-macos.zip) | `bash install/install-tinycmdr-macos.sh` |
 
 Stable names always point at the newest build. `SHA256SUMS` covers the six archives and the four
-scripts, and `SHA256SUMS.sig` signs it: the updater verifies that signature against a pinned
-`agent.release_pubkey`, so a replaced release is refused, not just a corrupted one:
+scripts, and `SHA256SUMS.sig` signs it: every install ships the release key in `release-pubkey.pub`
+and the updater verifies the signature with it by default, so a replaced release is refused, not
+just a corrupted one. `agent.release_pubkey` overrides it for a host with its own key:
 
 ```bash
 base=https://github.com/trappsquid/tinycmdr/releases/latest/download

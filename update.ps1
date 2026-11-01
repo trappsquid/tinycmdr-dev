@@ -74,11 +74,12 @@ try {
         Write-Error "update: checksum mismatch - nothing was changed"; exit 1
     }
 
-    # The digest proves the transfer, not who wrote the release. A host that pins
-    # agent.release_pubkey gets the same signature check the in-app updater does; an
-    # unpinned host keeps the digest-only path and says so. The key may be a line or a
-    # file path in config.json. A pinned host with no sig, no ssh-keygen, a bad signature
-    # or an unreadable config refuses - this is the repair door, not a bypass.
+    # The digest proves the transfer, not who wrote the release. The release key is the
+    # host's agent.release_pubkey (a line or a file path) when set, else the public key
+    # shipped with this install (release-pubkey.pub); either way it gets the same
+    # signature check the in-app updater does. With no key at all the digest-only path
+    # says exactly that. A keyed host with no sig, no ssh-keygen, a bad signature or an
+    # unreadable config refuses - this is the repair door, not a bypass.
     $Pub = ""
     $CfgPath = Join-Path $Dir "config.json"
     if (Test-Path $CfgPath) {
@@ -86,25 +87,29 @@ try {
             $Cfg = Get-Content $CfgPath -Raw -ErrorAction Stop | ConvertFrom-Json
             if ($Cfg.agent) { $Pub = [string]$Cfg.agent.release_pubkey }
         } catch {
-            Write-Error "update: config.json could not be read, so agent.release_pubkey cannot be checked - nothing was changed"; exit 1
+            Write-Error "update: config.json could not be read, so the release key cannot be checked - nothing was changed"; exit 1
         }
     }
     $Pub = $Pub.Trim()
+    if (-not $Pub) {
+        $Shipped = Join-Path $Dir "release-pubkey.pub"
+        if (Test-Path -LiteralPath $Shipped) { $Pub = (Get-Content -LiteralPath $Shipped -Raw).Trim() }
+    }
     if ($Pub) {
         if ($Pub -notmatch '^(ssh-|ecdsa-|sk-)' -and (Test-Path -LiteralPath $Pub)) {
             $Pub = (Get-Content -LiteralPath $Pub -Raw).Trim()
         }
         if ($Pub -notmatch '^(ssh-|ecdsa-|sk-)') {
-            Write-Error "update: agent.release_pubkey does not look like an SSH public key - nothing was changed"; exit 1
+            Write-Error "update: the release key does not look like an SSH public key - nothing was changed"; exit 1
         }
         $Ssh = Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue
         if (-not $Ssh) {
-            Write-Error "update: agent.release_pubkey is pinned, but ssh-keygen is not available - the release signature cannot be checked. Nothing was changed"; exit 1
+            Write-Error "update: a release key is configured, but ssh-keygen is not available - the release signature cannot be checked. Nothing was changed"; exit 1
         }
         try {
             Invoke-WebRequest -UseBasicParsing "$Base/SHA256SUMS.sig" -OutFile (Join-Path $Work "SHA256SUMS.sig")
         } catch {
-            Write-Error "update: agent.release_pubkey is pinned, but SHA256SUMS.sig could not be fetched - nothing was changed"; exit 1
+            Write-Error "update: a release key is configured, but SHA256SUMS.sig could not be fetched - nothing was changed"; exit 1
         }
         $Allowed = Join-Path $Work "allowed_signers"
         Set-Content -Path $Allowed -Value "tinycmdr-release $Pub" -Encoding ASCII
@@ -113,11 +118,11 @@ try {
             "-n", "tinycmdr-release", "-s", (Join-Path $Work "SHA256SUMS.sig")
         ) -RedirectStandardInput (Join-Path $Work "SHA256SUMS") -NoNewWindow -Wait -PassThru
         if ($Verify.ExitCode -ne 0) {
-            Write-Error "update: the release signature did not verify against agent.release_pubkey - nothing was changed"; exit 1
+            Write-Error "update: the release signature did not verify against the release key - nothing was changed"; exit 1
         }
         Write-Host "update: release signature verified"
     } else {
-        Write-Host "update: no agent.release_pubkey pinned - checking the digest only"
+        Write-Host "update: no release key (agent.release_pubkey or release-pubkey.pub) - checking the digest only"
     }
     Expand-Archive (Join-Path $Work $Asset) -DestinationPath (Join-Path $Work "pkg") -Force
     $Src = (Get-ChildItem (Join-Path $Work "pkg") -Recurse -Filter tinycmdr.py |

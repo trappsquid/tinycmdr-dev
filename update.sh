@@ -83,11 +83,12 @@ fi
                           echo "        Re-run; if it repeats, the transfer is being truncated (or" >&2
                           echo "        the release replaced)." >&2; exit 1; }
 
-# The digest proves the transfer, not who wrote the release. A host that pins
-# agent.release_pubkey gets the same signature check the in-app updater does, before
-# unpacking; an unpinned host keeps the digest-only path and says so. The key may be a
-# line or a file path in config.json. A pinned host with no sig, no ssh-keygen, a bad
-# signature or an unreadable config refuses - this is the repair door, not a bypass.
+# The digest proves the transfer, not who wrote the release. The release key is the
+# host's agent.release_pubkey (a line or a file path) when set, else the public key
+# shipped with this install (release-pubkey.pub); either way it gets the same signature
+# check the in-app updater does, before unpacking. With no key at all the digest-only
+# path says exactly that. A keyed host with no sig, no ssh-keygen, a bad signature or an
+# unreadable config refuses - this is the repair door, not a bypass.
 PUB=""
 if [ -f "$DIR/config.json" ]; then
     PUB="$("$PY" -c 'import json,sys
@@ -96,9 +97,12 @@ try:
     print(str((d.get("agent") or {}).get("release_pubkey") or "").strip())
 except Exception:
     sys.exit(2)' "$DIR/config.json" 2>/dev/null)" || {
-        echo "update: config.json could not be read, so agent.release_pubkey cannot be" >&2
+        echo "update: config.json could not be read, so the release key cannot be" >&2
         echo "        checked - nothing was changed." >&2
         exit 1; }
+fi
+if [ -z "$PUB" ] && [ -f "$DIR/release-pubkey.pub" ]; then
+    PUB="$(cat "$DIR/release-pubkey.pub" 2>/dev/null || true)"
 fi
 if [ -n "$PUB" ]; then
     if [ -f "$PUB" ]; then
@@ -106,26 +110,26 @@ if [ -n "$PUB" ]; then
     fi
     case "$PUB" in
         ssh-*|ecdsa-*|sk-*) ;;
-        *) echo "update: agent.release_pubkey does not look like an SSH public key;" >&2
+        *) echo "update: the release key does not look like an SSH public key;" >&2
            echo "        nothing was changed." >&2; exit 1 ;;
     esac
     command -v ssh-keygen >/dev/null 2>&1 || {
-        echo "update: agent.release_pubkey is pinned, but ssh-keygen is not available -" >&2
+        echo "update: a release key is configured, but ssh-keygen is not available -" >&2
         echo "        the release signature cannot be checked. Nothing was changed." >&2
         exit 1; }
     fetch "$BASE/SHA256SUMS.sig" "$WORK/SHA256SUMS.sig" || {
-        echo "update: agent.release_pubkey is pinned, but $BASE/SHA256SUMS.sig could not" >&2
+        echo "update: a release key is configured, but $BASE/SHA256SUMS.sig could not" >&2
         echo "        be fetched - nothing was changed." >&2; exit 1; }
     printf 'tinycmdr-release %s\n' "$PUB" > "$WORK/allowed_signers"
     if ! ssh-keygen -Y verify -f "$WORK/allowed_signers" -I tinycmdr-release \
             -n tinycmdr-release -s "$WORK/SHA256SUMS.sig" < "$WORK/SHA256SUMS"; then
-        echo "update: the release signature did not verify against agent.release_pubkey -" >&2
+        echo "update: the release signature did not verify against the release key -" >&2
         echo "        nothing was changed." >&2
         exit 1
     fi
     echo "update: release signature verified"
 else
-    echo "update: no agent.release_pubkey pinned - checking the digest only"
+    echo "update: no release key (agent.release_pubkey or release-pubkey.pub) - checking the digest only"
 fi
 
 case "$ASSET" in

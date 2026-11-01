@@ -114,6 +114,10 @@ SHIP = [
     # `LICENSE` from the installed root (A-2026-10-11-01). The product repo's manifest
     # already carried it; the archive half did not.
     "LICENSE",
+    # The public half of the release signing key. Every install carries it so the updater
+    # verifies SHA256SUMS.sig by default; agent.release_pubkey overrides it for a host
+    # with its own key. Public by design - the private key never leaves the signing host.
+    "release-pubkey.pub",
     # The door a reader actually finds: it sits in the package root, while the installer
     # itself is one level down and the .ps1 beside it is refused by stock Windows (the
     # script execution policy is Restricted there, so that window closes before it can be

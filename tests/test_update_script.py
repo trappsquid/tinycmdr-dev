@@ -284,6 +284,25 @@ def main():
         check("signature" in out_sig.lower() or "ssh-keygen" in out_sig.lower(),
               "...with a reason naming the signature check", out_sig[-300:])
 
+        # The release key shipped with the install is the default now: no config pin.
+        inst_key = work / "install-key"
+        inst_key.mkdir()
+        (inst_key / "tinycmdr.py").write_text('VERSION = "1.0.0"\n', encoding="utf-8")
+        (inst_key / "config.json").write_text("{}", encoding="utf-8")
+        (inst_key / "release-pubkey.pub").write_text(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITEST\n", encoding="utf-8")
+        proc_key = run_update(inst_key)
+        out_key = proc_key.stdout + proc_key.stderr
+        check(proc_key.returncode != 0,
+              "an install's shipped release key is used without a config pin",
+              (proc_key.returncode, out_key[-300:]))
+        check('VERSION = "1.0.0"' in read(inst_key / "tinycmdr.py"),
+              "...and nothing was unpacked over it",
+              read(inst_key / "tinycmdr.py")[:80])
+        check("signature" in out_key.lower() or "ssh-keygen" in out_key.lower(),
+              "...with a reason naming the signature check or ssh-keygen",
+              out_key[-300:])
+
         # A second run must not append another token: the guard the merge defeated.
         proc2 = run_update(inst)
         out2 = proc2.stdout + proc2.stderr

@@ -40,8 +40,8 @@ try {
     # The same contract install.sh has used since 2026-09-29: the ONE file this run fetched,
     # against its line in SHA256SUMS. This door had no check at all while the Unix one did -
     # the pipe-to-bash path was the one that got hardened, and Windows installs were the
-    # unverified half (measured 2026-10-03). Releases are unsigned, so this catches a
-    # corrupted or truncated transfer, not a release that was replaced.
+    # unverified half (measured 2026-10-03). The release is signed; this installer checks
+    # the digest, and the installed updater verifies the signature with the shipped key.
     $sums = Join-Path $tmp 'SHA256SUMS'
     try { Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing }
     catch { Die "could not fetch $base/SHA256SUMS, so this download cannot be checked. Re-run it, or download the zip by hand from the release page." }
@@ -52,8 +52,9 @@ try {
     $got = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
     if ($got -ne $want.ToLower()) {
         Die 'the download does not match SHA256SUMS - a corrupted or truncated transfer. Nothing was unpacked.' }
-    Write-Host '    the download matches SHA256SUMS. Releases are unsigned, so this catches a'
-    Write-Host '    corrupted or truncated transfer, not a release that was replaced.'
+    Write-Host '    the download matches SHA256SUMS, and the release is signed; this installer'
+    Write-Host '    checks the digest here, and the installed updater verifies the signature'
+    Write-Host '    with the release key shipped in the package (release-pubkey.pub).'
 
     Say 'expanding'
     Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force

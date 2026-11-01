@@ -56,8 +56,9 @@ if curl -fL --retry 3 --connect-timeout 15 -o "$sums" "$BASE/SHA256SUMS"; then
     else
         printf '    (no sha256sum or shasum on this host: the download is unchecked)\n'
     fi
-    printf '    the download matches SHA256SUMS. Releases are unsigned, so this catches a\n'
-    printf '    corrupted or truncated transfer, not a release that was replaced.\n'
+    printf '    the download matches SHA256SUMS, and the release is signed; this installer\n'
+    printf '    checks the digest here, and the installed updater verifies the signature\n'
+    printf '    with the release key shipped in the package (release-pubkey.pub).\n'
 elif [ "${TINYCMDR_NO_SUMS:-}" = "1" ]; then
     printf '    (SHA256SUMS could not be fetched, and TINYCMDR_NO_SUMS=1 says carry on)\n'
 else

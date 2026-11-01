@@ -32,6 +32,9 @@ STAGE.mkdir(parents=True, exist_ok=True)
 shutil.copy2(SRC, STAGE / "tinycmdr.py")
 shutil.copy2(Path(__file__).resolve().parent / "fixture-config.json",
              STAGE / "config.json")
+# The installed tree carries the release key; a staged copy must too, or the default
+# verification has nothing to check against.
+shutil.copy2(BASE / "release-pubkey.pub", STAGE / "release-pubkey.pub")
 spec = importlib.util.spec_from_file_location("tinycmdr_security_surface",
                                               STAGE / "tinycmdr.py")
 fb = importlib.util.module_from_spec(spec)
@@ -153,15 +156,19 @@ try:
           not ok and "no ssh-keygen" in why, why)
 
     fb.CONFIG["agent"]["release_pubkey"] = ""
-    check("an empty release_pubkey is the unsigned default", fb._release_pubkey() == "")
+    _shipped = fb._release_pubkey()
+    check("an empty config uses the release key shipped with the install",
+          _shipped.startswith("ssh-ed25519") and "release signing" in _shipped, _shipped)
     fb.CONFIG["agent"]["release_pubkey"] = pub
-    check("a configured release key is read", fb._release_pubkey() == pub)
+    check("a configured release key overrides the shipped one",
+          fb._release_pubkey() == pub)
 finally:
     fb.shutil.which, fb.subprocess.run = saved_which, saved_run
     fb.CONFIG["agent"]["release_pubkey"] = saved_pub
     shutil.rmtree(sigwork, ignore_errors=True)
-check("the shipped default is unsigned",
-      fb.CONFIG["agent"].get("release_pubkey") == "")
+check("the shipped default is the key file, not a config pin",
+      fb.CONFIG["agent"].get("release_pubkey") == ""
+      and (fb.BASE_DIR / "release-pubkey.pub").is_file())
 check("children are read-only by default",
       fb.CONFIG["agent"].get("subagent_capabilities") == "read")
 
