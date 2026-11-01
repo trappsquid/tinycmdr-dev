@@ -492,13 +492,26 @@ def summarize(all_metrics):
     return lines, totals
 
 
+def _recorded_endpoint():
+    """The endpoint as it may be COMMITTED.
+
+    A loopback URL is a fact about the arm; anything else is the host's own network.
+    Writing that into tests/eval_baseline.json would put a private address in the repo,
+    which the leak gate refuses - and the address is not needed to compare two runs.
+    """
+    env = os.environ.get("TINYCMDR_TEST_BASE_URL", "http://127.0.0.1:8081/v1")
+    if re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(/|$)", env):
+        return env
+    return "env (not recorded)"
+
+
 def baseline_from(results, label, budget, runs):
     """The committed baseline file: one row per task plus how it was taken."""
     return {
         "label": label,
         "date": time.strftime("%Y-%m-%d"),
         "budget": budget,
-        "endpoint": os.environ.get("TINYCMDR_TEST_BASE_URL", "http://127.0.0.1:8081/v1"),
+        "endpoint": _recorded_endpoint(),
         "model": os.environ.get("TINYCMDR_TEST_MODEL", "main"),
         "runs": runs,
         # The arm's pinned sampling, recorded where the numbers live: two baselines may

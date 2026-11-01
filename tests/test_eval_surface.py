@@ -573,6 +573,18 @@ No model calls. Two directions per task:
         check("...and its note names the pin", "PINNED" in (_b.get("note") or ""))
         check("...and the arm runner pins through the one door",
               run_eval.EVAL_SAMPLING.get("top_p") == 1.0)
+        _saved_url = os.environ.get("TINYCMDR_TEST_BASE_URL")
+        os.environ["TINYCMDR_TEST_BASE_URL"] = "http://192.168.50.5:8081/v1"
+        try:
+            _priv = run_eval.baseline_from([], "probe", 24000, ["arm.jsonl"])
+        finally:
+            if _saved_url is None:
+                os.environ.pop("TINYCMDR_TEST_BASE_URL", None)
+            else:
+                os.environ["TINYCMDR_TEST_BASE_URL"] = _saved_url
+        check("a private endpoint is not written into the committed baseline",
+              "192.168.50.5" not in str(_priv)
+              and "not recorded" in (_priv.get("endpoint") or ""))
         print()
         if FAILS:
             print(f"{len(FAILS)} check(s) failed")
