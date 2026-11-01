@@ -17,6 +17,28 @@
   ],
   "items": [
     {
+      "id": "installer-web-port-lands",
+      "title": "the installer applies --web-port to its config",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "def5232",
+        "expect": "untagged"
+      },
+      "detail": "setdefault kept the example's 8790 while the summary printed the flag, so a chosen page port never reached the bot; both Unix installers now set the port when it was given or the install is fresh.",
+      "gate": "tests/test_installer_unix.py reads web.port back from both installers' config.json; the launchd smoke asserts it too."
+    },
+    {
+      "id": "windows-restart-owned-task",
+      "title": "a Windows restart starts the owned task and keeps its caller",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "11be324",
+        "expect": "untagged"
+      },
+      "detail": "The helper relaunched the VBS in the caller's session instead of starting the task's S4U principal, and its install-scoped kill matched the python process running tinycmdr restart, so the verb died with its own helper and the box could be left deaf; it now starts the owned task and keeps its ancestry out of the kill list.",
+      "gate": "maintenance/smoke-service.ps1 installs with -AsService, starts the task, health-checks, restarts through the verb, health-checks again and removes the task; tests/test_installer_windows.py grades the helper's task start and caller guard."
+    },
+    {
       "id": "memory-index-warning-once",
       "title": "an over-budget memory index says it once and counts the concepts",
       "state": "shipped",

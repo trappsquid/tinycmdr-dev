@@ -5,6 +5,12 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.55] - 2026-10-31
+
+### Fixed
+- **The installer applies `--web-port` to its config:** both Unix installers now write the port the flag names instead of leaving the example's 8790 in place while the summary printed the new one (tests/test_installer_unix.py).
+- **A Windows restart starts the owned task and keeps its caller:** the helper starts the install's scheduled task rather than a VBS in the caller's session, and keeps the process that invoked it out of the kill list, so `tinycmdr restart` waits for the lock instead of exiting under its own helper (the Windows install smoke in `.github/workflows/ci.yml`).
+
 ## [1.1.54] - 2026-10-30
 
 ### Fixed
