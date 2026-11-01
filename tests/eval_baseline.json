@@ -1,31 +1,36 @@
 {
- "label": "baseline-1032",
- "date": "2026-09-27",
- "budget": 24000,
- "endpoint": "http://127.0.0.1:8081/v1",
+ "label": "baseline-1.1.54",
+ "date": "2026-10-31",
+ "budget": "24000",
+ "endpoint": "env (not recorded)",
  "model": "main",
  "runs": [
-  "20260927-092747-baseline-1032.jsonl"
+  "20261031-165927-baseline-20261031.jsonl"
  ],
- "note": "Sampling is inherited from the endpoint (no temperature is pinned), so a single task flip is a signal, not a verdict: two arms of the SAME build differed by 36% of steps and 14% of tokens on 2026-09-27. Treat 'no category regressed' as the reading, not 'the score is equal'. This file predates the arm pin (2026-10-12): later baselines record the pinned set in a `sampling` block, and two baselines are comparable only when it matches.",
+ "sampling": {
+  "temperature": 0.0,
+  "top_p": 1.0,
+  "top_k": 0
+ },
+ "note": "Sampling is PINNED for every arm (TINYCMDR_EVAL_SAMPLING) so arms of one build are comparable; steps and tokens still move, so treat 'no category regressed' as the reading, not 'the score is equal'. The pin landed 2026-10-12: before it, two arms of the SAME build differed by 36% of steps and 14% of tokens.",
  "tasks": {
   "T01_write_count": {
    "pass": true,
    "category": "file_ops",
-   "steps": 2,
-   "llm_calls": 3
+   "steps": 3,
+   "llm_calls": 4
   },
   "T02_fix_config": {
    "pass": true,
    "category": "config",
-   "steps": 3,
+   "steps": 4,
    "llm_calls": 4
   },
   "T03_log_cause": {
    "pass": true,
    "category": "log_triage",
-   "steps": 2,
-   "llm_calls": 3
+   "steps": 3,
+   "llm_calls": 4
   },
   "T04_no_tools_needed": {
    "pass": true,
@@ -43,13 +48,13 @@
    "pass": true,
    "category": "recovery",
    "steps": 6,
-   "llm_calls": 6
+   "llm_calls": 7
   },
   "T07_six_steps": {
    "pass": true,
    "category": "long_horizon",
-   "steps": 13,
-   "llm_calls": 7
+   "steps": 11,
+   "llm_calls": 8
   },
   "T08_fixture_triage": {
    "pass": true,
@@ -58,10 +63,10 @@
    "llm_calls": 2
   },
   "T09_code_grounding": {
-   "pass": false,
+   "pass": true,
    "category": "grounding",
-   "steps": 3,
-   "llm_calls": 4
+   "steps": 7,
+   "llm_calls": 5
   },
   "T10_unknown_tool": {
    "pass": true,
@@ -72,8 +77,8 @@
   "T11_precision": {
    "pass": true,
    "category": "precision",
-   "steps": 2,
-   "llm_calls": 3
+   "steps": 3,
+   "llm_calls": 4
   },
   "T12_budget_landing": {
    "pass": false,
@@ -84,20 +89,20 @@
   "T13_buried_error": {
    "pass": true,
    "category": "signal_extraction",
-   "steps": 4,
-   "llm_calls": 5
+   "steps": 2,
+   "llm_calls": 3
   },
   "T14_field_note": {
    "pass": false,
    "category": "field_notes",
-   "steps": 6,
-   "llm_calls": 6
+   "steps": 3,
+   "llm_calls": 4
   },
   "T15_verify_ok": {
-   "pass": true,
+   "pass": false,
    "category": "verify",
-   "steps": 2,
-   "llm_calls": 3
+   "steps": 6,
+   "llm_calls": 5
   },
   "T16_verify_failure": {
    "pass": true,
@@ -108,101 +113,38 @@
   "T17_write_custom_tool": {
    "pass": true,
    "category": "verify",
-   "steps": 3,
-   "llm_calls": 3
+   "steps": 5,
+   "llm_calls": 4
   },
   "T18_broken_custom_tool": {
    "pass": true,
    "category": "verify",
-   "steps": 3,
-   "llm_calls": 4
+   "steps": 1,
+   "llm_calls": 2
   },
   "T19_midrun_steer": {
    "pass": true,
    "category": "steering",
-   "steps": 3,
-   "llm_calls": 4
+   "steps": 4,
+   "llm_calls": 6
   },
   "T20_build_cli": {
    "pass": true,
    "category": "build_cli",
-   "steps": 17,
-   "llm_calls": 16
+   "steps": 19,
+   "llm_calls": 14
   },
   "T21_build_game": {
    "pass": true,
    "category": "build_game",
-   "steps": 21,
-   "llm_calls": 17
+   "steps": 35,
+   "llm_calls": 26
   },
   "T22_replicate_spec": {
    "pass": true,
    "category": "replication",
-   "steps": 18,
-   "llm_calls": 15
+   "steps": 11,
+   "llm_calls": 8
   }
- },
- "variance": {
-  "note": "Five arms of the same 18 tasks on the same endpoint and model. Sampling is inherited from the server, so steps and tokens swing widely between runs of THE SAME build: read a regression as a signal to look, not a verdict. Every arm in this block predates the 2026-10-12 pin and inherited its sampling. T19_midrun_steer was measured in its own run 20 minutes earlier (it was added to the set after the arm above) and merged here; a `--baseline` run that reports it missing is reading a baseline older than this line.",
-  "arms": [
-   {
-    "label": "baseline-1030",
-    "version": "1.0.30",
-    "pass": 15,
-    "steps": 61,
-    "llm_calls": 63,
-    "prompt_tokens": 346533
-   },
-   {
-    "label": "partial-4360",
-    "version": "1.0.31",
-    "pass": 15,
-    "steps": 83,
-    "llm_calls": 72,
-    "prompt_tokens": 396191
-   },
-   {
-    "label": "after2-4381",
-    "version": "1.0.31",
-    "pass": 15,
-    "steps": 61,
-    "llm_calls": 62,
-    "prompt_tokens": 308549
-   },
-   {
-    "label": "anecdotes-4183",
-    "version": "1.0.32 prompt with the six (measured: ...) parentheticals removed",
-    "pass": 14,
-    "steps": 71,
-    "llm_calls": 76,
-    "prompt_tokens": 384487,
-    "outcome": "NOT shipped: the one flipped task was T10_unknown_tool, whose rule those parentheticals illustrate; see ~/whats-live/ISSUES.md"
-   },
-   {
-    "label": "baseline-1032",
-    "version": "1.0.32",
-    "pass": 15,
-    "steps": 63,
-    "llm_calls": 68,
-    "prompt_tokens": 341345
-   }
-  ]
- },
- "build_probe": {
-  "date": "2026-10-22",
-  "endpoint": "LAN eval endpoint (not recorded)",
-  "model": "main",
-  "budget": 24000,
-  "sampling": {
-   "temperature": 0.0,
-   "top_p": 1.0,
-   "top_k": 0
-  },
-  "runs": [
-   "20261022-082130-build-probe.jsonl",
-   "20261022-083148-build-probe2.jsonl",
-   "20261022-091544-game-probe.jsonl"
-  ],
-  "note": "T20-T22 measured after the build-in-code batch. The main baseline predates these tasks and the arm pin, so compare the build tasks within this block. T21 used the task llm.max_tokens=4096 bound after its first unbounded call streamed for more than 30 minutes."
  }
 }

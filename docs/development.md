@@ -218,6 +218,21 @@ small fixes commits each finding on its own, renders the numbers once and pays O
 and ONE push - `batch.sh` is the shortcut for the single-change case. Gating between every small
 fix repeats a verdict the final run already gives.
 
+### A change that shapes behavior carries its measurement
+
+A change to the prompt, a tool schema, a context cap or the memory policy changes what the agent
+DOES, and the suites grade contracts, not task success. Run the eval on both sides, against the
+same model:
+
+    venv/bin/python tests/run_eval.py --all --label <name> --baseline tests/eval_baseline.json
+
+Read the per-category lines, not only the score: steps and tokens move between two arms of one
+build (36% of steps on 2026-09-27), so repeat when a category is close. An ordinary fix that does
+not shape behavior does not need it. The endpoint comes from the environment and is never
+written into the tree; the committed baseline records a loopback URL or "env (not recorded)".
+Re-baseline with `--save-baseline` only after reading the result: a baseline taken against another
+model or sampler is not comparable.
+
 ### The cut
 
 ```bash
