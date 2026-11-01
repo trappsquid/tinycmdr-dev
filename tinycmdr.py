@@ -49144,7 +49144,7 @@ _DEV_MAINTENANCE_DROP = ("atlas-merge.py", "batch.sh", "build-package.py",
                          "publish-product.py",
                          "private_rules.example.py", "probe-web-sessions.py",
                          "probe-web-surface.py", "release-keygen.sh", "release.sh", "smoke-install.py",
-                         "smoke-install.sh", "stub-openai-endpoint.py",
+                         "smoke-install.sh", "smoke-service.sh", "stub-openai-endpoint.py",
                          "wait-for-endpoint.py", "where.py")
 _NARROW_NOTE = ("  dropped the project's own kit (tests/, .github/, docs/, changelog, "
                 "maintenance scripts): a package does not carry them. `tinycmdr update "

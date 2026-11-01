@@ -42,16 +42,16 @@ jobs:
         # macos-15, not -latest: the 14 image is in its retirement brownout (retires
         # 2026-11-02, actions/runner-images#13518 - both macOS jobs failed in 1s on
         # 2026-10-31), and -latest's pool assigned this account no runner on 2026-10-13.
-        os: [macos-15, ubuntu-latest]
+        os: [macos-15, ubuntu-24.04]
         python: ["3.12"]
         # The README promises 3.10-3.12 and only 3.12 ever ran, so the floor was a claim
         # with no runner behind it. Both lower versions pass the whole sweep (measured
         # 2026-10-31 on this Mac: 67/67 on 3.10.20 and 3.11.15, no tree writes). One
         # ubuntu runner each; macOS keeps 3.12.
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python: "3.10"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python: "3.11"
     steps:
       - uses: actions/checkout@v4
@@ -132,7 +132,7 @@ jobs:
   # --history: then the whole history is graded on every push, not just the new part.
   leak:
     name: leak gate (what this change adds)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       TINYCMDR_LEAK_PATTERNS: ${{ secrets.TINYCMDR_LEAK_PATTERNS }}
     steps:
@@ -192,12 +192,12 @@ jobs:
         include:
           - os: macos-15
             python: "3.12"
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python: "3.12"
           # The floor end to end: the installer builds its venv from 3.10 and the smoke
           # drives doctor, health and a turn (measured 2026-10-31 on this Mac: the 3.10.20
           # package installs and runs).
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python: "3.10"
     env:
       TINYCMDR_SMOKE_BASE_URL: ${{ secrets.TINYCMDR_SMOKE_BASE_URL }}
@@ -214,6 +214,11 @@ jobs:
       - run: python -m pip install requests
       - name: build, install from the artifact, smoke it
         run: bash maintenance/smoke-install.sh
+      # The smoke above passes --no-launchd, and the installer suites stub launchctl:
+      # this is the one place the plist is really loaded, health-checked and booted out.
+      - name: register the agent, health it, boot it out
+        if: runner.os == 'macOS'
+        run: bash maintenance/smoke-service.sh
 
   # Windows has no bash door, so the same three steps are spelled out here. install-tinycmdr.ps1
   # gets -SkipTask (files only, no scheduled task) and -NoPath, the analogues of the macos
