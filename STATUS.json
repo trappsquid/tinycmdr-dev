@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "release-signature-default",
+      "title": "the updater verifies the release signature with the shipped key",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4abc656",
+        "expect": "untagged"
+      },
+      "detail": "The public key was never shipped, so only a hand-pinned agent.release_pubkey verified and an unpinned host was told the release was unsigned; every package now carries release-pubkey.pub, all three updater doors use it by default, and the pin overrides it.",
+      "gate": "tests/test_security_surface.py grades the shipped-key default and the config override; tests/test_update_script.py grades the standalone updaters using the install's shipped key and refusing a bad signature."
+    },
+    {
       "id": "installer-web-port-lands",
       "title": "the installer applies --web-port to its config",
       "state": "shipped",

@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.56] - 2026-10-31
+
+### Fixed
+- **The updater verifies the release signature by default:** every install ships the release key in `release-pubkey.pub`, and the in-app updater and both published updaters use it without a config edit, while `agent.release_pubkey` overrides it for a host with its own key (tests/test_security_surface.py, tests/test_update_script.py).
+
 ## [1.1.55] - 2026-10-31
 
 ### Fixed
