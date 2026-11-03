@@ -17,6 +17,17 @@
   ],
   "items": [
     {
+      "id": "memory-type-case-insensitive",
+      "title": "a memory type is matched regardless of capitalisation",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "b6d6ff3",
+        "expect": "untagged"
+      },
+      "detail": "A model writing type 'fact' had the fact right and the add door refused it with the vocabulary quoted back; types are now matched without regard to case and written in the canonical spelling.",
+      "gate": "tests/test_memory_surface.py writes each type in the wrong capitalisation and asserts the concept lands, written canonically, in its index section."
+    },
+    {
       "id": "release-signature-default",
       "title": "the updater verifies the release signature with the shipped key",
       "state": "shipped",
