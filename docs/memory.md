@@ -96,7 +96,8 @@ grammar-constrained engine can emit them):
 Rules that are not negotiable in the handler: a body over `memory_concept_max_chars` is
 **refused, never truncated** (a half-fact rides every future prompt - the notes.md
 lesson); the bundle refuses new concepts past `memory_max_concepts`; `type` must be one
-of the bundle's known types and `stale_after` an ISO instant, both refused by name at
+of the bundle's known types - matched regardless of capitalisation and written in its
+canonical spelling - and `stale_after` an ISO instant, both refused by name at
 write time; a caller `description` is bounded at 160 chars and a `tags` value is one
 string or a list of strings; every mutation runs under one lock
 (`serialized_on(MEMORY_LOCK_FILE)`) so the concept, `index.md` and `log.md` move

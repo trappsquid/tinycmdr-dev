@@ -856,6 +856,34 @@ and the index and log a consumer browses.
                           "type": "Runbook"}).startswith("OK"))
 
 
+    def test_a_type_is_matched_regardless_of_capitalisation():
+        """`fact` is the same answer as `Fact`: the add door quoted the vocabulary back
+    at a model that had the fact right and only the capital letter wrong (2026-11-03).
+    Case is forgiven and the CANONICAL spelling is written - a lower-case type would
+    open its own index section and leave the bundle's vocabulary."""
+        _fresh()
+        for spelled, canonical in (("fact", "Fact"), ("HOST", "Host"),
+                                   ("  Runbook ", "Runbook"), ("decision", "Decision")):
+            title = "A %s concept" % canonical.lower()
+            out = _call_tool({"action": "add", "title": title,
+                              "body": "the body for the %s case stands here"
+                                      % canonical.lower(),
+                              "type": spelled})
+            check("%r is accepted as %s" % (spelled.strip(), canonical),
+                  out.startswith("OK"), out[:200])
+            check("...and written as %s, not as it was spelled" % canonical,
+                  any(c["type"] == canonical and c["title"] == title
+                      for c in fb.memory_scan()),
+                  [(c["type"], c["title"]) for c in fb.memory_scan()])
+        index = fb.memory_index_render()
+        check("the index files each under its canonical section",
+              all(("# " + t) in index for t in ("Fact", "Host", "Runbook", "Decision")),
+              index[:400])
+        check("the bundle holds no type outside the vocabulary",
+              {c["type"] for c in fb.memory_scan()} <= set(fb._MEMORY_TYPES),
+              sorted({c["type"] for c in fb.memory_scan()}))
+
+
     def test_a_non_dict_config_section_never_replaces_the_default():
         """`"agent": null` in config.json replaced the shipped dict, so every reader -
     memory action=list, visible_tool_names, the guard merge itself - raised

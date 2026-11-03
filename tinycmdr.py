@@ -14493,6 +14493,23 @@ def _memory_tags(value):
     return out
 
 
+def _memory_type(value):
+    """The canonical spelling of a memory type, or ValueError naming the vocabulary.
+
+    `type` is the one field a model writes from memory, and it arrived as `fact`
+    while the vocabulary is spelled `Fact`: the add door quoted the list back
+    instead of taking the answer (2026-11-03). Match without regard to
+    capitalisation and return the canonical spelling - a lower-case type would
+    otherwise open its own index section and leave the bundle's vocabulary.
+    """
+    raw = " ".join(str(value or "Fact").split()) or "Fact"
+    for t in _MEMORY_TYPES:
+        if t.lower() == raw.lower():
+            return t
+    raise ValueError("unknown type %r - memory types are: %s (capitalisation does "
+                     "not matter)" % (raw, ", ".join(_MEMORY_TYPES)))
+
+
 def _memory_check_stale(value):
     """The validated `stale_after` string, or ValueError naming the accepted shape.
 
@@ -14573,10 +14590,7 @@ def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
         while "%s-%d" % (slug, n) in taken:
             n += 1
         slug = "%s-%d" % (slug, n)
-    ctype = str(ctype or "Fact").strip() or "Fact"
-    if ctype not in _MEMORY_TYPES:
-        raise ValueError("unknown type %r - memory types are: %s"
-                         % (ctype, ", ".join(_MEMORY_TYPES)))
+    ctype = _memory_type(ctype)
     fm = {"type": ctype, "title": title}
     desc_cut = False
     if description:
@@ -19648,7 +19662,9 @@ CORE_TOOLS = {
              # schema omits: the handler always read these, but the fields were
              # unreachable from local models whose tool grammar follows the schema
              # (A-2026-10-14-47).
-             "type": {"type": "string"},
+             "type": {"type": "string",
+                      "description": "add: Fact, Host, Runbook or Decision; any "
+                                     "capitalisation"},
              "description": {"type": "string"},
              "tags": {"type": "array", "items": {"type": "string"}},
              "stale_after": {"type": "string"},
