@@ -1168,7 +1168,7 @@ def main():
     seen = []
     _real_vfc = fb.verb_from_chat
     _real_pr = fb.perform_restart
-    fb.verb_from_chat = lambda line: (seen.append(line), "```\nlost one\n```")[1]
+    fb.verb_from_chat = lambda line, _key=None: (seen.append(line), "```\nlost one\n```")[1]
     try:
         kind, out = fb._web_command("/tinycmdr logs 5", "web")
         check(kind == "reply" and "lost one" in out and seen == ["logs 5"],
@@ -1179,7 +1179,7 @@ def main():
               "...and /update is the same command", (kind, out))
         check("Restarting onto it" not in out,
               "...with no restart promised for an update that changed nothing", out)
-        fb.verb_from_chat = lambda line: "VERSION 1.0.0 -> 1.0.1"
+        fb.verb_from_chat = lambda line, _key=None: "VERSION 1.0.0 -> 1.0.1"
         calls = []
         fb.perform_restart = lambda *a, **k: calls.append(a)
         kind, out = fb._web_command("/tinycmdr update", "web")

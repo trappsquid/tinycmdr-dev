@@ -441,6 +441,28 @@ only an end-to-end run can prove those.
                   f"and with it off the request carries no rights line at all ({marker!r})")
             fb.CONFIG["agent"]["shell_facts"] = True
 
+            # ---- a non-elevated Windows shell names the elevation door (2026-11-02) ----
+            # The line used to say "Do not retry it ... tell the operator to relaunch from
+            # an elevated terminal". A model on a Windows install obeyed it and handed the
+            # operator a firewall command; told to try, it created the rule through
+            # Start-Process -Verb RunAs in one turn. The door is a child process, and the
+            # line has to say so instead of sending the operator to a terminal.
+            _saved_win, _saved_elev = fb.IS_WINDOWS, fb.is_elevated
+            try:
+                fb.IS_WINDOWS = True
+                fb.is_elevated = lambda: False
+                _rights = fb.shell_rights_line()
+                check("Start-Process -Verb RunAs" in _rights,
+                      "a non-elevated Windows shell names the elevation door")
+                check("relaunch" not in _rights,
+                      "  and it does not send the operator to a terminal")
+                check("never hand the operator a command" in _rights,
+                      "  and it forbids handing over a command to paste")
+                if "Start-Process -Verb RunAs" not in _rights or "relaunch" in _rights:
+                    print("  rights line: %s" % _rights)
+            finally:
+                fb.IS_WINDOWS, fb.is_elevated = _saved_win, _saved_elev
+
             # ---- the draft generator -------------------------------------------
             draft_path = workdir / "atlas_draft.md"
             wrote = fb.ensure_atlas(draft_path)

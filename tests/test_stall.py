@@ -4088,6 +4088,36 @@ def test_a_completion_announced_earlier_earns_one_checkpoint():
           calls == 5 and "nothing left undone" in out, (calls, out[:200]))
 
 
+def test_a_bench_phase_label_is_not_a_completion_announcement():
+    """A stage's name is not a claim about the task (2026-11-02).
+
+    A benchmark's own progress line - "Turn 5 of run 1 done, run 2 remains" - matched the
+    completion regex, because "run" is one of its nouns and "done" sat a few words later.
+    The run then carried an announcement count it never made, and the pre-delivery
+    checkpoint told it so when it finally delivered. A phase label must not count; a real
+    claim still does (the test above)."""
+    for n in (5, 6):
+        (TMP / f"phase_probe-{n}.txt").write_text(f"phase {n}\n", encoding="utf-8")
+
+    def phase_turn(n):
+        return {"role": "assistant",
+                "content": f"Turn {n} of run 1 done, run 2 remains.",
+                "tool_calls": [{"id": str(n), "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": str(TMP / ("phase_probe-%d.txt" % n))})}}]}
+
+    out, calls, payloads = _checkpoint_run(
+        "checkpoint-phase", "run the baseline and report",
+        [phase_turn(5), phase_turn(6),
+         {"role": "assistant", "content": "The baseline is in."},
+         {"role": "assistant", "content": "a third answer must never be asked for"}])
+    sent = _payload_text(payloads)
+    check("a phase label never earns a checkpoint",
+          "announced the work complete" not in sent, sent[-400:])
+    check("  and the run answers in the turn it wrote",
+          calls == 3 and "baseline is in" in out, (calls, out[:200]))
+
+
 def test_a_missing_request_path_earns_one_checkpoint():
     """The third state signal (2026-10-16): a path the request names does not exist,
     so the answer claiming it was delivered is checked once."""

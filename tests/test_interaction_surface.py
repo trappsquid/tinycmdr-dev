@@ -1694,6 +1694,33 @@ What must hold, and what this pins:
               any("Unknown command" in p for p in posted5)
               and not any("Did you mean" in p for p in posted5), posted5)
 
+        # `/tinycmdr reasoning <level>` is the form the help advertises, and the only one
+        # a Mattermost client reliably sends (a bare `/reasoning` is a slash command the
+        # client owns). It used to run the TERMINAL verb, which writes llm.reasoning for
+        # the whole box; the help row promises "for this conversation". Measured
+        # 2026-11-02 on a Windows install: the operator concluded the level could not be
+        # changed from chat at all.
+        d6, posted6 = make_dispatcher()
+        _ov_before = dict(fb.AGENT.reasoning_overrides or {})
+        _global_before = fb.CONFIG["llm"].get("reasoning")
+        try:
+            d6._handle("c1", "alice", "/tinycmdr reasoning high", "m6", "m6", True)
+            _reply = " ".join(posted6)
+            check("`/tinycmdr reasoning high` sets this conversation's effort",
+                  "Reasoning effort" in _reply and "**high**" in _reply
+                  and "high" in (fb.AGENT.reasoning_overrides or {}).values(),
+                  (_reply[:200], dict(fb.AGENT.reasoning_overrides or {})))
+            check("  and does not rewrite the box default",
+                  fb.CONFIG["llm"].get("reasoning") == _global_before,
+                  (fb.CONFIG["llm"].get("reasoning"), _global_before))
+            _n = len(posted6)
+            d6._handle("c1", "alice", "/tinycmdr reasoning", "m7", "m7", True)
+            check("  and asks the conversation for its current level",
+                  "**high**" in " ".join(posted6[_n:]), posted6[_n:])
+        finally:
+            fb.AGENT.reasoning_overrides.clear()
+            fb.AGENT.reasoning_overrides.update(_ov_before)
+
 
     def test_listener_thread_reads_a_prefixed_command():
         if not hasattr(fb, "MattermostDispatcher"):

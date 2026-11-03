@@ -44,7 +44,11 @@ shutil.copy2(SRC, STAGE / "tinycmdr.py")
     '    "notes_archive_days": 45,\n'
     '    "tasks_max_open": 15,\n'
     '    "ledger_stale_hours": 12,\n'
+    '    "deliver_after_announcements": 3,\n'
     '    "agent_max_minutes": 20\n'
+    '  },\n'
+    '  "web": {\n'
+    '    "admin_hosts": []\n'
     '  },\n'
     '  "mattermost": {\n'
     '    "db_password": "hunter2secret"\n'
@@ -84,6 +88,12 @@ def main():
     check("  nor do the rest of the retired block",
           not any(k in _logged for k in ("notes_archive_days", "tasks_max_open",
                                          "ledger_stale_hours")), _logged)
+    # Two keys a shipped release wrote and a later one stopped reading: the host file is
+    # never overwritten, so every updated box kept them and warned on every start.
+    check("a retired announcement key is silent",
+          "deliver_after_announcements" not in _logged, _logged)
+    check("a retired web allowlist key is silent",
+          "admin_hosts" not in _logged, _logged)
     # ---- a real typo still warns ---------------------------------------------------
     check("a genuinely unknown key still warns with its name",
           "agent.agent_max_minutes" in _logged, _logged)
@@ -99,6 +109,9 @@ def main():
     # ---- the table itself behaves --------------------------------------------------
     check("_config_key_known accepts a retired pair",
           fb._config_key_known("agent", "tasks_max_open"))
+    check("  including the two keys a later release removed",
+          fb._config_key_known("agent", "deliver_after_announcements")
+          and fb._config_key_known("web", "admin_hosts"))
     check("  and still refuses an unknown one",
           not fb._config_key_known("agent", "agent_max_minutes"))
     return 0

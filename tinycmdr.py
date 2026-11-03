@@ -1416,6 +1416,14 @@ _RETIRED_CONFIG_KEYS = frozenset({
     # flip was a support burden, so the card and POST /a2a exist whenever the page
     # serves. Files written by the builds that had the switch keep the name.
     ("web", "a2a"),
+    # The advisory mid-run reminder went when the pre-delivery checkpoint replaced it
+    # (2026-10-16). The key it read stayed in configs written before that, and nothing
+    # reads it now; a host that still carries it was warning on every start.
+    ("agent", "deliver_after_announcements"),
+    # A private page host is a confirm-tier subject now, the same approval as a guarded
+    # command (2026-10-26), so the allowlist key is retired. config.json is host-owned
+    # and update never overwrites it, which is why an old key outlives its reader.
+    ("web", "admin_hosts"),
 })
 
 
@@ -7223,9 +7231,13 @@ def annotate_failure(name, args, text):
 # and a process started from a normal console gets the filtered one, so "my account is admin"
 # and "this shell can do admin work" are different statements.
 # The bot lane never meets this because its Scheduled Task runs with highest privileges; a
-# console session inherits whatever console started it. So the fix is not to elevate (a silent
-# UAC prompt would be worse), it is to tell the truth about the current process up front and
-# stop the model retrying commands that cannot work.
+# console session inherits whatever console started it. Telling the truth about the current
+# process is not the same as refusing: the line names the elevation door as well, because a
+# filtered token can still start one elevated child (a prompt the operator sees and answers)
+# and a model that only reads "NOT elevated" tells the operator to run the command instead.
+# Measured 2026-11-02 on a Windows install: the model printed the firewall rule and asked the
+# operator to run it; told to try, it created the rule through Start-Process -Verb RunAs in
+# one turn. A line that hands the operator a command is the bug (operator rule, 2026-10-26).
 
 def is_elevated():
     """True/False, or None when it cannot be determined. Windows: the process token.
@@ -7255,9 +7267,10 @@ def shell_rights_line():
         return ("Shell: %s, NOT elevated. This account may still be an administrator, but "
                 "this process has a standard token: admin-only work (some event logs, "
                 "root\\wmi classes, service and driver changes) fails with Access is denied. "
-                "Do not retry it. Use what a standard token can read, and when admin rights "
-                "are genuinely needed, say so and tell the operator to relaunch from an "
-                "elevated terminal." % shell)
+                "Run that work through an elevated child - `Start-Process -Verb RunAs` is "
+                "one Administrator prompt - and use what a standard token can read "
+                "otherwise. If no prompt can appear (an unattended lane), say what needs "
+                "admin and stop; never hand the operator a command to paste." % shell)
     return ("Shell: %s, not root. System changes fail with Permission denied. Use `sudo -n` "
             "only if it is known to be passwordless here; otherwise say what needs root and "
             "let the operator run it." % shell)
@@ -22703,6 +22716,15 @@ _COMPLETION_RX = re.compile(
     r"|\b(writing|write)\b[^.\n]{0,20}\b(it|the report|the analysis|the write-?up)\b"
     r"|\bthen the report\b", re.IGNORECASE)
 
+# A benchmark's own phase label is not a claim about the task. Measured 2026-11-02 on a
+# Windows install: "Turn 5 of run 1 done, run 2 remains" counted as a completion
+# announcement because "run" is one of the nouns and "done" sits a few words later, so the
+# pre-delivery checkpoint later told the run it had announced the work complete when it had
+# only reported a phase. Strip the stage label before the claim test; "run 2 is complete"
+# still counts, because a completed numbered run is a real claim.
+_PHASE_LABEL_RX = re.compile(
+    r"\brun\s*#?\d+\s+(?:done|finished|complete|completed)\b", re.IGNORECASE)
+
 # The other half of the same class, and the one the announcement regex misses: the
 # model says it is ABOUT TO work ("I'll gather ... then write it up") and stops there,
 # with no tool call at all. _COMPLETION_RX only counts announcements that arrive WITH
@@ -26837,7 +26859,8 @@ class Agent:
                     # (2026-10-16): it was the same advice at a worse moment, and the
                     # checkpoint attaches the count to the answer it actually affects.
                     if tool_calls:
-                        if _COMPLETION_RX.search(str(reply.get("content") or "")):
+                        _claim = _PHASE_LABEL_RX.sub(" ", str(reply.get("content") or ""))
+                        if _COMPLETION_RX.search(_claim):
                             _run["announced"] = int(_run.get("announced") or 0) + 1
                             log.info("[%s] completion announced %d time(s) with %d tool "
                                      "call(s) queued",
@@ -37042,7 +37065,7 @@ def _web_command(text, key="web"):
     _v = low[1:].split()[0] if low.startswith("/") and len(low) > 1 else ""
     if _v in _CHAT_VERB_SET:
         line = text.strip()[1:]           # keep the arguments: "config set a b"
-        out = str(verb_from_chat(line))
+        out = str(verb_from_chat(line, key))
         # `/update` must leave the NEW code serving: restart onto it, exactly the way
         # both chat lanes finish that command. The page reconnects on its own.
         if _v == "update" and "VERSION " in out and "->" in out \
@@ -41241,7 +41264,7 @@ class MattermostDispatcher:
         _v = low[1:].split()[0] if low.startswith("/") and len(low) > 1 else ""
         if _v in _CHAT_VERB_SET:
             _line = stripped[1:]
-            _out = verb_from_chat(_line)
+            _out = verb_from_chat(_line, session_key)
             self._post(channel_id, post_root, _out)
             # `/tinycmdr update` must leave the NEW code running: an update that changed
             # the version and stopped there would be the old bytes serving the channel
@@ -43832,7 +43855,7 @@ class TelegramPoller:
 
             line = text[1:]
 
-            out = verb_from_chat(line)
+            out = verb_from_chat(line, key)
 
             self._say(chat_id, out)
 
@@ -51630,12 +51653,21 @@ _CHAT_VERB_SET = frozenset(("status", "doctor", "health", "version", "proc",
                             "reasoning", "approvals", "failures"))
 
 
-def verb_from_chat(argv_line):
+def verb_from_chat(argv_line, session_key=None):
     """Run one management verb for a chat request and return what it printed.
 
     `tinycmdr update` in a shell and `/tinycmdr update` in a chat are the same command, so the
     output goes back to the channel rather than to a console nobody is looking at. Verbs that
     need a terminal are refused by name instead of half-run.
+
+    `reasoning` is the exception, because the terminal and a conversation mean different
+    things by it: in a shell it sets the box default (llm.reasoning), and in chat the help
+    has always promised "for this conversation" - which is the per-session override
+    `reasoning_command` writes. It was routed through the terminal verb, so the namespaced
+    form (`/tinycmdr reasoning high`, the only one a Mattermost client reliably sends)
+    rewrote config.json for every conversation while `/reasoning high` set the override
+    (measured 2026-11-02 on a Windows install). `replay` and `cap` stay box policy and still
+    go to the terminal verb.
     """
     import contextlib
     import io
@@ -51652,6 +51684,10 @@ def verb_from_chat(argv_line):
                     % (verb, ", ".join(sorted(_CHAT_VERB_SET))))
         return ("unknown verb %r.%s From chat: %s."
                 % (verb, verb_hint(verb), ", ".join(sorted(_CHAT_VERB_SET))))
+    if verb == "reasoning" and session_key:
+        sub = argv[1].lower() if len(argv) > 1 else ""
+        if sub not in ("replay", "cap"):
+            return reasoning_command(session_key, " ".join(argv[1:]))
     buf = io.StringIO()
     code = 0
     try:
