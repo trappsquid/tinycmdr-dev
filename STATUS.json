@@ -4359,6 +4359,50 @@
       },
       "detail": "The inline recovery ran only when the reply was nothing but the call blocks, so a narration line followed by a complete block parsed to nothing and the run ended with no tool executed (measured 2026-10-27, after 5 and 58 calls); the blocks that end a reply are now taken with the narration kept, a fenced or followed-by-words block is still answered as written, and the streamed line is redrawn with the narration.",
       "gate": "tests/test_stall.py grades the trailing block, the kept narration, the two-block turn and the quoted/fenced cases end to end; tests/test_checkin.py grades the streamed line redrawn without markup, as the same post."
+    },
+    {
+      "id": "shell-rights-elevation-door",
+      "title": "a non-elevated Windows shell names the elevation door",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "29c17de",
+        "expect": "untagged"
+      },
+      "detail": "The rights line told the model not to retry admin work and to have the operator relaunch from an elevated terminal, so a Windows run printed the firewall rule for the operator to paste; it names `Start-Process -Verb RunAs` as the one-prompt door and forbids handing over a command.",
+      "gate": "tests/test_host_surface.py grades the Windows line's elevation door, the absent relaunch instruction and the no-paste rule; it passes on the macOS host by pinning IS_WINDOWS and the elevation probe."
+    },
+    {
+      "id": "phase-label-not-a-claim",
+      "title": "a benchmark phase label is not a completion announcement",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "29c17de",
+        "expect": "untagged"
+      },
+      "detail": "A progress line such as \"Turn 5 of run 1 done\" matched the completion noun+done pattern and was counted as an announcement, so the pre-delivery checkpoint later told a finished run it had claimed completion; stage labels are stripped before the claim test while \"run 2 is complete\" still counts.",
+      "gate": "tests/test_stall.py runs two phase turns and a final answer and grades that no checkpoint fires and the answer ships."
+    },
+    {
+      "id": "retired-keys-silent",
+      "title": "two keys nothing reads stop warning on every start",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "29c17de",
+        "expect": "untagged"
+      },
+      "detail": "agent.deliver_after_announcements (removed with the pre-delivery checkpoint) and web.admin_hosts (replaced by the LAN-host approval) survive in host configs because update never overwrites config.json, and both were warning on every start; they are in the retired-key table now.",
+      "gate": "tests/test_fix_config.py loads a config carrying both keys and grades that neither warns while a real typo still does."
+    },
+    {
+      "id": "reasoning-per-conversation",
+      "title": "/tinycmdr reasoning <level> sets the conversation, not the box",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "29c17de",
+        "expect": "untagged"
+      },
+      "detail": "The namespaced form the chat help advertises ran the terminal verb and rewrote llm.reasoning for every conversation while the bare /reasoning set the per-session override; chat now calls the same per-session setter, and replay and cap remain box policy.",
+      "gate": "tests/test_interaction_surface.py sends /tinycmdr reasoning high through the Mattermost dispatcher and grades the session override, the untouched box default and the status reply."
     }
   ]
 }

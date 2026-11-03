@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.57] - 2026-11-02
+
+### Fixed
+- **A non-elevated Windows shell names the elevation door:** the rights line told the model not to retry and to have the operator relaunch from an elevated terminal, so a run printed the firewall rule for the operator to paste instead of opening it with one prompt (tests/test_host_surface.py).
+- **A benchmark phase label is not a completion claim:** "Turn 5 of run 1 done" matched the completion pattern, so a finished run earned a pre-delivery checkpoint for an announcement it never made (tests/test_stall.py).
+- **Two retired keys stop warning on every start:** `agent.deliver_after_announcements` and `web.admin_hosts` stay in host configs because update never overwrites config.json, and nothing reads either one (tests/test_fix_config.py).
+- **`/tinycmdr reasoning <level>` sets the conversation:** the form the chat help advertises ran the terminal verb and rewrote `llm.reasoning` for every conversation, while `/reasoning` set the per-session override (tests/test_interaction_surface.py).
+
 ## [1.1.56] - 2026-10-31
 
 ### Fixed
