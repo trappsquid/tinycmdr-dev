@@ -1121,9 +1121,20 @@ The lane rules this grades, all of them visible only by RUNNING the file:
             logf = dirpath / "tinycmdr.log"
             if logf.exists():
                 said += logf.read_text(encoding="utf-8", errors="replace")
+            if not served:
+                # The one thing the check's own failure needs: did the child die, and
+                # after how long. A Windows red on 2026-11-09 carried only the
+                # expected Mattermost line, because this tail was never carried into
+                # the failing check (v1.1.59's cut).
+                said = ("[child exit %s after %.1fs]\n"
+                        % (proc.returncode, time.time() - t0)) + said
             lost_port = ("is held by another process" in said
                          or "address already in use" in said.lower()
-                         or "winerror 10048" in said.lower())
+                         or "winerror 10048" in said.lower()
+                         # A Windows port the OS has reserved for another process fails
+                         # the bind with 10013, not 10048, and free_port() can pick one:
+                         # that is the same lost port as 10048, so it earns the retry.
+                         or "winerror 10013" in said.lower())
             if served or not lost_port:
                 break                               # served, or a cause a retry cannot fix
         return served, authed, said
@@ -1170,7 +1181,8 @@ The lane rules this grades, all of them visible only by RUNNING the file:
             example["web"]["host"] = "127.0.0.1"
             example["web"]["port"] = port
             served, authed, said = serve_and_probe(d, port, config=example)
-            check(served, "a config from the shipped example serves the page")
+            check(served, "a config from the shipped example serves the page",
+                  said[-800:])
             check("cannot start" not in said and "no Mattermost bot token" not in said,
                   "...and no Mattermost token is demanded for it", said[-400:])
             check("is not a key the harness reads" not in said,
