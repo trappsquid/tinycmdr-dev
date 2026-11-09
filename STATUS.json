@@ -4414,6 +4414,17 @@
       },
       "detail": "The namespaced form the chat help advertises ran the terminal verb and rewrote llm.reasoning for every conversation while the bare /reasoning set the per-session override; chat now calls the same per-session setter, and replay and cap remain box policy.",
       "gate": "tests/test_interaction_surface.py sends /tinycmdr reasoning high through the Mattermost dispatcher and grades the session override, the untouched box default and the status reply."
+    },
+    {
+      "id": "changed-box-needs-a-check",
+      "title": "a run that changed the box is asked to prove it before it reports done",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "18e0bcc",
+        "expect": "untagged"
+      },
+      "detail": "With agent.done_gate off (the shipped default) a run that wrote a file or ran a write-shaped command could deliver 'done and verified' with nothing checking it; the pre-delivery checkpoint now carries that fact and says a check runs from where the operator will use the change.",
+      "gate": "tests/test_stall.py drives a write and a bare answer and asserts one checkpoint naming the unproven change; tests/test_build_surface.py asserts the same run still ships its answer after that one turn."
     }
   ]
 }

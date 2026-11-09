@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.59] - 2026-11-09
+
+### Fixed
+- **A changed box is proved before a run calls it done:** a run that had written a file or run a write-shaped command could deliver "done and verified" with nothing checking the change whenever `agent.done_gate` was off, which is the shipped default; the pre-delivery checkpoint now names that gap and says a check runs from where the operator will use the change (tests/test_stall.py, tests/test_build_surface.py).
+
 ## [1.1.58] - 2026-11-03
 
 ### Fixed
