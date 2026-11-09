@@ -368,10 +368,14 @@ def main():
 
         seen = install_stub(fb, script)
         answer = fb.AGENT.run("s-no-done-gate", "build the thing")
-        check(len(seen) == 2
+        # With the gate off there is no submit_done to demand, but a changed box is
+        # still asked to show a check once (2026-11-09): the checkpoint carries that
+        # fact, so the run pays one turn and the answer still ships as written.
+        check(len(seen) == 3
               and not any("completion check" in payload_text(p) for p in seen)
+              and any("changed the box" in payload_text(p) for p in seen)
               and "Done, no gate." in answer,
-              "with done_gate off the answer is delivered with no extra turn",
+              "with done_gate off a changed box earns one checkpoint turn, then ships",
               f"{len(seen)} call(s): {answer[:120]}")
     finally:
         shutil.rmtree(wd, ignore_errors=True)

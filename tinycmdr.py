@@ -22918,16 +22918,22 @@ def _request_path_exists(raw):
         return True    # unreadable is not evidence of missing work
 
 
-def _checkpoint_reasons(key):
+_CHANGED_UNPROVEN = "this run changed the box, and no check has passed for it"
+
+
+def _checkpoint_reasons(key, changed=False):
     """What the harness KNOWS is unfinished, as facts the model can check.
 
     Empty means the gate stays out of the way. The plan counts when the MODEL set it,
     or when a derived plan has actually moved: the harness parses steps out of
     multi-part requests, and a question answered in one turn must not be held for the
-    parser's guess.
+    parser's guess. `changed` is the caller's fact, not this state's: it means the run
+    mutated something and has no passing check, which only the run loop can see.
     """
     st = run_state(key) or {}
     reasons = []
+    if changed:
+        reasons.append(_CHANGED_UNPROVEN)
     plan = st.get("plan") or []
     left = [(s.get("id"), s.get("text")) for s in plan
             if (s.get("status") or "open") in ("open", "doing", "blocked")]
@@ -22950,13 +22956,21 @@ def _checkpoint_reasons(key):
 
 def _checkpoint_turn(reasons):
     """The one harness turn the checkpoint spends (see the run loop and ask_user)."""
-    return ("SYSTEM: you were about to deliver that answer, and the harness's own state "
+    body = ("SYSTEM: you were about to deliver that answer, and the harness's own state "
             "says the task is not finished:\n- " + "\n- ".join(reasons) + "\n"
             "This is ONE check, not a question to the operator. Compare the request "
             "with what you actually did: if anything it asks for is missing, continue "
             "now with the next tool call - the request still stands, and do not ask "
             "whether to keep going. If the task really is finished, deliver the answer "
             "now and name plainly what you could not verify.")
+    if _CHANGED_UNPROVEN in reasons:
+        # The measured miss (2026-11-09, one live box): a run proved SSH key auth from
+        # the box to itself and called it verified. A check from inside the thing
+        # being checked is the failure mode, so name the boundary out loud.
+        body += ("\nA check is a command that exits 0 only when the change works for "
+                 "the operator - run it from where they will use it, not from inside "
+                 "the box the change is on.")
+    return body
 
 
 # What one turn WAS, as data (added 2026-09-24, logging only)
@@ -27263,7 +27277,20 @@ class Agent:
                                 and status not in ("truncated", "empty", "budget")
                                 and plan_mode(session_key) != "plan"
                                 and (reply.get("content") or "").strip()):
-                            _reasons = _checkpoint_reasons(session_key)
+                            # A run that CHANGED the box is a fact the gate already
+                            # knows when done_gate is on; with it off (the shipped
+                            # default) nothing else ever looks, so the answer that
+                            # reports success after a mutation ships unproven - the
+                            # operator's false "done and verified" (measured 2026-11-09
+                            # on a live box: key auth proved from the box to itself and
+                            # reported as working). One challenge turn, no new tool and
+                            # no prompt cost; a passing submit_done still silences it.
+                            _unproven = (not CONFIG["agent"].get("done_gate")
+                                         and not _run.get("done_ok")
+                                         and (bool(muts)
+                                              or int(_run.get("shell_mutations") or 0)))
+                            _reasons = _checkpoint_reasons(session_key,
+                                                           changed=bool(_unproven))
                             if _reasons:
                                 _run["checkpoint"] = 1
                                 messages.append({"role": "user",

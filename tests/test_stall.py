@@ -1684,6 +1684,8 @@ def test_a_write_clears_BOTH_repeat_guards():
     out, calls, payloads = _scripted_run([
         read("1"), read("2"), write, read("3"), read("4"),
         {"role": "assistant",
+         "content": "Re-checked after the write: the probe is still constant."},
+        {"role": "assistant",
          "content": "Re-checked after the write: the probe is still constant."}])
     last = json.dumps(payloads[-1]) if payloads else ""
     check("guards: the re-check after a write actually RUNS",
@@ -1693,7 +1695,7 @@ def test_a_write_clears_BOTH_repeat_guards():
     check("guards: the run ends with its own answer",
           "still constant" in out, out[:200])
     check("guards: every scripted turn was used (nothing was cut short)",
-          calls == 6, f"model calls: {calls}")
+          calls == 7, f"model calls: {calls}")
 
 
 def test_identical_tool_calls_stop_the_run_instead_of_burning_the_budget():
@@ -3417,6 +3419,7 @@ def test_a_mutation_lets_the_same_call_run_again():
     fb.CONFIG["agent"]["max_minutes"] = 30
     out, calls, payloads = _scripted_run([
         dict(call), dict(call), dict(fix), dict(call),
+        {"role": "assistant", "content": "Done: re-checked after the fix."},
         {"role": "assistant", "content": "Done: re-checked after the fix."}])
     ticks = (counter.read_text(encoding="utf-8").count("tick")
              if counter.exists() else 0)
@@ -4138,6 +4141,41 @@ def test_a_missing_request_path_earns_one_checkpoint():
           (calls, out[:200]))
 
 
+def test_an_unproven_change_earns_one_checkpoint_before_the_answer():
+    """A run that changed the box is asked to prove it (2026-11-09).
+
+    done_gate is the strict form and ships off by default, so nothing looked at a
+    mutation before delivery: a live run proved SSH key auth from the box to itself,
+    reported "done and verified", and the operator had to type "Continue" to get the
+    work actually done. The checkpoint now carries that state fact without a new tool
+    or a prompt change, and names the boundary - a check runs from where the operator
+    will use it, not from inside the box."""
+    target = TMP / "unproven-change.txt"
+    if target.exists():
+        target.unlink()
+    out, calls, payloads = _checkpoint_run(
+        "checkpoint-change", "make the change and report", [
+            {"role": "assistant", "content": "Making the change.",
+             "tool_calls": [{"id": "1", "function": {
+                 "name": "write_file",
+                 "arguments": json.dumps({"path": str(target),
+                                          "content": "changed\n"})}}]},
+            {"role": "assistant", "content": "Done: the change is made."},
+            {"role": "assistant", "content": "Final: nothing left undone."},
+            {"role": "assistant", "content": "a third answer must never be asked for"},
+        ])
+    sent = _payload_text(payloads)
+    check("checkpoint: the unproven change is named",
+          "changed the box" in sent, sent[-700:])
+    check("checkpoint: the check must run where the operator will use it",
+          "from where they will use it" in sent, sent[-900:])
+    check("checkpoint: one turn, then the next bare answer ships",
+          calls == 3 and "nothing left undone" in out, (calls, out[:200]))
+    check("checkpoint: a run with no state fact carries no reason",
+          fb._checkpoint_reasons("checkpoint-change-readonly") == [],
+          fb._checkpoint_reasons("checkpoint-change-readonly"))
+
+
 def test_a_url_in_the_request_is_not_a_local_path():
     """A URL is not a deliverable (2026-10-20).
 
@@ -4350,12 +4388,13 @@ def test_a_write_clears_the_restatement_count():
     fb.CONFIG["agent"]["max_minutes"] = 20
     out, calls, payloads = _scripted_run(
         [rd("1"), rd("2"), write, rd("3"), rd("4"),
+         {"role": "assistant", "content": "Done: re-checked after the write."},
          {"role": "assistant", "content": "Done: re-checked after the write."}])
     check("a write: the count starts over instead of stopping the run",
           "Stopped a loop" not in out, out[:300])
     check("a write: the run ends with its own answer",
           "re-checked after the write" in out, out[:200])
-    check("a write: every scripted turn was used", calls == 6,
+    check("a write: every scripted turn was used", calls == 7,
           f"model calls: {calls}")
 
 
