@@ -5,6 +5,15 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.60] - 2026-11-21
+
+### Fixed
+- **LM Studio's context slot is read:** a local LM Studio endpoint reports no window on its OpenAI surface, so an 8K load ran at the assumed 14.7K and every request went out over the slot; the loaded instance's context length is now read from LM Studio's own API, and the model's maximum is never used (tests/test_endpoint_surface.py).
+- **A window is refused because the conversation does not fit:** the old refusal tested the window (below 8,192), so an 8K endpoint ran with a 1,513-token conversation while the compaction target alone was 2,000 and the payload went out over the window; the decision now reads window minus the fixed prompt and the reply against a 2,048 floor (tests/test_envelope.py).
+- **A compaction target never exceeds the budget:** the cut target floored at 2,000 tokens, so on a window that leaves less the harness compacted every turn and never fit (tests/test_envelope.py).
+- **A small or guessed window is said on the lane:** the warning was a log line and the guessed window reached the operator only as a loop report; both now ride the model-note line, and `doctor` reports a live local endpoint as answered-but-silent instead of not answering (tests/test_verbs.py, tests/test_endpoint_surface.py).
+- **The compaction note points at the transcript's end:** it asked the model to read the file with no offset, and a read starts at the oldest lines, so a small model re-read the same head; it now names the tail (tests/test_spill_state_surface.py).
+
 ## [1.1.59] - 2026-11-09
 
 ### Fixed
