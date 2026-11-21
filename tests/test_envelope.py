@@ -705,7 +705,6 @@ window, which is exactly what the detection probe returns on a real box.
                 + ("- probe context line: keep this prompt measurable\n" * 30)
                 + "</file>")
             reply_cfg = int(fb.CONFIG["llm"]["max_tokens"])
-            soft = fb.ENVELOPE_MIN_WINDOW
             floor = fb.ENVELOPE_MIN_BUDGET
             # The fixture config carries llm.max_context_tokens, which the harness treats as a
             # CEILING on the messages budget (pinned elsewhere). The expectation has to
@@ -715,8 +714,10 @@ window, which is exactly what the detection probe returns on a real box.
             ceiling = ceiling if isinstance(ceiling, int) and ceiling > 0 else None
 
             def expected_budget(window, static, reply):
-                room = max(floor, window - static - reply)
-                return max(floor, min(room, ceiling)) if ceiling else room
+                # No floor on the number SENT: the floor is the refusal decision, and
+                # adding it here pushed the three numbers past the window itself.
+                room = max(0, window - static - reply)
+                return min(room, ceiling) if ceiling else room
 
             # --- the five numbers, and the relations between them -----------------
             env0 = at_window(fb, 32768)
@@ -744,11 +745,14 @@ window, which is exactly what the detection probe returns on a real box.
             check(not leaked,
                   "no Python comment ships inside the prompt (%d line(s): %s)"
                   % (len(leaked), leaked[:2]))
-            check(static < soft,
-                  f"static {static} is below the {soft}-token minimum window, so a legal "
-                  f"request exists at the floor")
+            # The floor is a CONVERSATION size, so the smallest workable window is
+            # static + reply + floor, not a constant: 8,192 is below it and refuses
+            # (pinned below), 16,384 is above it.
+            check(env0["budget"] >= floor,
+                  f"the reference 32,768 window leaves a working budget "
+                  f"({env0['budget']} >= {floor})")
 
-            for window in (8192, 16384, 32768, 131072):
+            for window in (16384, 32768, 131072):
                 env = at_window(fb, window)
                 reply = min(reply_cfg, window // 4)
                 budget = expected_budget(window, static, reply)
@@ -816,24 +820,42 @@ window, which is exactly what the detection probe returns on a real box.
             check("serves 4096 tokens per request" in sent,
                   f"w=4096: _chat raises InfraError with the refusal ({sent[:60]}...)")
 
-            # --- 8,192 runs, and the wire carries the clamped reply ---------------
+            # --- 8,192 REFUSES: the BUDGET is the unit, not the window -------------
+            # The old rule refused only BELOW 8,192, so an 8k box ran with a 1,513-token
+            # conversation while the compaction target alone was 2,000 - every turn cut,
+            # nothing ever fit, and every request went out over the window (measured
+            # 2026-11-21). The refusal is about what the prompt and reply leave behind.
             env8 = at_window(fb, 8192)
-            check(not env8["refused"], "w=8192: the envelope runs (with a warning)")
+            check(env8["refused"],
+                  "w=8192: the envelope refuses (leave-behind below the floor)")
+            for token in ("serves 8192 tokens per request", f"static={static}",
+                          "reply=", "budget=", f"{floor}"):
+                check(token in env8["refusal"], f"w=8192: refusal names {token}")
             seen, sent = capture_request(fb, "envtest")
-            check(len(seen) == 1, "w=8192: exactly one request was assembled")
-            if seen:
-                payload = seen[0]
-                conv = fb.AGENT._conversation_token_est(payload["messages"])
-                check(payload["max_tokens"] == env8["reply"] == min(reply_cfg, 2048),
-                      f"w=8192: max_tokens sent is the clamped reply "
-                      f"({payload['max_tokens']}, was {reply_cfg})")
-                check(conv <= env8["budget"],
-                      f"w=8192: the conversation fits the budget ({conv} <= "
-                      f"{env8['budget']}) - the system prompt is counted in static, "
-                      f"not again here")
-                check(env8["static"] + conv <= 8192,
-                      f"w=8192: the real payload (system + schemas + conversation) fits "
-                      f"the window ({env8['static']} + {conv} <= 8192)")
+            check(not seen, "w=8192: _chat sends NOTHING (refused before the POST)")
+            check("serves 8192 tokens per request" in sent,
+                  f"w=8192: _chat raises InfraError with the refusal ({sent[:60]}...)")
+            # A refused run must not be compacted first: the cut would write dropped
+            # blocks to the transcript and a "read the transcript" note for a request
+            # that is never sent.
+            _tp = fb.SESSIONS_DIR / "envtest.transcript.jsonl"
+            if _tp.exists():
+                _tp.unlink()
+            _big = [{"role": "system", "content": "sys"},
+                    {"role": "user", "content": "a" * 4000},
+                    {"role": "assistant", "content": "b" * 4000},
+                    {"role": "user", "content": "c" * 4000},
+                    {"role": "assistant", "content": "d" * 4000},
+                    {"role": "user", "content": "e"}]
+            fb.AGENT._compact(_big, "envtest")
+            check(not _tp.exists(), "w=8192: a refused box is not compacted first")
+
+            # --- the compaction target can never exceed the budget it cuts for ----
+            # (the same measurement, as arithmetic: 1,513 budget -> 2,000 target)
+            for _b in (0, 500, 1513, 4585, 19945):
+                check(fb._cut_target(_b, 0.6) <= _b,
+                      f"the cut target for a {_b}-token budget never exceeds it "
+                      f"({fb._cut_target(_b, 0.6)})")
 
             # --- an explicit llm.max_context_tokens is still a CEILING -------------
             saved_ceiling = fb.CONFIG["llm"].get("max_context_tokens")
@@ -844,23 +866,29 @@ window, which is exactly what the detection probe returns on a real box.
                       f"an explicit ceiling wins over a roomier window "
                       f"({env_c['budget']} == 12000)")
                 env_c2 = at_window(fb, 8192)
-                # computed, not hardcoded: the old 1,024 was the floor winning, which only
-                # happened while the static prompt was big enough to eat the whole window.
-                expect_c2 = max(floor, min(8192 - static - min(reply_cfg, 8192 // 4), 12000))
-                check(env_c2["budget"] == expect_c2,
+                # The ceiling can only LOWER the budget; it never buys back a window
+                # (it used to floor the number at 1,024, ABOVE the operator's own key).
+                expect_c2 = min(max(0, 8192 - static - min(reply_cfg, 8192 // 4)), 12000)
+                check(env_c2["budget"] == expect_c2 and env_c2["refused"],
                       f"a tighter window still wins over a looser ceiling "
-                      f"({env_c2['budget']} == {expect_c2})")
+                      f"({env_c2['budget']} == {expect_c2}, refused)")
             finally:
                 fb.CONFIG["llm"]["max_context_tokens"] = saved_ceiling
 
-            # --- 16,384: the warn line, and the payload still fits -----------------
+            # --- 16,384: no warning, and the payload still fits --------------------
             env16 = at_window(fb, 16384)
+            check(not env16["warned"], "w=16384: no warning at the warn line itself")
             seen16, _ = capture_request(fb, "envtest")
             if seen16:
                 conv16 = fb.AGENT._conversation_token_est(seen16[0]["messages"])
                 check(env16["static"] + conv16 <= 16384,
                       f"w=16384: the real payload fits the window "
                       f"({env16['static']} + {conv16} <= 16384)")
+            # 12,288 runs and carries the flag the operator-facing note reads: this is
+            # the band that used to warn in the log and say nothing anywhere else.
+            env12 = at_window(fb, 12288)
+            check(env12["warned"] and not env12["refused"],
+                  "w=12288: runs, and sets the warned flag the notice door reads")
 
             # --- memory limits scale with the window, not the model name ----------
             at_window(fb, 16384)

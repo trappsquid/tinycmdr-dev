@@ -805,7 +805,7 @@ wrote the pre-compaction transcript.
                                                        "arguments": json.dumps(
                                                            {"path": str(f1)})}}]},
                          {"role": "tool", "tool_call_id": "c%d" % i,
-                          "content": "line\n" * 50}]
+                          "content": "line\n" * 400}]
             removed = A._drop_oldest_block(msgs, fb.MARK_COMPACT, key)
             check(isinstance(removed, int) and removed > 0, "the cut reports tokens removed",
                   removed)

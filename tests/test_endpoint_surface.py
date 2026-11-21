@@ -36,10 +36,12 @@ def _suite_test_endpoint_window():
     """How the harness asks an endpoint how much context it serves.
 
 `_detect_window` is the one place the context budget gets a number that did not come from
-config, and it has four routes because there is no standard one: vLLM reports
+config, and it has several routes because there is no standard one: vLLM reports
 max_model_len and llama.cpp carries n_ctx under meta on /v1/models, any llama.cpp build
 answers /props at the server root, Ollama answers /api/ps with the context_length it is
-actually serving, and SGLang answers /get_server_info with the model's own context_length.
+actually serving, SGLang answers /get_server_info with the model's own context_length, and
+LM Studio - whose OpenAI surface reports nothing - answers /api/v1/models (or /api/v0/models
+on older builds) with the context it LOADED a model with.
 
 What this suite guards, in order of what would hurt most:
 
@@ -47,9 +49,10 @@ What this suite guards, in order of what would hurt most:
      fail loudly - it overflows mid-run, and on a slow local endpoint that spends exactly
      the minutes this harness exists to save. Ollama's /api/show carries the model's
      MAXIMUM context while it serves num_ctx (4096 by default), so /api/show must stay
-     unprobed; SGLang's max_total_num_tokens is the KV-cache budget shared across
-     concurrent requests rather than a per-request window; and an endpoint that does not
-     say must come back 0 rather than a guess.
+     unprobed; LM Studio's max_context_length is the same trap, so only a loaded
+     instance's config.context_length is read; SGLang's max_total_num_tokens is the
+     KV-cache budget shared across concurrent requests rather than a per-request window;
+     and an endpoint that does not say must come back 0 rather than a guess.
   2. 0 means "did not say", and every route falls through to it rather than to a default.
   3. The probes ask the SERVER ROOT (.../props, .../api/ps), never the OpenAI path.
   4. An unrelated server's 200 is not read as an answer: each route checks the shape of
@@ -105,6 +108,17 @@ What this suite guards, in order of what would hurt most:
     OLLAMA_PS_EMPTY = {"models": []}
     OLLAMA_SHOW = {"model_info": {"llama.context_length": 131072},
                    "parameters": "num_ctx 8192\nstop <|eot_id|>"}
+    # LM Studio: the OpenAI surface carries nothing at all. Its own REST API reports the
+    # context a model was LOADED with, beside the model's maximum - which is never read.
+    LMSTUDIO_V1 = {"models": [{"type": "llm", "key": "main",
+                               "max_context_length": 262144,
+                               "loaded_instances": [{"id": "main",
+                                                     "config": {"context_length": 8192}}]}]}
+    LMSTUDIO_V1_UNLOADED = {"models": [{"key": "main", "max_context_length": 262144,
+                                        "loaded_instances": []}]}
+    LMSTUDIO_V0 = {"data": [{"id": "main", "object": "model", "state": "loaded",
+                             "max_context_length": 131072,
+                             "loaded_context_length": 8192}]}
     # A 200 from a server that is not answering the question: the right shape of nothing.
     FOREIGN_LIST = {"object": "list"}
 
@@ -125,7 +139,10 @@ What this suite guards, in order of what would hurt most:
 
         def _answer(self, url):
             self.asked.append(url)
-            for frag, payload in self.by_path.items():
+            # Longest fragment first: "/v1/models" is a substring of "/api/v1/models",
+            # and the LM Studio route must not be answered by the OpenAI one.
+            for frag in sorted(self.by_path, key=len, reverse=True):
+                payload = self.by_path[frag]
                 if frag in url:
                     if payload is None:
                         break
@@ -196,7 +213,9 @@ What this suite guards, in order of what would hurt most:
                 self.real = _rq
 
             def get(self, url, **kw):
-                if url.endswith("/v1/models"):
+                # The OpenAI route only: "/api/v1/models" (LM Studio's) also ends with
+                # "/v1/models" and must not be counted as this retry.
+                if url.endswith("/v1/models") and "/api/" not in url:
                     self.models_calls += 1
                     if self.models_calls == 1:
                         raise _rq.ConnectionError("server busy")
@@ -253,8 +272,8 @@ What this suite guards, in order of what would hurt most:
             check("llm.context_window pins the window over the endpoint's answer",
                   _env["window"] == 262144 and _env["source"] == "config-window", _env)
             check("...and the arithmetic follows the pin",
-                  _env["budget"] == max(fb.ENVELOPE_MIN_BUDGET,
-                                        _env["window"] - _env["static"] - _env["reply"]), _env)
+                  _env["budget"] == max(0, _env["window"] - _env["static"]
+                                        - _env["reply"]), _env)
             check("...and status names it, so a pin cannot read like a server fact",
                   "pinned by llm.context_window" in fb.envelope_line(_env),
                   fb.envelope_line(_env))
@@ -267,6 +286,37 @@ What this suite guards, in order of what would hurt most:
                   and "llm.context_window" in fb.envelope_line(_env2), fb.envelope_line(_env2))
             check("...and the assumed branch keeps its conservative 8000-token budget",
                   _env2["budget"] == 8000, _env2)
+            # A guessed window used to be written to the log and nowhere else, so an 8k
+            # LM Studio box ran at an assumed 14.7K and the operator learned it from a
+            # loop report (measured 2026-11-21). The note door is the existing surface.
+            fb._note_context_window(_env2)
+            _notes = ((fb._endpoint_facts(fb.CONFIG["llm"]["base_url"]) or {})
+                      .get("notices") or {})
+            _txt = _notes.get("context-assumed") or ""
+            check("a guessed window is said on the operator's surface, not only in the log",
+                  "reports no context window" in _txt and "raise its context slot" in _txt,
+                  _txt)
+            check("...and the note names no config key or command",
+                  "llm." not in _txt and "command" not in _txt.lower(), _txt)
+            _kind, _line, _prob = fb._endpoint_verdict(
+                dict(_env2, answered=True), fb.CONFIG["llm"]["base_url"])
+            check("...and the endpoint line says it ANSWERED without a window, not NO ANSWER",
+                  _kind == "assumed" and "answered" in _line and "NO ANSWER" not in _line,
+                  (_kind, _line))
+            check("...which doctor turns into a problem about the slot, not connectivity",
+                  "raise its context slot" in _prob and "did not answer" not in _prob,
+                  _prob)
+            _k2, _l2, _p2 = fb._endpoint_verdict(
+                dict(_env2, answered=False), "http://127.0.0.1:1/v1")
+            check("a probe that got no reply is still NO ANSWER",
+                  _k2 == "no-answer" and "NO ANSWER" in _l2
+                  and "did not answer" in _p2, (_k2, _l2, _p2))
+            _k3, _l3, _p3 = fb._endpoint_verdict(
+                dict(_env2, source="server", window=8192, budget=1513,
+                     refused=True, refusal="needs a bigger slot", answered=True),
+                "http://127.0.0.1:1/v1")
+            check("a refused window carries the refusal as doctor's problem",
+                  _k3 == "window" and _p3 == "needs a bigger slot", (_k3, _l3, _p3))
         finally:
             fb.CONFIG["llm"]["context_window"] = _saved_cw
             fb.CONFIG["llm"]["max_context_tokens"] = _saved_ceiling
@@ -358,6 +408,28 @@ What this suite guards, in order of what would hurt most:
         check("SGLang's KV-cache capacity is NOT read as a window",
               window(Fake({"/get_server_info": SGLANG_CAPACITY_ONLY}),
                      "http://127.0.0.1:30000/v1") == 0)
+
+        # ------------------------------------------------ LM Studio's own REST API
+        # Measured 2026-11-21: a user ran an 8k LM Studio endpoint, the OpenAI surface
+        # reported nothing, the harness assumed 14.7K, every request went out over the
+        # slot and the operator was told nothing. The slot is on /api/v1/models.
+        check("LM Studio's /api/v1/models loaded context_length is the window",
+              window(Fake({"/api/v1/models": LMSTUDIO_V1}),
+                     "http://127.0.0.1:1234/v1") == 8192)
+        check("...max_context_length is NOT read as the served window",
+              window(Fake({"/api/v1/models": LMSTUDIO_V1_UNLOADED}),
+                     "http://127.0.0.1:1234/v1") == 0)
+        check("...older builds report the same fact as /api/v0/models loaded_context_length",
+              window(Fake({"/api/v0/models": LMSTUDIO_V0}),
+                     "http://127.0.0.1:1234/v1") == 8192)
+        check("...and a foreign 200 on the route is not an answer",
+              window(Fake({"/api/v1/models": FOREIGN_LIST}),
+                     "http://127.0.0.1:1234/v1") == 0)
+        f = Fake({"/api/v1/models": LMSTUDIO_V1})
+        window(f, "http://127.0.0.1:1234/v1")
+        check("the LM Studio probe asks the SERVER ROOT, never under /v1",
+              "http://127.0.0.1:1234/api/v1/models" in f.asked
+              and not any("/v1/api/" in u for u in f.asked), f.asked)
 
         # The route the code must NOT take: Ollama's model maximum is 16x what it serves.
         f = Fake({"/api/ps": OLLAMA_PS_EMPTY, "/api/show": OLLAMA_SHOW})

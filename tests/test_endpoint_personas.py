@@ -29,9 +29,11 @@ The rows, in the order they grade what would hurt most:
   8. Anthropic-msg   /chat/completions 404s while /messages answers 400 (max_tokens
                      required): the doctor note names what is lost, the probe posts an
                      empty body to those two paths and only those.
-  9. weak model      an 8,192-token window, malformed tool calls every third request,
-                     and a turn cut off at finish_reason=length. The run survives with
-                     an answer and the length path is pinned by what it actually does.
+  9. weak model      a 12,288-token window (small, and the smallest this build will
+                     run at: the envelope refuses a conversation budget under 2,048),
+                     malformed tool calls every third request, and a turn cut off at
+                     finish_reason=length. The run survives with an answer and the length
+                     path is pinned by what it actually does.
  10. Kimi K3-ish     the first reply carries reasoning_content (which teaches the echo
                      with no configuration); a completed assistant turn must come back
                      COMPLETE, not sliced at the old 4,000-char cap.
@@ -229,7 +231,7 @@ def _suite_personas():
                 elif persona == "llama":
                     obj = {"data": [{"id": "main", "object": "model"}]}
                 else:
-                    window = 8192 if persona == "weak" else 32768
+                    window = 12288 if persona == "weak" else 32768
                     obj = {"data": [{"id": "main", "object": "model",
                                      "max_model_len": window}]}
                 code = 200

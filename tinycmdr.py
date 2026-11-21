@@ -2377,12 +2377,34 @@ _CONTEXT_OVERFLOW_RE = re.compile(
 # and a 16,384-token completion request. The three constants below replace that
 # guess with a measurement: `static` is counted from the prompt the box will
 # actually send, the reply is clamped to a quarter of the window, and the messages
-# budget is what is left. A window below the minimum REFUSES the run; below the
-# warning line it runs and says so.
-ENVELOPE_MIN_WINDOW = 8192        # below this the static prompt crowds out the reply
+# budget is what is left. The DECISION reads the BUDGET, not the window: a window is
+# only too small when the fixed prompt and the reply the call asks for leave less than
+# a working conversation. "below 8,192" was a proxy for that and got the boundary
+# wrong in the one direction that matters - at 8,192 with this build's 4,631-token
+# prompt the conversation gets 1,513 tokens, less than the compaction target, so every
+# request went out over the window and nothing the harness did could fit (measured
+# 2026-11-21). A budget below the minimum REFUSES the run; a window below the warning
+# line runs and says so.
+ENVELOPE_MIN_BUDGET = 2048        # a conversation one tool round can work in
 ENVELOPE_WARN_WINDOW = 16384      # below this say so, above it run quietly
-ENVELOPE_MIN_BUDGET = 1024        # never trim the conversation away entirely
-_ENVELOPE_ASSUMED_WINDOW = 16384  # endpoint silent and nothing configured to say
+
+
+def _cut_target(budget, fraction):
+    """The size a compaction may cut DOWN TO, never larger than the budget itself.
+
+    The 2,000-token floor was written before the envelope existed. On a window that
+    leaves less than 2,000 for the conversation the target was larger than the budget,
+    so every turn compacted, nothing ever fit, and the payload stayed over the window
+    (measured 2026-11-21 at 8,192: budget 1,513, target 2,000, 1,902 left). A target is
+    still a target: min(budget, ...).
+    """
+    try:
+        budget = max(0, int(budget))
+    except (TypeError, ValueError):
+        return 0
+    return min(budget, max(ENVELOPE_MIN_BUDGET, int(budget * fraction)))
+
+
 _STATIC_CACHE = {}                # session_key -> (at, frozenset(names), tokens)
 
 
@@ -2643,6 +2665,54 @@ def envelope_line(env, raw=False, session_key=None, atlas=False, shell=False,
         line += (" · window from %s (documented; llm.max_context_tokens caps it)"
                  % _src.split(":", 1)[-1])
     return line
+
+
+def _endpoint_verdict(env, url):
+    """What the endpoint answered, as the one line `status` and `doctor` both print.
+
+    Two facts used to share a branch: "the metadata probe got no reply" and "it
+    answered and will not say how much context it serves". A live LM Studio endpoint
+    read as NO ANSWER with a connectivity problem (measured 2026-11-21), which sends an
+    operator looking at the wrong thing for a context problem. Returns
+    (kind, endpoint_text, problem); kind is "window", "no-answer", "assumed" or
+    "config", and problem is empty when there is nothing to fix.
+    """
+    try:
+        win = int(env.get("window") or 0)
+        budget = int(env.get("budget") or 0)
+    except (TypeError, ValueError):
+        win = budget = 0
+    source = str(env.get("source") or "")
+    if source not in ("assumed", "config"):
+        # The endpoint, a pin, a preset or a profile supplied the number.
+        return ("window", "%s — %s per request" % (url, fmt_tokens(win)),
+                env.get("refusal") if env.get("refused") else "")
+    if env.get("answered") is not True:
+        # False is a probe that got no reply; None is an envelope nobody probed (a stub,
+        # or a verb reading a cached number). Claiming "answered" without the evidence
+        # would be the same lie in the other direction, so this keeps the old, safe line.
+        return ("no-answer", "%s — NO ANSWER" % url,
+                ("the model endpoint at %s did not answer" % url)
+                + lan_permission_hint(url))
+    if source == "config":
+        return ("config", "%s — no context window reported; the conversation budget is %s"
+                % (url, fmt_tokens(budget)),
+                env.get("refusal") if env.get("refused") else "")
+    if _is_local_url(url):
+        return ("assumed", "%s — answered, no context window reported; assuming %s"
+                % (url, fmt_tokens(win)),
+                env.get("refusal") if env.get("refused") else
+                ("the model endpoint at %s answered but did not report a context window, "
+                 "so the harness assumes %s for the conversation. If the server serves "
+                 "less, raise its context slot - an 8K slot leaves no room for this "
+                 "build's prompt and a working conversation."
+                 % (url, fmt_tokens(budget))))
+    return ("assumed", "%s — no window known; assuming %s" % (url, fmt_tokens(win)),
+            "no context length was available from %s, so the harness assumes a %s "
+            "window and clips replies at %s tokens. Set llm.max_context_tokens in "
+            "config.json to the window your provider documents (hosted models are "
+            "usually 32k-128k+)."
+            % (url, fmt_tokens(win), fmt_tokens(int(env.get("reply") or 0))))
 
 
 # The most a single tool result may carry on a box with room to spare. window // 8 does the
@@ -3232,6 +3302,42 @@ def _surface_model_notices(url, say_cb):
         _endpoint_note(url, notices_said=said)
     except Exception as e:                                   # noqa: BLE001
         log.debug("could not mark the model notes said: %s", e)
+
+
+def _note_context_window(env):
+    """Say, on the operator's own surface, that the window is small or a guess.
+
+    The envelope already knew this and wrote it to the log only: `warned` was set and
+    read nowhere, so a box serving 8,192 ran with a 1,513-token conversation and the
+    operator learned it from a loop report (measured 2026-11-21). `_model_notice` is
+    the existing door - one plain line, once per endpoint, posted by the run loop after
+    the first successful call. No key and no command is named: the lever for a local
+    server is its own context slot, and the note says so.
+    """
+    base = CONFIG["llm"].get("base_url")
+    if not base:
+        return
+    try:
+        win = int(env.get("window") or 0)
+        static = int(env.get("static") or 0)
+        reply = int(env.get("reply") or 0)
+        budget = int(env.get("budget") or 0)
+    except (TypeError, ValueError):
+        return
+    if env.get("source") == "assumed" and _is_local_url(base):
+        _model_notice(
+            base, "context-assumed",
+            "this endpoint reports no context window, so I assumed %s tokens for the "
+            "conversation (%s of fixed prompt + up to %s of reply). If the server "
+            "serves less than that, raise its context slot."
+            % (fmt_tokens(budget), fmt_tokens(static), fmt_tokens(reply)))
+    elif env.get("warned"):
+        _model_notice(
+            base, "context-small:%d" % win,
+            "this endpoint serves %s tokens per request, and the prompt plus the reply "
+            "take %s of that, leaving %s for the conversation - workable, but a larger "
+            "context slot means longer runs before context is dropped."
+            % (fmt_tokens(win), fmt_tokens(static + reply), fmt_tokens(budget)))
 
 
 # The curated model catalog (assets/model-profiles.json) ---------------------------
@@ -4430,18 +4536,27 @@ def _probe_timeout(timeout):
     return (2.5, timeout)
 
 
+# server root -> True when at least one metadata route ANSWERED a 200 in this process.
+# "Did not answer" and "answered and does not report a window" are different facts, and
+# doctor printed the first for a live LM Studio box (measured 2026-11-21), which sends
+# an operator to connectivity for what is a context problem.
+_WINDOW_ANSWERED = {}
+
+
 def _detect_window(base_url, headers, timeout=10):
     """Ask an endpoint how many tokens it serves per request; 0 when it does not say.
 
-    Four routes, because there is no standard one: vLLM reports max_model_len and
+    Routes, because there is no standard one: vLLM reports max_model_len and
     llama.cpp carries n_ctx under meta on /v1/models; any llama.cpp build answers
     /props at the server root; Ollama answers /api/ps with the context_length it is
     actually serving; and SGLang answers /get_server_info with the model's own
-    context_length. A hosted OpenAI-compatible provider commonly puts the window ON
-    the model entry instead (DeepSeek: context_window 1048576, max_output_tokens
-    393216) - read too, or a 1M model was sized as an 8k one and every long answer
-    was clipped. Read-only metadata, never a model call, so it is safe to ask a box
-    that is busy serving somebody else.
+    context_length. LM Studio's OpenAI surface reports none of those and none of these
+    routes; its served slot is on its own REST API (see the local branch below). A
+    hosted OpenAI-compatible provider commonly puts the window ON the model entry
+    instead (DeepSeek: context_window 1048576, max_output_tokens 393216) - read too,
+    or a 1M model was sized as an 8k one and every long answer was clipped. Read-only
+    metadata, never a model call, so it is safe to ask a box that is busy serving
+    somebody else.
     """
     base = str(base_url or "").rstrip("/")
     if not base:
@@ -4455,8 +4570,10 @@ def _detect_window(base_url, headers, timeout=10):
     # instant and does NOT set this - a freshly-started server still gets its retry.
     _down = [False]
     try:
-        models = (requests.get(base + "/models", headers=headers,
-                               timeout=_probe_timeout(timeout)).json().get("data") or [])
+        _resp = requests.get(base + "/models", headers=headers,
+                             timeout=_probe_timeout(timeout))
+        _WINDOW_ANSWERED[root] = True
+        models = (_resp.json().get("data") or [])
         entry = _pick_model(models, CONFIG["llm"]["model"])
         if entry is None:
             log.debug("window detect: %d model(s) advertised on %s, none is %r - asking the "
@@ -4498,8 +4615,10 @@ def _detect_window(base_url, headers, timeout=10):
         log.debug("window detect: /models on %s did not answer: %s", base, e)
     if not detected and not _down[0]:
         try:
-            props = requests.get(root + "/props", headers=headers,
-                                 timeout=_probe_timeout(timeout)).json()
+            _resp = requests.get(root + "/props", headers=headers,
+                                 timeout=_probe_timeout(timeout))
+            _WINDOW_ANSWERED[root] = True
+            props = _resp.json()
             detected = ((props.get("default_generation_settings") or {})
                         .get("n_ctx") or props.get("n_ctx"))
         except Exception as e:
@@ -4521,8 +4640,10 @@ def _detect_window(base_url, headers, timeout=10):
         # empty list, this returns 0, and the operator's configured budget stands -
         # which is what every endpoint that does not say already gets.
         try:
-            ps = requests.get(root + "/api/ps", headers=headers,
-                              timeout=_probe_timeout(timeout)).json()
+            _resp = requests.get(root + "/api/ps", headers=headers,
+                                 timeout=_probe_timeout(timeout))
+            _WINDOW_ANSWERED[root] = True
+            ps = _resp.json()
             for entry in (ps.get("models") or []):
                 if isinstance(entry, dict) and entry.get("context_length"):
                     detected = entry["context_length"]
@@ -4542,8 +4663,10 @@ def _detect_window(base_url, headers, timeout=10):
         # model maximum. A server that says neither is 0, which leaves the operator's
         # configured budget in charge.
         try:
-            info = requests.get(root + "/get_server_info", headers=headers,
-                                timeout=_probe_timeout(timeout)).json()
+            _resp = requests.get(root + "/get_server_info", headers=headers,
+                                 timeout=_probe_timeout(timeout))
+            _WINDOW_ANSWERED[root] = True
+            info = _resp.json()
             if isinstance(info, dict):
                 detected = info.get("context_length") or info.get("max_req_input_len")
         except Exception as e:
@@ -4551,6 +4674,77 @@ def _detect_window(base_url, headers, timeout=10):
             if isinstance(e, requests.exceptions.ConnectTimeout):
                 _down[0] = True
             log.debug("window detect: /get_server_info on %s did not answer: %s", base, e)
+    if not detected and not _down[0] and _is_local_url(base):
+        # LM Studio. Its OpenAI surface (/v1/models) carries no window at all and it
+        # serves none of the routes above, so a local LM Studio took the ASSUMED 8,000
+        # and every request went out over the real slot (measured 2026-11-21: an
+        # 8,192-token load received a 14,679-token envelope and the operator was told
+        # nothing). The number it loaded a model WITH is on its own REST API:
+        # /api/v1/models carries loaded_instances[].config.context_length (current
+        # builds), /api/v0/models carries loaded_context_length (older ones).
+        # max_context_length is the MODEL's maximum - the Ollama /api/show trap - and is
+        # never read here: it is the one direction that must not be wrong.
+        for route, field in (("/api/v1/models", "models"), ("/api/v0/models", "data")):
+            try:
+                _resp = requests.get(root + route, headers=headers,
+                                     timeout=_probe_timeout(timeout))
+                _WINDOW_ANSWERED[root] = True
+                body = _resp.json()
+            except Exception as e:
+                _blip[0] = True
+                if isinstance(e, requests.exceptions.ConnectTimeout):
+                    _down[0] = True
+                log.debug("window detect: %s on %s did not answer: %s", route, base, e)
+                if _down[0]:
+                    break
+                continue
+            entries = body.get(field) if isinstance(body, dict) else None
+            if not isinstance(entries, list):
+                continue                    # not that server answering this route
+            found = []
+            for ent in entries:
+                if not isinstance(ent, dict):
+                    continue
+                names = [ent.get("key") or ent.get("id")]
+                sizes = []
+                if route.endswith("/v1/models"):
+                    for inst in (ent.get("loaded_instances") or []):
+                        if not isinstance(inst, dict):
+                            continue
+                        names.append(inst.get("id"))
+                        try:
+                            n = int((inst.get("config") or {})
+                                    .get("context_length") or 0)
+                        except (TypeError, ValueError, AttributeError):
+                            n = 0
+                        if n > 0:
+                            sizes.append(n)
+                else:
+                    try:
+                        n = int(ent.get("loaded_context_length") or 0)
+                    except (TypeError, ValueError):
+                        n = 0
+                    if n > 0:
+                        sizes.append(n)
+                names = [str(n) for n in names if isinstance(n, (str, int)) and n]
+                if names and sizes:
+                    # The SMALLEST of a model's loaded instances: under-reporting clips
+                    # a result, over-reporting overflows the server.
+                    found.append({"ids": names, "window": min(sizes)})
+            if not found:
+                continue
+            rows = [{"id": alias, "window": e["window"]}
+                    for e in found for alias in e["ids"]]
+            hit = _pick_model(rows, CONFIG["llm"]["model"])
+            if hit is not None:
+                detected = hit["window"]
+            elif len({e["window"] for e in found}) == 1:
+                # The configured id is an alias (or hidden): every loaded model agrees,
+                # so the number is a fact about this endpoint, not a guess (the /models
+                # rule, kept).
+                detected = found[0]["window"]
+            if detected:
+                break
     if not detected and _blip[0] and not _down[0]:
         # At least one route ERRORED rather than answering - a busy or freshly-started server
         # is the ordinary cause, and the ordinary fix is to ask once more in a moment. A
@@ -4558,8 +4752,10 @@ def _detect_window(base_url, headers, timeout=10):
         # answer, and the operator's configured ceiling is the honest one to fall back on.
         time.sleep(1.5)
         try:
-            models = (requests.get(base + "/models", headers=headers,
-                                   timeout=_probe_timeout(timeout)).json().get("data") or [])
+            _resp = requests.get(base + "/models", headers=headers,
+                                 timeout=_probe_timeout(timeout))
+            _WINDOW_ANSWERED[root] = True
+            models = (_resp.json().get("data") or [])
             entry = _pick_model(models, CONFIG["llm"]["model"])
             if entry is not None:
                 detected = (entry.get("max_model_len")
@@ -4568,6 +4764,9 @@ def _detect_window(base_url, headers, timeout=10):
                                 or entry.get("max_context_length")))
         except Exception as e:
             log.debug("window detect: retry on %s did not answer either: %s", base, e)
+    # Nothing answered: that is a different fact from "answered without a window", and
+    # doctor reads it. setdefault keeps a True from an earlier probe in this process.
+    _WINDOW_ANSWERED.setdefault(root, False)
     try:
         return int(detected) if detected else 0
     except (TypeError, ValueError):
@@ -24807,8 +25006,9 @@ class Agent:
         Cached for WINDOW_TTL like the window itself: it is the same metadata read.
         `static` is MEASURED from the prompt this session will actually send;
         `reply` is the completion cap actually SENT, min(configured max_tokens,
-        window // 4); `budget` is what is left for the messages after both, never
-        below ENVELOPE_MIN_BUDGET. Refusal is NOT raised here - _chat refuses - so a
+        window // 4); `budget` is what is left for the messages after both, and the
+        run REFUSES when that is below ENVELOPE_MIN_BUDGET (the floor is never added
+        to the number sent). Refusal is NOT raised here - _chat refuses - so a
         status verb or the banner can still print the arithmetic on a box that would
         refuse to run.
 
@@ -24845,7 +25045,13 @@ class Agent:
             window, source = detected, ("config-window" if pinned
                                         else (preset_src or "server"))
             reply = min(cfg_max or window // 4, max(1, window // 4))
-            budget = max(ENVELOPE_MIN_BUDGET, window - static - reply)
+            # What is LEFT for the conversation once the fixed prompt and the reply this
+            # call asks for are paid for. The old arithmetic floored this at
+            # ENVELOPE_MIN_BUDGET, which could push the three numbers past the window
+            # itself (at 8,192 with a 5,322-token prompt the floor handed out 1,024 and
+            # the request carried 8,394 tokens, measured 2026-11-21). The floor belongs
+            # on the DECISION below, never on the number sent.
+            budget = max(0, window - static - reply)
             if explicit and explicit < budget:
                 # A NUMBER in llm.max_context_tokens is a CEILING on the messages budget,
                 # which is the contract the config comment states: the tighter of it and
@@ -24854,27 +25060,27 @@ class Agent:
                 # a suite, 2026-09-26).
                 log.info("llm.max_context_tokens (%d) is tighter than this endpoint's "
                          "window allows (%d) - using messages budget %d",
-                         explicit, budget, max(ENVELOPE_MIN_BUDGET, explicit))
-                budget = max(ENVELOPE_MIN_BUDGET, explicit)
-            if window < ENVELOPE_MIN_WINDOW:
+                         explicit, budget, max(0, explicit))
+                budget = max(0, explicit)
+            if budget < ENVELOPE_MIN_BUDGET:
                 refused = True
                 refusal = (
-                    "the endpoint at %s serves %d tokens per request, below the %d "
-                    "this build will run with: static prompt %d + clamped reply %d "
-                    "leaves %d for the conversation (window=%d static=%d reply=%d "
-                    "budget=%d). Raise the server's context slot (--ctx-size / n_ctx), "
-                    "point llm.base_url at a larger endpoint, or set "
-                    "llm.max_context_tokens explicitly to accept a small box."
-                    % (base, window, ENVELOPE_MIN_WINDOW,
-                       static, reply, budget, window, static, reply, budget))
+                    "the endpoint at %s serves %d tokens per request: the harness's "
+                    "fixed prompt takes %d and a reply up to %d, leaving %d for the "
+                    "conversation - below the %d it needs to work in (window=%d "
+                    "static=%d reply=%d budget=%d). Raise the server's context slot "
+                    "(--ctx-size / n_ctx), or point the model at a larger endpoint."
+                    % (base, window, static, reply, budget, ENVELOPE_MIN_BUDGET,
+                       window, static, reply, budget))
             elif window < ENVELOPE_WARN_WINDOW:
                 warned = True
                 log.warning("small context window: %d tokens per request, static "
                             "prompt %d + reply %d, using messages budget %d "
                             "(window=%d static=%d reply=%d budget=%d). This build "
-                            "warns below %d and refuses below %d.", window, static,
-                            reply, budget, window, static, reply, budget,
-                            ENVELOPE_WARN_WINDOW, ENVELOPE_MIN_WINDOW)
+                            "warns below %d and needs at least %d for the "
+                            "conversation.", window, static, reply, budget, window,
+                            static, reply, budget, ENVELOPE_WARN_WINDOW,
+                            ENVELOPE_MIN_BUDGET)
             else:
                 log.info("context: %s reports %s per request, static %s + reply "
                          "%s, using messages budget %s (window=%s static=%s "
@@ -24884,12 +25090,18 @@ class Agent:
                          window, static, reply, budget,
                          window, static, reply, budget)
         elif explicit:
-            budget, source = explicit, "config"
+            budget, source = max(1, explicit), "config"
             reply = min(cfg_max or max(ENVELOPE_MIN_BUDGET, budget // 4),
                         max(ENVELOPE_MIN_BUDGET, budget // 4))
             window = budget + static + reply
             log.info("context: llm.max_context_tokens is %s, using messages budget "
                      "%s (static %s + reply %s)", explicit, budget, static, reply)
+            if budget < ENVELOPE_MIN_BUDGET:
+                refused = True
+                refusal = (
+                    "llm.max_context_tokens allows %d tokens for the conversation, "
+                    "below the %d this build needs to work in; raise it to at least "
+                    "%d." % (budget, ENVELOPE_MIN_BUDGET, ENVELOPE_MIN_BUDGET))
         else:
             budget, source = 8000, "assumed"
             reply = min(cfg_max or 2048, 2048)
@@ -24937,6 +25149,10 @@ class Agent:
         env = {"key": session_key, "endpoint": ep_root, "at": now, "window": window,
                "static": static, "reply": reply, "budget": budget, "source": source,
                "refused": refused, "warned": warned, "refusal": refusal,
+               # "answered" separates "the metadata probe got no reply" from "it
+               # answered and will not say how much context it serves" - doctor used to
+               # print NO ANSWER for both (measured 2026-11-21 on a live LM Studio).
+               "answered": True if detected else _WINDOW_ANSWERED.get(ep_root),
                "window_profile": window_profile}
         self._envelope_cache = env
         self._window_at = now      # the same metadata read: one TTL, not two
@@ -24954,8 +25170,8 @@ class Agent:
         Kept as the name every caller already uses; the arithmetic lives in
         _envelope. `endpoint` says WHOSE budget: the run loop and _force_shrink ask
         for the endpoint that has to carry the payload, so a failing fallback's own
-        window sizes the shrink. A window below ENVELOPE_MIN_WINDOW still
-        returns a budget so a status verb can report it - _chat is what refuses to send.
+        window sizes the shrink. A refused box still returns its budget so a status
+        verb can report it - _chat is what refuses to send.
         """
         return int(self._envelope(session_key, endpoint)["budget"])
 
@@ -25005,9 +25221,10 @@ class Agent:
                 tp = SESSIONS_DIR / (_session_stem(str(key)) + ".transcript.jsonl")
                 if tp.exists():
                     transcript = ("[harness: the dropped messages were written to %s "
-                                  "before they were removed - read_file or search_files "
-                                  "that file instead of re-deriving work that is already "
-                                  "done.]" % tp)
+                                  "before they were removed. Its END holds the newest "
+                                  "ones, so read_file with tail=40 (or search_files) "
+                                  "that file instead of re-deriving work that is "
+                                  "already done.]" % tp)
             except Exception:              # noqa: BLE001 - a note is never worth a run
                 transcript = ""
         if not lines and not keep and not ledger and not transcript:
@@ -25276,6 +25493,11 @@ class Agent:
         _unf = self._prior_run_unfinished(key) if key else ""
         budget = (self._context_budget(key)
                   - _state_deduction(key, atlas, shell, _unf))
+        # A refused box must not be cut first: _chat is about to stop the run with the
+        # arithmetic, and compacting anyway writes dropped blocks to the transcript and
+        # a "the dropped messages are at X" note for a request that will never be sent.
+        if (self._envelope(key) or {}).get("refused"):
+            return messages
         # 0) incremental reclamation first: blanking a superseded read does not cut the
         # front of history, so on the small-suffix path it is cache-safe and buys turns
         # before the deep cut (which resets the prefix) is needed at all.
@@ -25288,7 +25510,7 @@ class Agent:
         if key:
             _st = run_state(key, create=True)
             _st["compactions"] = int(_st.get("compactions") or 0) + 1
-        low = max(2000, int(budget * 0.6))
+        low = _cut_target(budget, 0.6)
         # 1) shrink old tool outputs
         for m in messages[1:-6]:
             if m.get("role") == "tool" and len(m.get("content") or "") > 500:
@@ -25320,7 +25542,7 @@ class Agent:
         the oldest whole blocks until the payload is well under half of it, then
         clip any remaining tool output. Never leaves an orphan tool message: the
         cut always lands on a user-message boundary."""
-        target = max(2000, int(self._context_budget(key, endpoint) * 0.5))
+        target = _cut_target(self._context_budget(key, endpoint), 0.5)
         # The overflow path drops the most context of all, so the per-block copy inside
         # _drop_oldest_block matters most here; this path used to keep no copy at all.
         total = self._conversation_token_est(messages)
@@ -25358,7 +25580,7 @@ class Agent:
         # m["content"], and the shallow list copy handed it the caller's own message
         # dicts - one failover truncated the live session's tool results to 200 chars
         messages = [dict(m) for m in messages]
-        low = max(2000, int(budget * 0.6))
+        low = _cut_target(budget, 0.6)
         total = self._conversation_token_est(messages)
         while total > low:
             removed = self._drop_oldest_block(messages, MARK_SHRINK, key,
@@ -25383,6 +25605,13 @@ class Agent:
         if env.get("refused"):
             log.error("[%s] %s", session_key, env["refusal"])
             raise InfraError(env["refusal"])
+        # A small window and a guessed one are facts the operator has to see, and this
+        # used to write them to the log only. The note rides the existing model-note
+        # door, which the run loop posts once on the lane the operator is using.
+        _said = (env.get("key"), env.get("endpoint"), env.get("window"), env.get("source"))
+        if getattr(self, "_context_noted", None) != _said:
+            self._context_noted = _said
+            _note_context_window(env)
         model = model or CONFIG["llm"]["model"]
         primary = (self.llm_url, model, self.headers)
         # Route by model name OR alias: a name an endpoint advertises sends the
@@ -47932,15 +48161,13 @@ def _verb_status():
     print("  model     : %s" % CONFIG["llm"]["model"])
     env = AGENT._envelope()
     url = CONFIG["llm"]["base_url"]
-    if env["source"] == "server":
-        print("  endpoint  : %s — %s per request" % (url, fmt_tokens(int(env["window"]))))
+    kind, line, _problem = _endpoint_verdict(env, url)
+    print("  endpoint  : %s" % line,
+          file=(sys.stdout if kind == "window" else sys.stderr))
+    if kind in ("window", "config"):
         print("  envelope  : %s" % envelope_line(env))
-        if env.get("refused"):
-            print("  envelope  : REFUSED — below the %s minimum this build needs"
-                  % fmt_tokens(ENVELOPE_MIN_WINDOW), file=sys.stderr)
-    else:
-        print("  endpoint  : %s — no answer (metadata probe only)"
-              % url, file=sys.stderr)
+    if env.get("refused"):
+        print("  envelope  : REFUSED — %s" % env["refusal"], file=sys.stderr)
     running = _verb_running()
     print("  instance  : %s" % {True: "running (the lock is held)",
                                 False: "not running (the lock is free)",
@@ -47973,11 +48200,12 @@ def _verb_status():
         pass
     print("  config    : %s" % (CONFIG_PATH if CONFIG_PATH.exists() else
                                 "MISSING (copy config.example.json)"))
-    if env["source"] != "server":
+    if kind == "no-answer":
         print("status: the endpoint did not answer its metadata probe"
               + lan_permission_hint(CONFIG["llm"].get("base_url")), file=sys.stderr)
         return 1
-    return 0
+    # A refused box is not a healthy one: status is what a script greps after a start.
+    return 1 if env.get("refused") else 0
 
 
 def leak_gate_armed():
@@ -48305,30 +48533,16 @@ def _verb_doctor():
 
     env = AGENT._envelope()
     url = CONFIG["llm"]["base_url"]
-    if env["source"] == "server":
-        print("  endpoint  : %s — %s per request" % (url, fmt_tokens(int(env["window"]))))
+    # One verdict, shared with `status`: a window, "answered and will not say", or no
+    # answer at all. A local endpoint that answers without reporting a window used to
+    # fall into the NO ANSWER branch with a connectivity problem (measured 2026-11-21
+    # on a live LM Studio), which points at the wrong cause for a context problem.
+    _kind, _line, _problem = _endpoint_verdict(env, url)
+    print("  endpoint  : %s" % _line)
+    if _kind in ("window", "config"):
         print("  envelope  : %s" % envelope_line(env))
-        if env.get("refused"):
-            problems.append(env["refusal"])
-    elif env["source"] == "assumed" and not _is_local_url(url):
-        # A hosted endpoint answers /v1/models but carries no max_model_len there and serves
-        # no /props, /api/ps or /get_server_info - nothing tells the harness its window, so
-        # the envelope falls back to an assumed 8000 tokens and clips replies at 2048 (a 128k
-        # cloud model driven at 8k). The old line called this "did not answer", which sends
-        # the operator to the endpoint when the lever is one config key. Silent on an on-LAN
-        # box: its window comes from its own context slot, which a restart changes.
-        print("  endpoint  : %s — no window known; assuming %s"
-              % (url, fmt_tokens(int(env["window"]))))
-        problems.append(
-            "no context length was available from %s, so the harness assumes a %s "
-            "window and clips replies at %s tokens. Set llm.max_context_tokens in "
-            "config.json to the window your provider documents (hosted models are usually "
-            "32k-128k+)."
-            % (url, fmt_tokens(int(env["window"])), fmt_tokens(int(env["reply"]))))
-    else:
-        print("  endpoint  : %s — NO ANSWER" % url)
-        problems.append(("the model endpoint at %s did not answer" % url)
-                        + lan_permission_hint(url))
+    if _problem:
+        problems.append(_problem)
 
     print("  instance  : %s" % {True: "running (the lock is held)",
                                 False: "not running (the lock is free)",

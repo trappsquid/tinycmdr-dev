@@ -440,6 +440,10 @@ def _body():
             """
             for _n in [n for n in fb.AGENT.__dict__ if n.endswith("_cache")]:
                 fb.AGENT.__dict__.pop(_n, None)
+            # ...and the probe's own verdict: a stubbed _detect_window never records
+            # whether the endpoint ANSWERED, and the verbs' NO ANSWER / assumed line
+            # reads that fact.
+            fb._WINDOW_ANSWERED.clear()
 
         fb._detect_window = lambda url, headers=None: 0
         forget_probes()
@@ -897,6 +901,10 @@ def _body():
         fb.CONFIG["llm"]["max_context_tokens"] = "auto"              # nothing to believe
         fb._detect_window = lambda url, headers=None: 0
         forget_probes()
+        # The stub stands for a probe that ANSWERED and carried no window - the case the
+        # hosted advice is for. "Did not answer" is the other fact, graded above.
+        fb._WINDOW_ANSWERED[
+            fb._endpoint_root(fb.CONFIG["llm"]["base_url"])] = True
         rc, out, err = call(fb, ["doctor"])
         check("doctor names the window lever for a cloud endpoint that reports no window",
               rc == 1 and "llm.max_context_tokens" in err, (rc, err[-400:]))
