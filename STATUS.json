@@ -4429,10 +4429,10 @@
     {
       "id": "lmstudio-window-read",
       "title": "LM Studio's loaded context slot is read",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4a14e01",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A local LM Studio endpoint reports no window on its OpenAI surface, so an 8K load took the assumed 8,000-token budget and every request went out over the slot; /api/v1/models (loaded_instances[].config.context_length) and /api/v0/models (loaded_context_length) are now read, and max_context_length is never taken as the served window.",
       "gate": "tests/test_endpoint_surface.py stubs both LM Studio shapes and asserts the loaded slot is the window, the model maximum is not, a foreign 200 is not an answer, and the probe asks the server root."
@@ -4440,10 +4440,10 @@
     {
       "id": "context-refused-on-budget",
       "title": "the envelope refuses on the conversation budget",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4a14e01",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The refusal tested the window, so an 8K endpoint ran with a 1,513-token conversation while the compaction target alone was 2,000 and the floor pushed the payload past the window; the decision now reads window minus the fixed prompt and the reply against a 2,048 floor, and the floor is never added to the number sent.",
       "gate": "tests/test_envelope.py asserts 8,192 refuses with the arithmetic before any POST, 12,288 runs with the warning flag, and a refused box is not compacted first."
@@ -4451,10 +4451,10 @@
     {
       "id": "compaction-target-capped",
       "title": "a compaction target never exceeds the budget",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4a14e01",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The cut targets floored at 2,000 tokens, written before the envelope existed, so on a window that leaves less the target was larger than the budget and every turn compacted without ever fitting; _cut_target caps every cut at the budget.",
       "gate": "tests/test_envelope.py checks the target for budgets from 0 to 19,945 never exceeds the budget, and that a 12,288 window compacts under it."
@@ -4462,10 +4462,10 @@
     {
       "id": "small-window-said-on-the-lane",
       "title": "a small or guessed window is posted on the lane",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4a14e01",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The envelope's warned flag was set and read nowhere, so a small window was a log line and a guessed one surfaced only as a loop report; both now ride the existing model-note door, and the status and doctor endpoint line reports a live local endpoint as answered-but-silent instead of NO ANSWER.",
       "gate": "tests/test_endpoint_surface.py grades the note text and the three endpoint verdicts; tests/test_verbs.py grades status and doctor on an unreachable endpoint and on a hosted endpoint that reports no window."
@@ -4473,10 +4473,10 @@
     {
       "id": "transcript-hint-names-the-tail",
       "title": "the compaction note points at the transcript's tail",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4a14e01",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The note sent the model to the transcript file with no offset, and a read starts at line 0, so following it returned the oldest lines and the same prefix every time; the note now names the end and read_file with tail=40.",
       "gate": "tests/test_spill_state_surface.py asserts the marker names the transcript and the tail door, not a bare read."
@@ -4484,10 +4484,10 @@
     {
       "id": "updaters-unpack-without-the-module",
       "title": "the install and update doors unpack without the Archive module",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "82c5afa",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Windows PowerShell 5.1 loads whichever Microsoft.PowerShell.Archive comes first on PSModulePath, and a shell started from PowerShell 7 hands it PS7's copy, whose 3-argument ExtractToDirectory call does not exist on .NET Framework - the unpack failed with \"Cannot find an overload ... argument count: 3\" on a Windows CI runner whose own PowerShell was fine; install.ps1 and update.ps1 now extract through System.IO.Compression.",
       "gate": "tests/test_update_script.py runs the real updater against a fake release on each platform and asserts the unpack no longer calls the module; tests/test_installer_windows.py grades the bootstrap installer's extraction."
