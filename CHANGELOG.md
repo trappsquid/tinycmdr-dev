@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A compaction target never exceeds the budget:** the cut target floored at 2,000 tokens, so on a window that leaves less the harness compacted every turn and never fit (tests/test_envelope.py).
 - **A small or guessed window is said on the lane:** the warning was a log line and the guessed window reached the operator only as a loop report; both now ride the model-note line, and `doctor` reports a live local endpoint as answered-but-silent instead of not answering (tests/test_verbs.py, tests/test_endpoint_surface.py).
 - **The compaction note points at the transcript's end:** it asked the model to read the file with no offset, and a read starts at the oldest lines, so a small model re-read the same head; it now names the tail (tests/test_spill_state_surface.py).
+- **The updaters unpack without the PowerShell Archive module:** a shell started from PowerShell 7 handed Windows PowerShell 5.1 a module whose 3-argument zip call does not exist on .NET Framework, so the install and update doors failed with "Cannot find an overload ... argument count: 3"; both now unpack through `System.IO.Compression` (tests/test_update_script.py).
 
 ## [1.1.59] - 2026-11-09
 

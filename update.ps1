@@ -124,8 +124,23 @@ try {
     } else {
         Write-Host "update: no release key (agent.release_pubkey or release-pubkey.pub) - checking the digest only"
     }
-    Expand-Archive (Join-Path $Work $Asset) -DestinationPath (Join-Path $Work "pkg") -Force
-    $Src = (Get-ChildItem (Join-Path $Work "pkg") -Recurse -Filter tinycmdr.py |
+    # Expand-Archive is a MODULE cmdlet, and Windows PowerShell 5.1 loads whichever
+    # Microsoft.PowerShell.Archive comes first on PSModulePath: a shell started from
+    # PowerShell 7 hands it PS7's copy, whose 3-argument ExtractToDirectory call does not
+    # exist on .NET Framework, so the unpack dies with "Cannot find an overload ...
+    # argument count: 3" on a machine whose own PowerShell is fine (measured 2026-11-21
+    # on a Windows CI runner). The .NET call below is the same zip support without the
+    # module, and it works on 5.1 and 7 alike.
+    $Pkg = Join-Path $Work "pkg"
+    if (Test-Path -LiteralPath $Pkg) { Remove-Item -LiteralPath $Pkg -Recurse -Force }
+    try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop } catch { }
+    try {
+        [System.IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $Work $Asset), $Pkg)
+    } catch {
+        Write-Error ("update: the release archive could not be unpacked: " + $_.Exception.Message + " - nothing was changed")
+        exit 1
+    }
+    $Src = (Get-ChildItem $Pkg -Recurse -Filter tinycmdr.py |
             Select-Object -First 1).DirectoryName
     if (-not $Src) { Write-Error "update: the package has no tinycmdr.py"; exit 1 }
     $New = Get-Version (Join-Path $Src "tinycmdr.py")

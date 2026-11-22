@@ -879,6 +879,17 @@ def main():
           and "$copy = @(" not in install,
           "the copy phase is a hand list again")
 
+    print("\n== the unpack does not depend on the Archive module ==")
+    # A shell started from PowerShell 7 hands Windows PowerShell 5.1 PS7's
+    # Microsoft.PowerShell.Archive, whose 3-argument ExtractToDirectory call does not
+    # exist on .NET Framework: the unpack dies with "Cannot find an overload ...
+    # argument count: 3" (measured 2026-11-21 on a Windows CI runner). The .NET call has
+    # no module to get wrong.
+    boot = source("install.ps1")
+    check("the bootstrap installer unpacks through .NET, not the Archive module",
+          not re.findall(r"(?mi)^\s*Expand-Archive\b", boot)
+          and "[System.IO.Compression.ZipFile]::ExtractToDirectory(" in boot)
+
     print("")
     if FAILED:
         print("%d check(s) FAILED:" % len(FAILED))

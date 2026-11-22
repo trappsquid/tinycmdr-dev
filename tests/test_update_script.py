@@ -364,6 +364,20 @@ def main():
             srv.server_close()
         shutil.rmtree(work, ignore_errors=True)
 
+    # The unpack must not go through the Archive MODULE: Windows PowerShell 5.1 loads
+    # whichever Microsoft.PowerShell.Archive PSModulePath names first, and a shell
+    # started from PowerShell 7 hands it PS7's copy, whose 3-argument
+    # ExtractToDirectory call does not exist on .NET Framework - the unpack dies with
+    # "Cannot find an overload ... argument count: 3" (measured 2026-11-21 on a Windows
+    # CI runner, on a machine whose own PowerShell was fine).
+    win_text = WIN_SCRIPT.read_text(encoding="utf-8")
+    # A call at the start of a line, not the word in a comment explaining why it is gone.
+    win_calls = re.findall(r"(?mi)^\s*Expand-Archive\b", win_text)
+    check(not win_calls,
+          "the updater does not depend on the PowerShell Archive module", win_calls)
+    check("[System.IO.Compression.ZipFile]::ExtractToDirectory(" in win_text,
+          "...it unpacks through .NET, which every PowerShell has")
+
     print()
     if FAILS:
         print("%d check(s) failed" % len(FAILS))
