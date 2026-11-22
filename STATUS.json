@@ -4480,6 +4480,17 @@
       },
       "detail": "The note sent the model to the transcript file with no offset, and a read starts at line 0, so following it returned the oldest lines and the same prefix every time; the note now names the end and read_file with tail=40.",
       "gate": "tests/test_spill_state_surface.py asserts the marker names the transcript and the tail door, not a bare read."
+    },
+    {
+      "id": "updaters-unpack-without-the-module",
+      "title": "the install and update doors unpack without the Archive module",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "82c5afa",
+        "expect": "untagged"
+      },
+      "detail": "Windows PowerShell 5.1 loads whichever Microsoft.PowerShell.Archive comes first on PSModulePath, and a shell started from PowerShell 7 hands it PS7's copy, whose 3-argument ExtractToDirectory call does not exist on .NET Framework - the unpack failed with \"Cannot find an overload ... argument count: 3\" on a Windows CI runner whose own PowerShell was fine; install.ps1 and update.ps1 now extract through System.IO.Compression.",
+      "gate": "tests/test_update_script.py runs the real updater against a fake release on each platform and asserts the unpack no longer calls the module; tests/test_installer_windows.py grades the bootstrap installer's extraction."
     }
   ]
 }
